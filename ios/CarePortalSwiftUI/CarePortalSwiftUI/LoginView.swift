@@ -8,10 +8,6 @@ struct LoginView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Welcome Back")
                     .font(.title2.weight(.bold))
-
-                Text("Log in with your parent username and password.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
             }
 
             AuthTextField(title: "Parent Username", text: $viewModel.loginNickname, contentType: .username)
