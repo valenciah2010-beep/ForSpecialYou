@@ -2145,13 +2145,6 @@ struct ProfileView: View {
                 VStack(spacing: 20) {
                     ProfileHeader(user: user, imageData: profileImageData, selectedPhoto: $selectedPhoto)
 
-                    if !profileImageData.isEmpty {
-                        Button("Remove Child Picture", role: .destructive) {
-                            profileImageData = Data()
-                        }
-                        .font(.subheadline.weight(.semibold))
-                    }
-
                     VStack(alignment: .leading, spacing: 14) {
                         Text("Parent Account")
                             .font(.title3.weight(.bold))
@@ -2443,15 +2436,6 @@ struct BasicInfoView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Child Basic Info")
-                        .font(.largeTitle.weight(.bold))
-
-                    Text("A parent-managed snapshot of your child's needs and care details.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-
                 VStack(alignment: .leading, spacing: 14) {
                     Text("Parent Account")
                         .font(.headline.weight(.bold))
@@ -2487,7 +2471,8 @@ struct BasicInfoView: View {
             .padding(20)
         }
         .background(AppTheme.background.ignoresSafeArea())
-        .navigationTitle("Child Info")
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -2503,7 +2488,7 @@ struct BasicInfoView: View {
 
     private func displayValue(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "Not added" : trimmed
+        return trimmed
     }
 
     private func beginEditing() {

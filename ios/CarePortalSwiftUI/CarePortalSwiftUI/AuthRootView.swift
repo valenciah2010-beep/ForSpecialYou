@@ -59,11 +59,6 @@ struct HeaderView: View {
             VStack(spacing: 6) {
                 Text("Care Portal")
                     .font(.largeTitle.weight(.bold))
-
-                Text("Parent-run tracking for a child's health and support needs.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
             }
         }
         .padding(.top, 8)
