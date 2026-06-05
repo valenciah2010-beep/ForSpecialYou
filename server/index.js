@@ -82,6 +82,16 @@ function publicUser(user) {
   };
 }
 
+function parseStoredJSON(value, fallback) {
+  if (!value) return fallback;
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
 async function getAdminUser(req) {
   const cookies = parseCookies(req.headers.cookie || '');
   const token = cookies[adminSessionCookieName];
@@ -206,6 +216,7 @@ async function ensureDatabaseShape() {
     await pool.execute(
       "ALTER TABLE users MODIFY role ENUM('patient', 'parent', 'caregiver', 'doctor', 'admin') NOT NULL"
     );
+    await pool.execute("UPDATE users SET role = 'parent' WHERE role = 'patient'");
   } catch (error) {
     setupFailed = true;
     console.error('Role setup check failed:', error.message);
@@ -226,6 +237,23 @@ async function ensureDatabaseShape() {
   } catch (error) {
     setupFailed = true;
     console.error('Profile image setup check failed:', error.message);
+  }
+
+  try {
+    await pool.execute(
+      `CREATE TABLE IF NOT EXISTS parent_app_data (
+        user_id INT PRIMARY KEY,
+        child_profile LONGTEXT NULL,
+        health_logs LONGTEXT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT parent_app_data_user_fk
+          FOREIGN KEY (user_id) REFERENCES users(id)
+          ON DELETE CASCADE
+      )`
+    );
+  } catch (error) {
+    setupFailed = true;
+    console.error('Parent app data setup check failed:', error.message);
   }
 
   databaseShapeReady = !setupFailed;
@@ -322,6 +350,99 @@ app.get('/api/admin/app-users', requireAdmin, async (_req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Could not load simulator app users right now.' });
+  }
+});
+
+app.get('/api/admin/app-users/:id/details', requireAdmin, async (req, res) => {
+  const userId = Number(req.params.id);
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ message: 'Please choose a valid parent user.' });
+  }
+
+  try {
+    const [rows] = await pool.execute(
+      `SELECT
+        users.id,
+        users.username AS nickname,
+        users.email,
+        users.role,
+        users.profile_image AS profileImage,
+        DATE_FORMAT(users.created_at, '%Y-%m-%d %H:%i') AS createdAt,
+        parent_app_data.child_profile AS childProfile,
+        parent_app_data.health_logs AS healthLogs,
+        DATE_FORMAT(parent_app_data.updated_at, '%Y-%m-%d %H:%i') AS appDataUpdatedAt
+      FROM users
+      LEFT JOIN parent_app_data ON parent_app_data.user_id = users.id
+      WHERE users.id = ? AND users.role = 'parent'
+      LIMIT 1`,
+      [userId]
+    );
+
+    const row = rows[0];
+    if (!row) {
+      return res.status(404).json({ message: 'Parent user was not found.' });
+    }
+
+    res.json({
+      user: {
+        id: row.id,
+        nickname: row.nickname,
+        email: row.email,
+        role: row.role,
+        profileImage: row.profileImage,
+        createdAt: row.createdAt
+      },
+      childProfile: parseStoredJSON(row.childProfile, {}),
+      healthLogs: parseStoredJSON(row.healthLogs, []),
+      appDataUpdatedAt: row.appDataUpdatedAt
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Could not load parent app data right now.' });
+  }
+});
+
+app.post('/api/app-data', async (req, res) => {
+  const userId = Number(req.body?.userId);
+  const hasChildProfile = Object.prototype.hasOwnProperty.call(req.body || {}, 'childProfile');
+  const hasHealthLogs = Object.prototype.hasOwnProperty.call(req.body || {}, 'healthLogs');
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ message: 'Please choose a valid parent user.' });
+  }
+
+  if (!hasChildProfile && !hasHealthLogs) {
+    return res.status(400).json({ message: 'No app data was provided.' });
+  }
+
+  try {
+    await ensureDatabaseShapeReady();
+
+    const [userRows] = await pool.execute('SELECT id, role FROM users WHERE id = ? LIMIT 1', [userId]);
+    const user = userRows[0];
+
+    if (!user || user.role !== 'parent') {
+      return res.status(404).json({ message: 'Parent user was not found.' });
+    }
+
+    const childProfile = hasChildProfile ? JSON.stringify(req.body.childProfile || {}) : null;
+    const healthLogs = hasHealthLogs ? JSON.stringify(Array.isArray(req.body.healthLogs) ? req.body.healthLogs : []) : null;
+
+    await pool.execute(
+      `INSERT INTO parent_app_data (user_id, child_profile, health_logs)
+       VALUES (?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+        child_profile = COALESCE(VALUES(child_profile), child_profile),
+        health_logs = COALESCE(VALUES(health_logs), health_logs),
+        updated_at = CURRENT_TIMESTAMP`,
+      [userId, childProfile, healthLogs]
+    );
+
+    res.json({ message: 'App data synced.' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Could not sync app data right now.' });
   }
 });
 

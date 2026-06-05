@@ -853,6 +853,120 @@ td {
   color: #b42318;
 }
 
+.parent-name-button {
+  text-align: left;
+}
+
+.parent-detail-panel {
+  max-width: 920px;
+}
+
+.parent-detail-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.detail-section {
+  background: #f8fbf8;
+  border: 1px solid #dfe9e2;
+  border-radius: 8px;
+  padding: 18px;
+}
+
+.full-detail-section {
+  grid-column: 1 / -1;
+}
+
+.detail-section h3 {
+  font-size: 1rem;
+  margin: 0 0 14px;
+}
+
+.detail-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.detail-list div {
+  border-bottom: 1px solid #e4ece6;
+  display: grid;
+  gap: 4px;
+  padding-bottom: 10px;
+}
+
+.detail-list div:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.detail-list dt {
+  color: #667085;
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.detail-list dd {
+  color: #16211c;
+  font-weight: 700;
+  line-height: 1.45;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.empty-note {
+  color: #667085;
+  font-weight: 700;
+  margin: 0;
+}
+
+.history-list {
+  display: grid;
+  gap: 12px;
+}
+
+.history-item {
+  background: #fff;
+  border: 1px solid #e4ece6;
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+}
+
+.history-item div {
+  align-items: start;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.history-item span {
+  color: #667085;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.history-item p {
+  color: #34423d;
+  line-height: 1.45;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.severity-pill {
+  align-self: start;
+  background: var(--accent);
+  border-radius: 999px;
+  color: #fff !important;
+  display: inline-flex;
+  font-size: 0.78rem !important;
+  font-weight: 900 !important;
+  padding: 5px 9px;
+}
+
 .empty-cell {
   color: #667085;
   text-align: center;
@@ -1044,6 +1158,14 @@ td {
 
   .profile-layout {
     grid-template-columns: 1fr;
+  }
+
+  .parent-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .full-detail-section {
+    grid-column: auto;
   }
 
   .table-panel {

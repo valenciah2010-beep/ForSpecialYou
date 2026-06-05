@@ -44,6 +44,15 @@ struct AuthAPI {
         return response.message
     }
 
+    func syncAppData(userId: Int, childProfile: ChildProfileSync?, healthLogs: [HealthLogEntry]?) async throws {
+        let body = ParentAppDataSyncRequest(
+            userId: userId,
+            childProfile: childProfile,
+            healthLogs: healthLogs
+        )
+        let _: MessageResponse = try await post("/api/app-data", body: body)
+    }
+
     private func post<Request: Encodable, Response: Decodable>(_ path: String, body: Request) async throws -> Response {
         guard let url = baseURL?.appending(path: path) else {
             throw AuthAPIError.invalidURL
@@ -103,4 +112,19 @@ struct NutritionAPI {
 
 private struct MealAnalysisRequest: Encodable {
     let imageData: String
+}
+
+struct ChildProfileSync: Encodable {
+    let fullName: String
+    let birthDate: String
+    let supportNeeds: String
+    let homeSchoolNotes: String
+    let emergencyContact: String
+    let careNotes: String
+}
+
+private struct ParentAppDataSyncRequest: Encodable {
+    let userId: Int
+    let childProfile: ChildProfileSync?
+    let healthLogs: [HealthLogEntry]?
 }

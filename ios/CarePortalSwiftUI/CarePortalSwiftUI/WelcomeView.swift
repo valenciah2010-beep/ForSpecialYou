@@ -42,6 +42,11 @@ struct WelcomeView: View {
 struct BasicHealthView: View {
     let user: CarePortalUser
     @AppStorage private var childName: String
+    @AppStorage private var birthDate: String
+    @AppStorage private var supportNeeds: String
+    @AppStorage private var homeSchoolNotes: String
+    @AppStorage private var emergencyContact: String
+    @AppStorage private var careNotes: String
     @AppStorage private var profileImageData: Data
     @AppStorage private var quickLogSelection: String
     @AppStorage private var healthLogData: Data
@@ -52,11 +57,17 @@ struct BasicHealthView: View {
     @State private var activeSeizureTimer: QuickLogOption?
     @State private var activePainLog: QuickLogOption?
     @State private var activeMedicineLog: QuickLogOption?
+    @State private var activeSleepSnapshot: SleepSnapshotEditorTarget?
     @State private var draggingQuickLogID: String?
 
     init(user: CarePortalUser) {
         self.user = user
         self._childName = AppStorage(wrappedValue: "", "profile.\(user.id).fullName")
+        self._birthDate = AppStorage(wrappedValue: "", "profile.\(user.id).birthDate")
+        self._supportNeeds = AppStorage(wrappedValue: "", "profile.\(user.id).phone")
+        self._homeSchoolNotes = AppStorage(wrappedValue: "", "profile.\(user.id).address")
+        self._emergencyContact = AppStorage(wrappedValue: "", "profile.\(user.id).emergencyContact")
+        self._careNotes = AppStorage(wrappedValue: "", "profile.\(user.id).medicalNotes")
         self._profileImageData = AppStorage(wrappedValue: Data(), "profile.\(user.id).profileImageData")
         self._quickLogSelection = AppStorage(
             wrappedValue: QuickLogOption.defaultSelectionString,
@@ -145,12 +156,49 @@ struct BasicHealthView: View {
                         }
                     }
 
-                    DashboardSectionTitle("Daily Snapshot")
+                    HStack {
+                        DashboardSectionTitle("Daily Snapshot")
+
+                        NavigationLink {
+                            SnapshotHistoryView(options: SnapshotOption.all, entries: logEntries)
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "chart.line.uptrend.xyaxis")
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(.white)
+                                    .frame(width: 28, height: 28)
+                                    .background(AppTheme.accent)
+                                    .clipShape(Circle())
+
+                                Text("History")
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(AppTheme.accent)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Open daily snapshot history")
+
+                        Spacer()
+                    }
 
                     LazyVGrid(columns: snapshotColumns, spacing: 10) {
                         ForEach(SnapshotOption.all) { option in
-                            SnapshotCard(option: option) {
-                                activeLogInput = .snapshot(option)
+                            let sleepSummary = option.id == "sleep" ? latestSleepSummary : nil
+
+                            SnapshotCard(
+                                option: option,
+                                displayValue: sleepSummary?.durationText,
+                                displayDetail: sleepSummary?.detailText,
+                                sleepDurationText: sleepSummary?.durationText
+                            ) {
+                                if option.id == "sleep" {
+                                    activeSleepSnapshot = SleepSnapshotEditorTarget(
+                                        option: option,
+                                        existingEntry: todaysSleepEntry
+                                    )
+                                } else {
+                                    activeLogInput = .snapshot(option)
+                                }
                             }
                         }
                     }
@@ -186,6 +234,11 @@ struct BasicHealthView: View {
                     saveLogEntry(entry)
                 }
             }
+            .sheet(item: $activeSleepSnapshot) { option in
+                SleepRestSnapshotSheet(target: option) { entry in
+                    saveSleepEntry(entry)
+                }
+            }
             .sheet(item: $activeSeizureTimer) { option in
                 SeizureTimerSheet(option: option, initialSeizureType: mostRecentSeizureType) { entry in
                     saveLogEntry(entry)
@@ -204,6 +257,9 @@ struct BasicHealthView: View {
                 ) { entry in
                     saveLogEntry(entry)
                 }
+            }
+            .onAppear {
+                syncParentAppData()
             }
         }
     }
@@ -293,6 +349,52 @@ struct BasicHealthView: View {
         }
     }
 
+    private var childProfileSync: ChildProfileSync {
+        ChildProfileSync(
+            fullName: childName,
+            birthDate: birthDate,
+            supportNeeds: supportNeeds,
+            homeSchoolNotes: homeSchoolNotes,
+            emergencyContact: emergencyContact,
+            careNotes: careNotes
+        )
+    }
+
+    private var latestSleepSummary: SleepSnapshotSummary? {
+        guard let entry = logEntries
+            .filter({ $0.type == .snapshot && $0.categoryID == "sleep" })
+            .sorted(by: { $0.timestamp > $1.timestamp })
+            .first else {
+            return nil
+        }
+
+        let parts = entry.value
+            .components(separatedBy: "·")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        guard let duration = parts.first else {
+            return SleepSnapshotSummary(durationText: "Saved", detailText: "Sleep logged")
+        }
+
+        let detail = parts.dropFirst().joined(separator: " · ")
+        return SleepSnapshotSummary(
+            durationText: duration,
+            detailText: detail.isEmpty ? "Sleep logged" : detail
+        )
+    }
+
+    private var todaysSleepEntry: HealthLogEntry? {
+        logEntries
+            .filter { entry in
+                entry.type == .snapshot
+                    && entry.categoryID == "sleep"
+                    && Calendar.current.isDateInToday(entry.timestamp)
+            }
+            .sorted { $0.timestamp > $1.timestamp }
+            .first
+    }
+
     private var mostRecentSeizureType: String {
         logEntries
             .filter { $0.type == .quickLog && $0.categoryID == "seizure" }
@@ -321,6 +423,24 @@ struct BasicHealthView: View {
         if let data = try? JSONEncoder().encode(updatedEntries) {
             healthLogData = data
         }
+
+        syncParentAppData(healthLogs: updatedEntries)
+    }
+
+    private func saveSleepEntry(_ entry: HealthLogEntry) {
+        var updatedEntries = logEntries.filter { savedEntry in
+            !(savedEntry.type == .snapshot
+              && savedEntry.categoryID == "sleep"
+              && Calendar.current.isDate(savedEntry.timestamp, inSameDayAs: entry.timestamp))
+        }
+        updatedEntries.append(entry)
+        updatedEntries.sort { $0.timestamp < $1.timestamp }
+
+        if let data = try? JSONEncoder().encode(updatedEntries) {
+            healthLogData = data
+        }
+
+        syncParentAppData(healthLogs: updatedEntries)
     }
 
     private func saveMedications(_ newMedications: [MedicationSchedule]) {
@@ -336,6 +456,19 @@ struct BasicHealthView: View {
     private func saveMedicationCheckState(_ state: MedicationCheckState) {
         if let data = try? JSONEncoder().encode(state) {
             medicationCheckData = data
+        }
+    }
+
+    private func syncParentAppData(healthLogs: [HealthLogEntry]? = nil) {
+        let logsToSync = healthLogs ?? logEntries
+        let profileToSync = childProfileSync
+
+        Task {
+            try? await AuthAPI().syncAppData(
+                userId: user.id,
+                childProfile: profileToSync,
+                healthLogs: logsToSync
+            )
         }
     }
 
@@ -476,8 +609,8 @@ struct SnapshotOption: Identifiable {
             id: "sleep",
             title: "Sleep & Rest",
             icon: "moon.zzz.fill",
-            value: "7/9 hrs",
-            detail: "Good night",
+            value: "7h",
+            detail: "Tap to log",
             tint: Color(red: 0.34, green: 0.66, blue: 0.88),
             progress: 0.78
         ),
@@ -593,6 +726,20 @@ struct HealthLogEntry: Identifiable, Codable {
     let severity: Int
     let value: String
     let comments: String
+}
+
+struct SleepSnapshotSummary {
+    let durationText: String
+    let detailText: String
+}
+
+struct SleepSnapshotEditorTarget: Identifiable {
+    let option: SnapshotOption
+    let existingEntry: HealthLogEntry?
+
+    var id: String {
+        existingEntry?.id.uuidString ?? "new-\(option.id)"
+    }
 }
 
 enum MedicationDayTime: String, CaseIterable, Codable, Identifiable {
@@ -890,6 +1037,9 @@ struct QuickLogSelectionSheet: View {
 
 struct SnapshotCard: View {
     let option: SnapshotOption
+    var displayValue: String?
+    var displayDetail: String?
+    var sleepDurationText: String?
     let action: () -> Void
 
     var body: some View {
@@ -903,30 +1053,34 @@ struct SnapshotCard: View {
                     .lineLimit(2)
                     .frame(height: 30, alignment: .topLeading)
 
-                HStack {
-                    Spacer()
-                    Image(systemName: option.icon)
-                        .font(.system(size: 30, weight: .semibold))
-                        .foregroundStyle(option.tint)
-                    Spacer()
+                if option.id != "sleep" {
+                    HStack {
+                        Spacer()
+                        Image(systemName: option.icon)
+                            .font(.system(size: 30, weight: .semibold))
+                            .foregroundStyle(option.tint)
+                        Spacer()
+                    }
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(option.value)
-                        .font(.caption.weight(.bold))
+                    Text(displayValue ?? option.value)
+                        .font(option.id == "sleep" ? .title3.weight(.black) : .caption.weight(.bold))
                         .foregroundStyle(AppTheme.text)
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
 
-                    Text(option.detail)
+                    Text(displayDetail ?? option.detail)
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
                 }
 
-                ProgressView(value: option.progress)
-                    .tint(option.tint)
+                if option.id != "sleep" {
+                    ProgressView(value: option.progress)
+                        .tint(option.tint)
+                }
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -940,6 +1094,398 @@ struct SnapshotCard: View {
             .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 4)
         }
         .buttonStyle(.plain)
+    }
+}
+
+struct SleepRestSnapshotSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let target: SleepSnapshotEditorTarget
+    let onSave: (HealthLogEntry) -> Void
+
+    @State private var fellAsleepAt: Date
+    @State private var wokeUpAt: Date
+    @State private var selectedQuality: SleepRestQuality
+    @State private var wakingCount: Int
+    @State private var comments: String
+
+    private var option: SnapshotOption {
+        target.option
+    }
+
+    init(target: SleepSnapshotEditorTarget, onSave: @escaping (HealthLogEntry) -> Void) {
+        self.target = target
+        self.onSave = onSave
+
+        let prefill = Self.prefill(from: target.existingEntry)
+        self._fellAsleepAt = State(initialValue: prefill.fellAsleepAt)
+        self._wokeUpAt = State(initialValue: prefill.wokeUpAt)
+        self._selectedQuality = State(initialValue: prefill.quality)
+        self._wakingCount = State(initialValue: prefill.wakingCount)
+        self._comments = State(initialValue: prefill.comments)
+    }
+
+    private var sleepDuration: TimeInterval {
+        let calendar = Calendar.current
+        let startComponents = calendar.dateComponents([.hour, .minute], from: fellAsleepAt)
+        let endComponents = calendar.dateComponents([.hour, .minute], from: wokeUpAt)
+        let today = calendar.startOfDay(for: Date())
+        let start = calendar.date(
+            bySettingHour: startComponents.hour ?? 21,
+            minute: startComponents.minute ?? 0,
+            second: 0,
+            of: today
+        ) ?? today
+        var end = calendar.date(
+            bySettingHour: endComponents.hour ?? 7,
+            minute: endComponents.minute ?? 0,
+            second: 0,
+            of: today
+        ) ?? today
+
+        if end <= start {
+            end = calendar.date(byAdding: .day, value: 1, to: end) ?? end
+        }
+
+        return end.timeIntervalSince(start)
+    }
+
+    private var durationText: String {
+        let totalMinutes = max(0, Int(sleepDuration / 60))
+        let hours = totalMinutes / 60
+        let minutes = totalMinutes % 60
+        return minutes == 0 ? "\(hours)h" : "\(hours)h \(minutes)m"
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(spacing: 12) {
+                        Text(durationText)
+                            .font(.title.weight(.black))
+                            .foregroundStyle(AppTheme.text)
+                            .frame(width: 82, height: 58)
+                            .background(option.tint.opacity(0.18))
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Sleep & Rest")
+                                .font(.title3.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            Text("\(durationText) tracked")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Sleep Times")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+
+                        TimeWheelPicker(title: "Fell asleep at", selection: $fellAsleepAt)
+                        TimeWheelPicker(title: "Woke up at", selection: $wokeUpAt)
+                    }
+                    .authPanel()
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Rest Quality")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+
+                        HStack(spacing: 10) {
+                            ForEach(SleepRestQuality.allCases) { quality in
+                                Button {
+                                    selectedQuality = quality
+                                } label: {
+                                    VStack(spacing: 6) {
+                                        Text(quality.emoji)
+                                            .font(.title2)
+                                        Text(quality.title)
+                                            .font(.caption.weight(.bold))
+                                            .foregroundStyle(AppTheme.text)
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.75)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                                    .background(selectedQuality == quality ? option.tint.opacity(0.25) : AppTheme.fieldBackground)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                            .stroke(selectedQuality == quality ? option.tint : Color.clear, lineWidth: 2)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    .authPanel()
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Waking Counter")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+
+                        HStack(spacing: 14) {
+                            Button {
+                                wakingCount = max(0, wakingCount - 1)
+                            } label: {
+                                Image(systemName: "minus")
+                                    .font(.headline.weight(.bold))
+                                    .frame(width: 44, height: 44)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(option.tint)
+
+                            Text("\(wakingCount)")
+                                .font(.title.weight(.black))
+                                .foregroundStyle(AppTheme.text)
+                                .frame(minWidth: 54)
+
+                            Button {
+                                wakingCount += 1
+                            } label: {
+                                Image(systemName: "plus")
+                                    .font(.headline.weight(.bold))
+                                    .frame(width: 44, height: 44)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(option.tint)
+
+                            Text(wakingCount == 1 ? "wake-up" : "wake-ups")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.secondary)
+
+                            Spacer()
+                        }
+                    }
+                    .authPanel()
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Notes")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+
+                        TextField("Nap, bedtime routine, night waking, comfort item, etc.", text: $comments, axis: .vertical)
+                            .lineLimit(3...6)
+                            .padding(12)
+                            .background(AppTheme.fieldBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .authPanel()
+                }
+                .padding(18)
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle("Sleep & Rest")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Save") {
+                        save()
+                    }
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(AppTheme.accent)
+                }
+            }
+        }
+        .presentationDetents([.large])
+    }
+
+    private func save() {
+        let value = "\(durationText) · \(selectedQuality.title) · \(wakingCount) \(wakingCount == 1 ? "wake-up" : "wake-ups")"
+        let timeSummary = "Fell asleep at \(formattedTime(fellAsleepAt))\nWoke up at \(formattedTime(wokeUpAt))"
+        let trimmedComments = comments.trimmingCharacters(in: .whitespacesAndNewlines)
+        let noteText = trimmedComments.isEmpty ? timeSummary : "\(timeSummary)\n\(trimmedComments)"
+
+        let entry = HealthLogEntry(
+            id: target.existingEntry?.id ?? UUID(),
+            type: .snapshot,
+            categoryID: option.id,
+            title: option.title,
+            timestamp: target.existingEntry?.timestamp ?? Date(),
+            severity: selectedQuality.severity,
+            value: value,
+            comments: noteText
+        )
+        onSave(entry)
+        dismiss()
+    }
+
+    private func formattedTime(_ date: Date) -> String {
+        date.formatted(date: .omitted, time: .shortened)
+    }
+
+    private static func prefill(from entry: HealthLogEntry?) -> SleepSnapshotPrefill {
+        let defaultSleep = defaultTime(hour: 21, minute: 0)
+        let defaultWake = defaultTime(hour: 7, minute: 0)
+
+        guard let entry else {
+            return SleepSnapshotPrefill(
+                fellAsleepAt: defaultSleep,
+                wokeUpAt: defaultWake,
+                quality: .normal,
+                wakingCount: 0,
+                comments: ""
+            )
+        }
+
+        let valueParts = entry.value
+            .components(separatedBy: "·")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+        let quality = valueParts
+            .compactMap { SleepRestQuality(title: $0) }
+            .first ?? .normal
+
+        let wakingCount = valueParts
+            .compactMap { part -> Int? in
+                guard part.localizedCaseInsensitiveContains("wake") else { return nil }
+                return Int(part.filter(\.isNumber))
+            }
+            .first ?? 0
+
+        let lines = entry.comments
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+        let fellAsleepAt = lines
+            .first { $0.localizedCaseInsensitiveContains("fell asleep at") }
+            .flatMap { timeFromLine($0, prefix: "Fell asleep at") } ?? defaultSleep
+
+        let wokeUpAt = lines
+            .first { $0.localizedCaseInsensitiveContains("woke up at") }
+            .flatMap { timeFromLine($0, prefix: "Woke up at") } ?? defaultWake
+
+        let comments = lines
+            .filter {
+                !$0.localizedCaseInsensitiveContains("fell asleep at")
+                    && !$0.localizedCaseInsensitiveContains("woke up at")
+            }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return SleepSnapshotPrefill(
+            fellAsleepAt: fellAsleepAt,
+            wokeUpAt: wokeUpAt,
+            quality: quality,
+            wakingCount: wakingCount,
+            comments: comments
+        )
+    }
+
+    private static func defaultTime(hour: Int, minute: Int) -> Date {
+        Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: Date()) ?? Date()
+    }
+
+    private static func timeFromLine(_ line: String, prefix: String) -> Date? {
+        let rawTime = line
+            .replacingOccurrences(of: prefix, with: "", options: [.caseInsensitive])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\u{202F}", with: " ")
+            .replacingOccurrences(of: "\u{00A0}", with: " ")
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "h:mm a"
+
+        guard let parsed = formatter.date(from: rawTime) else { return nil }
+
+        let components = Calendar.current.dateComponents([.hour, .minute], from: parsed)
+        return Calendar.current.date(
+            bySettingHour: components.hour ?? 0,
+            minute: components.minute ?? 0,
+            second: 0,
+            of: Date()
+        )
+    }
+}
+
+private struct SleepSnapshotPrefill {
+    let fellAsleepAt: Date
+    let wokeUpAt: Date
+    let quality: SleepRestQuality
+    let wakingCount: Int
+    let comments: String
+}
+
+struct TimeWheelPicker: View {
+    let title: String
+    @Binding var selection: Date
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppTheme.text)
+
+            DatePicker(title, selection: $selection, displayedComponents: [.hourAndMinute])
+                .datePickerStyle(.wheel)
+                .labelsHidden()
+                .frame(maxWidth: .infinity)
+                .background(AppTheme.fieldBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+    }
+}
+
+enum SleepRestQuality: String, CaseIterable, Identifiable {
+    case restless
+    case normal
+    case deep
+
+    var id: String { rawValue }
+
+    init?(title: String) {
+        let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let match = Self.allCases.first(where: {
+            $0.title.localizedCaseInsensitiveCompare(normalizedTitle) == .orderedSame
+        }) else {
+            return nil
+        }
+
+        self = match
+    }
+
+    var title: String {
+        switch self {
+        case .restless:
+            return "Restless"
+        case .normal:
+            return "Normal"
+        case .deep:
+            return "Deep"
+        }
+    }
+
+    var emoji: String {
+        switch self {
+        case .restless:
+            return "😣"
+        case .normal:
+            return "😴"
+        case .deep:
+            return "🌙"
+        }
+    }
+
+    var severity: Int {
+        switch self {
+        case .restless:
+            return 4
+        case .normal:
+            return 2
+        case .deep:
+            return 1
+        }
     }
 }
 
@@ -2861,6 +3407,411 @@ struct QuickLogTrendPreviewCard: View {
     }
 }
 
+struct SnapshotHistoryView: View {
+    let options: [SnapshotOption]
+    let entries: [HealthLogEntry]
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(spacing: 14) {
+                ForEach(options) { option in
+                    SnapshotHistoryPreviewCard(
+                        option: option,
+                        entries: entriesFor(option)
+                    )
+                }
+            }
+            .padding(18)
+        }
+        .background(AppTheme.background.ignoresSafeArea())
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func entriesFor(_ option: SnapshotOption) -> [HealthLogEntry] {
+        entries
+            .filter { $0.type == .snapshot && $0.categoryID == option.id }
+            .sorted { $0.timestamp < $1.timestamp }
+    }
+}
+
+struct SnapshotHistoryPreviewCard: View {
+    let option: SnapshotOption
+    let entries: [HealthLogEntry]
+
+    private var recentEntries: [HealthLogEntry] {
+        Array(entries.suffix(8))
+    }
+
+    private var averageSeverity: Double {
+        guard !entries.isEmpty else { return 0 }
+        let total = entries.reduce(0) { $0 + $1.severity }
+        return Double(total) / Double(entries.count)
+    }
+
+    var body: some View {
+        if option.id == "sleep" {
+            NavigationLink {
+                SleepTrackerHistoryView(option: option, entries: entries)
+            } label: {
+                sleepTrackerCard
+            }
+            .buttonStyle(.plain)
+        } else {
+            VStack(alignment: .leading, spacing: 14) {
+                cardHeader
+
+                chartPreview
+                    .frame(height: 110)
+                    .padding(10)
+                    .background(AppTheme.fieldBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            .snapshotHistoryCardStyle()
+        }
+    }
+
+    private var cardHeader: some View {
+        HStack(spacing: 12) {
+            Image(systemName: option.icon)
+                .font(.title2.weight(.bold))
+                .foregroundStyle(option.tint)
+                .frame(width: 48, height: 48)
+                .background(option.tint.opacity(0.16))
+                .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(option.title)
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(AppTheme.text)
+
+                Text("\(entries.count) entries · Avg \(averageSeverityText)/5")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var sleepTrackerCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            cardHeader
+
+            HStack(spacing: 10) {
+                Image(systemName: "bed.double.fill")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(option.tint)
+                    .frame(width: 36, height: 36)
+                    .background(option.tint.opacity(0.14))
+                    .clipShape(Circle())
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(entries.count) nights tracked")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(AppTheme.text)
+
+                    Text("Sleep times and nightly duration")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+            }
+            .padding(12)
+            .background(AppTheme.fieldBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .snapshotHistoryCardStyle()
+    }
+
+    @ViewBuilder
+    private var chartPreview: some View {
+        if recentEntries.isEmpty {
+            VStack(spacing: 8) {
+                Image(systemName: "chart.bar")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(option.tint)
+
+                Text("No data yet")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            Chart(recentEntries) { entry in
+                LineMark(
+                    x: .value("Time", entry.timestamp),
+                    y: .value("Severity", entry.severity)
+                )
+                .foregroundStyle(option.tint)
+                .interpolationMethod(.catmullRom)
+
+                PointMark(
+                    x: .value("Time", entry.timestamp),
+                    y: .value("Severity", entry.severity)
+                )
+                .foregroundStyle(option.tint)
+            }
+            .chartYScale(domain: 0...5)
+            .chartYAxis {
+                AxisMarks(values: [1, 3, 5])
+            }
+            .chartXAxis(.hidden)
+        }
+    }
+
+    private var averageSeverityText: String {
+        averageSeverity == 0 ? "0" : String(format: "%.1f", averageSeverity)
+    }
+}
+
+private extension View {
+    func snapshotHistoryCardStyle() -> some View {
+        self
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(AppTheme.panel)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .shadow(color: Color.black.opacity(0.08), radius: 14, x: 0, y: 8)
+    }
+}
+
+struct SleepTrackerHistoryView: View {
+    let option: SnapshotOption
+    let entries: [HealthLogEntry]
+
+    private let timelineWidth: CGFloat = 760
+    private let dateColumnWidth: CGFloat = 58
+    private let rowHeight: CGFloat = 42
+    private let timelineStartMinutes = 18 * 60
+    private let timelineEndMinutes = 33 * 60
+
+    private var sleepRecords: [SleepTrackerRecord] {
+        entries
+            .compactMap(SleepTrackerRecord.init(entry:))
+            .sorted { $0.date > $1.date }
+    }
+
+    private var hourMarks: [Int] {
+        Array(18...33)
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if sleepRecords.isEmpty {
+                    Text("No Sleep & Rest entries yet.")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .authPanel()
+                } else {
+                    ScrollView(.horizontal, showsIndicators: true) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            timelineHeader
+
+                            ForEach(sleepRecords) { record in
+                                SleepTrackerTimelineRow(
+                                    record: record,
+                                    tint: option.tint,
+                                    dateColumnWidth: dateColumnWidth,
+                                    timelineWidth: timelineWidth,
+                                    rowHeight: rowHeight,
+                                    startMinutes: timelineStartMinutes,
+                                    endMinutes: timelineEndMinutes
+                                )
+                            }
+                        }
+                        .padding(14)
+                        .background(AppTheme.panel)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .shadow(color: Color.black.opacity(0.08), radius: 14, x: 0, y: 8)
+                    }
+                }
+            }
+            .padding(18)
+        }
+        .background(AppTheme.background.ignoresSafeArea())
+        .navigationTitle("Sleep & Rest")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var timelineHeader: some View {
+        HStack(alignment: .bottom, spacing: 0) {
+            Text("Date")
+                .font(.caption.weight(.black))
+                .foregroundStyle(.secondary)
+                .frame(width: dateColumnWidth, alignment: .leading)
+
+            ZStack(alignment: .bottomLeading) {
+                ForEach(hourMarks, id: \.self) { hour in
+                    let x = xPosition(for: hour * 60)
+
+                    VStack(spacing: 4) {
+                        Text(hourLabel(hour))
+                            .font(.caption2.weight(.black))
+                            .foregroundStyle(AppTheme.text)
+
+                        Rectangle()
+                            .fill(Color.secondary.opacity(0.25))
+                            .frame(width: 1, height: 10)
+                    }
+                    .position(x: x, y: 16)
+                }
+
+                Rectangle()
+                    .fill(Color.secondary.opacity(0.22))
+                    .frame(width: timelineWidth, height: 1)
+                    .offset(y: 31)
+            }
+            .frame(width: timelineWidth, height: 34, alignment: .leading)
+        }
+        .padding(.bottom, 6)
+    }
+
+    private func xPosition(for minutes: Int) -> CGFloat {
+        let clamped = min(max(minutes, timelineStartMinutes), timelineEndMinutes)
+        let percentage = CGFloat(clamped - timelineStartMinutes) / CGFloat(timelineEndMinutes - timelineStartMinutes)
+        return timelineWidth * percentage
+    }
+
+    private func hourLabel(_ hour: Int) -> String {
+        let normalized = hour % 24
+        switch normalized {
+        case 0:
+            return "12a"
+        case 1...11:
+            return "\(normalized)a"
+        case 12:
+            return "12p"
+        default:
+            return "\(normalized - 12)p"
+        }
+    }
+}
+
+struct SleepTrackerTimelineRow: View {
+    let record: SleepTrackerRecord
+    let tint: Color
+    let dateColumnWidth: CGFloat
+    let timelineWidth: CGFloat
+    let rowHeight: CGFloat
+    let startMinutes: Int
+    let endMinutes: Int
+
+    private var barStartX: CGFloat {
+        xPosition(for: record.startMinutes)
+    }
+
+    private var barEndX: CGFloat {
+        xPosition(for: record.endMinutes)
+    }
+
+    private var barWidth: CGFloat {
+        max(10, barEndX - barStartX)
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Text(record.dateLabel)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(AppTheme.text)
+                .frame(width: dateColumnWidth, alignment: .leading)
+
+            ZStack(alignment: .leading) {
+                ForEach(Array(stride(from: startMinutes, through: endMinutes, by: 60)), id: \.self) { minute in
+                    Rectangle()
+                        .fill(Color.secondary.opacity(0.09))
+                        .frame(width: 1, height: rowHeight)
+                        .offset(x: xPosition(for: minute))
+                }
+
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(tint.opacity(0.30))
+                    .frame(width: barWidth, height: 22)
+                    .overlay(alignment: .center) {
+                        Text(record.durationText)
+                            .font(.caption.weight(.black))
+                            .foregroundStyle(AppTheme.text)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                    }
+                    .offset(x: barStartX)
+            }
+            .frame(width: timelineWidth, height: rowHeight, alignment: .leading)
+        }
+    }
+
+    private func xPosition(for minutes: Int) -> CGFloat {
+        let clamped = min(max(minutes, startMinutes), endMinutes)
+        let percentage = CGFloat(clamped - startMinutes) / CGFloat(endMinutes - startMinutes)
+        return timelineWidth * percentage
+    }
+}
+
+struct SleepTrackerRecord: Identifiable {
+    let id: UUID
+    let date: Date
+    let startMinutes: Int
+    let endMinutes: Int
+    let durationText: String
+
+    var dateLabel: String {
+        date.formatted(.dateTime.month(.abbreviated).day())
+    }
+
+    init?(entry: HealthLogEntry) {
+        guard entry.type == .snapshot, entry.categoryID == "sleep" else { return nil }
+
+        self.id = entry.id
+        self.date = entry.timestamp
+        self.durationText = Self.durationText(from: entry.value)
+
+        let lines = entry.comments
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+        let sleepMinutes = lines
+            .first { $0.localizedCaseInsensitiveContains("fell asleep at") }
+            .flatMap { Self.minutesFromLine($0, prefix: "Fell asleep at") } ?? (21 * 60)
+
+        let wakeMinutesRaw = lines
+            .first { $0.localizedCaseInsensitiveContains("woke up at") }
+            .flatMap { Self.minutesFromLine($0, prefix: "Woke up at") } ?? (7 * 60)
+
+        self.startMinutes = sleepMinutes < 18 * 60 ? sleepMinutes + 24 * 60 : sleepMinutes
+        let wakeMinutes = wakeMinutesRaw <= sleepMinutes ? wakeMinutesRaw + 24 * 60 : wakeMinutesRaw
+        self.endMinutes = wakeMinutes
+    }
+
+    private static func durationText(from value: String) -> String {
+        value
+            .components(separatedBy: "·")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty } ?? "Sleep"
+    }
+
+    private static func minutesFromLine(_ line: String, prefix: String) -> Int? {
+        let rawTime = line
+            .replacingOccurrences(of: prefix, with: "", options: [.caseInsensitive])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\u{202F}", with: " ")
+            .replacingOccurrences(of: "\u{00A0}", with: " ")
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "h:mm a"
+
+        guard let parsed = formatter.date(from: rawTime) else { return nil }
+        let components = Calendar.current.dateComponents([.hour, .minute], from: parsed)
+        return (components.hour ?? 0) * 60 + (components.minute ?? 0)
+    }
+}
+
 struct SeizureHistoryDetailView: View {
     let option: QuickLogOption
     let entries: [HealthLogEntry]
@@ -3913,6 +4864,26 @@ struct BasicInfoView: View {
         emergencyContact = draftEmergencyContact.trimmingCharacters(in: .whitespacesAndNewlines)
         medicalNotes = draftMedicalNotes.trimmingCharacters(in: .whitespacesAndNewlines)
         isEditing = false
+        syncChildProfile()
+    }
+
+    private func syncChildProfile() {
+        let profile = ChildProfileSync(
+            fullName: fullName,
+            birthDate: birthDate,
+            supportNeeds: phone,
+            homeSchoolNotes: address,
+            emergencyContact: emergencyContact,
+            careNotes: medicalNotes
+        )
+
+        Task {
+            try? await AuthAPI().syncAppData(
+                userId: user.id,
+                childProfile: profile,
+                healthLogs: nil
+            )
+        }
     }
 }
 

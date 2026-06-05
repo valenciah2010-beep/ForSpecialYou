@@ -53,6 +53,7 @@ const isLoadingUsers = ref(false);
 const isCreateUserOpen = ref(false);
 const isEditUserOpen = ref(false);
 const isDeleteUserOpen = ref(false);
+const isParentDetailOpen = ref(false);
 const isCropperOpen = ref(false);
 const isCropDragging = ref(false);
 const isCreatingUser = ref(false);
@@ -61,6 +62,10 @@ const isSavingProfile = ref(false);
 const isDeletingUser = ref(false);
 const savingRoleUserId = ref(null);
 const userToDelete = ref(null);
+const selectedParentUser = ref(null);
+const parentDetail = ref(null);
+const parentDetailMessage = ref('');
+const isLoadingParentDetail = ref(false);
 const isBusy = ref(false);
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || '';
 const maxProfileImageSize = 5 * 1024 * 1024;
@@ -217,6 +222,34 @@ function userInitials(user) {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase())
     .join('');
+}
+
+function childInfoRows(childProfile = {}) {
+  return [
+    { label: 'Child Name', value: childProfile.fullName },
+    { label: 'Date of Birth', value: childProfile.birthDate },
+    { label: 'Support Needs', value: childProfile.supportNeeds },
+    { label: 'Home / School Notes', value: childProfile.homeSchoolNotes },
+    { label: 'Emergency Contact', value: childProfile.emergencyContact },
+    { label: 'Care Notes', value: childProfile.careNotes }
+  ];
+}
+
+function hasChildInfo(childProfile = {}) {
+  return childInfoRows(childProfile).some((row) => String(row.value || '').trim());
+}
+
+function formatLogTimestamp(timestamp) {
+  if (!timestamp) return '';
+  const normalizedTimestamp = typeof timestamp === 'number' && timestamp < 100000000000
+    ? timestamp * 1000
+    : timestamp;
+  const date = new Date(normalizedTimestamp);
+  return Number.isNaN(date.getTime()) ? timestamp : date.toLocaleString();
+}
+
+function logTypeLabel(log) {
+  return log?.type === 'snapshot' ? 'Daily Snapshot' : 'Quick Log';
 }
 
 function syncProfileForm() {
@@ -487,6 +520,37 @@ function closeDeleteUserModal() {
   isDeleteUserOpen.value = false;
   deleteUserMessage.value = '';
   userToDelete.value = null;
+}
+
+async function openParentDetail(user) {
+  selectedParentUser.value = user;
+  parentDetail.value = null;
+  parentDetailMessage.value = '';
+  isParentDetailOpen.value = true;
+  isLoadingParentDetail.value = true;
+
+  try {
+    const response = await apiFetch(`/api/admin/app-users/${user.id}/details`);
+    const data = await response.json();
+
+    if (!response.ok) {
+      parentDetailMessage.value = data.message;
+      return;
+    }
+
+    parentDetail.value = data;
+  } catch {
+    parentDetailMessage.value = 'Unable to load parent details.';
+  } finally {
+    isLoadingParentDetail.value = false;
+  }
+}
+
+function closeParentDetail() {
+  isParentDetailOpen.value = false;
+  selectedParentUser.value = null;
+  parentDetail.value = null;
+  parentDetailMessage.value = '';
 }
 
 async function submitEditUser() {
@@ -1222,7 +1286,9 @@ async function submitSignup() {
                         <img v-if="user.profileImage" :src="user.profileImage" alt="" />
                         <span v-else>{{ userInitials(user) }}</span>
                       </span>
-                      <span>{{ user.nickname }}</span>
+                      <button class="text-action parent-name-button" type="button" @click="openParentDetail(user)">
+                        {{ user.nickname }}
+                      </button>
                     </div>
                   </td>
                   <td>{{ user.email }}</td>
@@ -1250,6 +1316,74 @@ async function submitSignup() {
           </div>
         </section>
       </section>
+
+      <div v-if="isParentDetailOpen" class="modal-backdrop" @click.self="closeParentDetail">
+        <section class="modal-panel parent-detail-panel" role="dialog" aria-modal="true" aria-labelledby="parent-detail-title">
+          <div class="modal-header">
+            <div>
+              <p class="eyebrow">Parent User</p>
+              <h2 id="parent-detail-title">{{ selectedParentUser?.nickname }}</h2>
+            </div>
+            <button class="icon-button" type="button" aria-label="Close parent details" @click="closeParentDetail">
+              X
+            </button>
+          </div>
+
+          <p v-if="parentDetailMessage" class="message error">{{ parentDetailMessage }}</p>
+          <p v-if="isLoadingParentDetail" class="message">Loading parent details...</p>
+
+          <div v-if="parentDetail && !isLoadingParentDetail" class="parent-detail-grid">
+            <section class="detail-section">
+              <h3>Parent Account</h3>
+              <dl class="detail-list">
+                <div>
+                  <dt>Username</dt>
+                  <dd>{{ parentDetail.user.nickname }}</dd>
+                </div>
+                <div>
+                  <dt>Email</dt>
+                  <dd>{{ parentDetail.user.email }}</dd>
+                </div>
+                <div>
+                  <dt>Created</dt>
+                  <dd>{{ parentDetail.user.createdAt }}</dd>
+                </div>
+                <div>
+                  <dt>Last App Sync</dt>
+                  <dd>{{ parentDetail.appDataUpdatedAt || 'Not synced yet' }}</dd>
+                </div>
+              </dl>
+            </section>
+
+            <section class="detail-section">
+              <h3>Child Information</h3>
+              <div v-if="hasChildInfo(parentDetail.childProfile)" class="detail-list">
+                <div v-for="row in childInfoRows(parentDetail.childProfile)" :key="row.label">
+                  <dt>{{ row.label }}</dt>
+                  <dd>{{ row.value || '' }}</dd>
+                </div>
+              </div>
+              <p v-else class="empty-note">No child information synced yet.</p>
+            </section>
+
+            <section class="detail-section full-detail-section">
+              <h3>History</h3>
+              <div v-if="parentDetail.healthLogs?.length" class="history-list">
+                <article v-for="log in parentDetail.healthLogs.slice().reverse()" :key="log.id" class="history-item">
+                  <div>
+                    <strong>{{ log.title }}</strong>
+                    <span>{{ logTypeLabel(log) }} · {{ formatLogTimestamp(log.timestamp) }}</span>
+                  </div>
+                  <span class="severity-pill">{{ log.severity }}/5</span>
+                  <p v-if="log.value">{{ log.value }}</p>
+                  <p v-if="log.comments">{{ log.comments }}</p>
+                </article>
+              </div>
+              <p v-else class="empty-note">No history synced yet.</p>
+            </section>
+          </div>
+        </section>
+      </div>
 
       <div v-if="isCreateUserOpen" class="modal-backdrop" @click.self="closeCreateUserModal">
         <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="create-user-title">
