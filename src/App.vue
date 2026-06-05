@@ -9,7 +9,7 @@ const signupForm = ref({
   email: '',
   password: '',
   verifyPassword: '',
-  role: 'patient'
+  role: 'parent'
 });
 const createUserForm = ref({
   nickname: '',
@@ -46,8 +46,7 @@ const rolesStatus = ref('');
 const savedTheme = localStorage.getItem('carePortalTheme');
 const currentTheme = ref(savedTheme || 'green');
 const isThemeMenuOpen = ref(false);
-const savedUser = localStorage.getItem('carePortalUser');
-const loggedInUser = ref(savedUser ? JSON.parse(savedUser) : null);
+const loggedInUser = ref(null);
 const users = ref([]);
 const usersMessage = ref('');
 const isLoadingUsers = ref(false);
@@ -100,11 +99,11 @@ const page = computed(() => {
     return loggedInUser.value ? 'profile' : 'login';
   }
   if (currentPath.value === '/welcome' || currentPath.value === '/home') {
-    return loggedInUser.value ? 'welcome' : 'login';
+    return loggedInUser.value ? 'users' : 'login';
   }
   if (currentPath.value === '/login') return 'login';
-  if (currentPath.value === '/signup') return 'signup';
-  return 'home';
+  if (currentPath.value === '/signup') return 'login';
+  return loggedInUser.value ? 'users' : 'home';
 });
 
 const roleOptions = [
@@ -132,7 +131,10 @@ const themeOptions = [
 ];
 
 async function apiFetch(path, options) {
-  return fetch(`${apiBaseUrl}${path}`, options);
+  return fetch(`${apiBaseUrl}${path}`, {
+    credentials: 'include',
+    ...(options || {})
+  });
 }
 
 function setTheme(theme) {
@@ -230,7 +232,6 @@ function syncProfileForm() {
 
 function saveLoggedInUser(user) {
   loggedInUser.value = user;
-  localStorage.setItem('carePortalUser', JSON.stringify(user));
 }
 
 function goTo(path) {
@@ -273,19 +274,11 @@ window.addEventListener('popstate', () => {
   }
 });
 
-if (loggedInUser.value) {
-  syncProfileForm();
-  loadCurrentUser();
-
-  if ((currentPath.value === '/users' || currentPath.value === '/roles') && canManageUsers.value) {
-    loadUsers();
-  }
-}
-
 let clockTimer;
 onMounted(() => {
   updateClock();
   clockTimer = window.setInterval(updateClock, 1000);
+  loadAdminSession();
 });
 
 onUnmounted(() => {
@@ -298,7 +291,7 @@ async function submitLogin() {
   isBusy.value = true;
 
   try {
-    const response = await apiFetch('/api/login', {
+    const response = await apiFetch('/api/admin/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(loginForm.value)
@@ -308,7 +301,7 @@ async function submitLogin() {
     if (response.ok) {
       saveLoggedInUser(data.user);
       loginForm.value = { username: '', password: '' };
-      goTo(data.user.role === 'admin' ? '/users' : '/welcome');
+      goTo('/users');
       return;
     }
 
@@ -322,9 +315,41 @@ async function submitLogin() {
   }
 }
 
-function logOut() {
+async function loadAdminSession() {
+  try {
+    const response = await apiFetch('/api/admin/session');
+    const data = await response.json();
+
+    if (!response.ok) {
+      loggedInUser.value = null;
+      users.value = [];
+      return;
+    }
+
+    saveLoggedInUser(data.user);
+    syncProfileForm();
+
+    if (currentPath.value === '/' || currentPath.value === '/login' || currentPath.value === '/signup') {
+      goTo('/users');
+    } else if ((currentPath.value === '/users' || currentPath.value === '/roles') && canManageUsers.value) {
+      loadUsers();
+    }
+  } catch {
+    loggedInUser.value = null;
+    users.value = [];
+  }
+}
+
+async function logOut() {
+  try {
+    await apiFetch('/api/admin/logout', {
+      method: 'POST'
+    });
+  } catch {
+    // Local cleanup still signs the admin out of this browser view.
+  }
+
   loggedInUser.value = null;
-  localStorage.removeItem('carePortalUser');
   users.value = [];
   usersMessage.value = '';
   goTo('/');
@@ -334,7 +359,7 @@ async function loadCurrentUser() {
   if (!loggedInUser.value?.id) return;
 
   try {
-    const response = await apiFetch(`/api/users/${loggedInUser.value.id}`);
+    const response = await apiFetch('/api/admin/session');
     const data = await response.json();
 
     if (!response.ok) {
@@ -357,7 +382,7 @@ async function loadUsers() {
   rolesMessage.value = '';
 
   try {
-    const response = await apiFetch('/api/users');
+    const response = await apiFetch('/api/admin/app-users');
     const data = await response.json();
 
     if (!response.ok) {
@@ -867,7 +892,7 @@ async function submitSignup() {
         email: '',
         password: '',
         verifyPassword: '',
-        role: 'patient'
+        role: 'parent'
       };
       loginForm.value = {
         username: createdNickname,
@@ -916,13 +941,12 @@ async function submitSignup() {
 
     <section v-if="page === 'home'" class="home-panel">
       <p class="eyebrow">Care Portal</p>
-      <h1>Welcome to your care access page</h1>
+      <h1>Admin access</h1>
       <p class="intro">
-        Choose whether you want to create an account or log in to an existing one.
+        Sign in with an admin account to view simulator app users.
       </p>
       <div class="actions">
-        <button class="primary-button" type="button" @click="goTo('/signup')">Sign Up</button>
-        <button class="secondary-button" type="button" @click="goTo('/login')">Log In</button>
+        <button class="primary-button" type="button" @click="goTo('/login')">Admin Log In</button>
       </div>
     </section>
 
@@ -1121,7 +1145,7 @@ async function submitSignup() {
           <div class="brand-mark">CP</div>
           <div>
             <strong>Care Portal</strong>
-            <span>User Directory</span>
+            <span>Simulator Users</span>
           </div>
         </div>
         <button class="nav-button" type="button" @click="goTo('/welcome')">Welcome</button>
@@ -1132,7 +1156,7 @@ async function submitSignup() {
 
       <section class="workspace">
         <header class="workspace-header">
-          <h1>User Management</h1>
+          <h1>Simulator App Users</h1>
           <div class="header-actions">
             <section class="live-clock" aria-label="Live clock">
               <div class="live-clock-main">
@@ -1160,8 +1184,8 @@ async function submitSignup() {
         <section class="table-panel">
           <div class="table-heading">
             <div>
-              <p class="eyebrow">System</p>
-              <h2>All Users</h2>
+              <p class="eyebrow">Admin</p>
+              <h2>Current Parent Users</h2>
             </div>
             <div class="table-actions">
               <button class="secondary-button compact" type="button" @click="openCreateUserModal">
@@ -1483,10 +1507,10 @@ async function submitSignup() {
 
     <section v-else-if="page === 'login'" class="form-panel">
       <button class="back-button" type="button" @click="goTo('/')">Back</button>
-      <h1>Log In</h1>
+      <h1>Admin Log In</h1>
       <form @submit.prevent="submitLogin">
         <label>
-          Nickname
+          Admin Username
           <input v-model="loginForm.username" autocomplete="username" required />
         </label>
         <label>

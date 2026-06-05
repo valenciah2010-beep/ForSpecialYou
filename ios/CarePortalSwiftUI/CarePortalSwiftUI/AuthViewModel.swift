@@ -19,7 +19,12 @@ final class AuthViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var currentUser: CarePortalUser?
 
+    private static let savedUserKey = "auth.savedCarePortalUser"
     private let api = AuthAPI()
+
+    init() {
+        currentUser = Self.loadSavedUser()
+    }
 
     func showLogin() {
         screen = .login
@@ -44,7 +49,9 @@ final class AuthViewModel: ObservableObject {
         defer { isLoading = false }
 
         do {
-            currentUser = try await api.login(username: loginNickname, password: loginPassword)
+            let user = try await api.login(username: loginNickname, password: loginPassword)
+            currentUser = user
+            saveUser(user)
             loginPassword = ""
         } catch {
             showError(error.localizedDescription)
@@ -101,10 +108,27 @@ final class AuthViewModel: ObservableObject {
 
     func logout() {
         currentUser = nil
+        UserDefaults.standard.removeObject(forKey: Self.savedUserKey)
         loginNickname = ""
         loginPassword = ""
         screen = .login
         clearMessage()
+    }
+
+    private static func loadSavedUser() -> CarePortalUser? {
+        guard let data = UserDefaults.standard.data(forKey: savedUserKey) else { return nil }
+
+        do {
+            return try JSONDecoder().decode(CarePortalUser.self, from: data)
+        } catch {
+            UserDefaults.standard.removeObject(forKey: savedUserKey)
+            return nil
+        }
+    }
+
+    private func saveUser(_ user: CarePortalUser) {
+        guard let data = try? JSONEncoder().encode(user) else { return }
+        UserDefaults.standard.set(data, forKey: Self.savedUserKey)
     }
 
     private func clearMessage() {

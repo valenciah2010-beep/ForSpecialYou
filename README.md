@@ -78,4 +78,6 @@ Open the frontend at:
 http://localhost:5173/
 ```
 
-The frontend sends sign-up, log-in, profile, and user-list requests through `/api`. Vite proxies `/api` to the backend during local development.
+The frontend is now an admin-only portal. Log in with a user whose role is `admin` to view simulator app users. Vite proxies `/api` to the backend during local development.
+
+Simulator app parent sign-up and log-in still use the backend API, but website user-list and user-management routes require an admin session.

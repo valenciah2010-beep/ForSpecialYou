@@ -45,10 +45,13 @@ struct BasicHealthView: View {
     @AppStorage private var profileImageData: Data
     @AppStorage private var quickLogSelection: String
     @AppStorage private var healthLogData: Data
+    @AppStorage private var medicationData: Data
+    @AppStorage private var medicationCheckData: Data
     @State private var isQuickLogEditorPresented = false
     @State private var activeLogInput: HealthLogInputTarget?
     @State private var activeSeizureTimer: QuickLogOption?
     @State private var activePainLog: QuickLogOption?
+    @State private var activeMedicineLog: QuickLogOption?
     @State private var draggingQuickLogID: String?
 
     init(user: CarePortalUser) {
@@ -60,6 +63,8 @@ struct BasicHealthView: View {
             "health.\(user.id).quickLogSelection"
         )
         self._healthLogData = AppStorage(wrappedValue: Data(), "health.\(user.id).logData")
+        self._medicationData = AppStorage(wrappedValue: Data(), "health.\(user.id).medicationData")
+        self._medicationCheckData = AppStorage(wrappedValue: Data(), "health.\(user.id).medicationCheckData")
     }
 
     var body: some View {
@@ -86,13 +91,13 @@ struct BasicHealthView: View {
                                     .background(AppTheme.accent)
                                     .clipShape(Circle())
 
-                                Text("Trends")
+                                Text("History")
                                     .font(.caption.weight(.bold))
                                     .foregroundStyle(AppTheme.accent)
                             }
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Open quick-log trends")
+                        .accessibilityLabel("Open quick-log history")
 
                         Spacer()
 
@@ -117,6 +122,8 @@ struct BasicHealthView: View {
                                     activeSeizureTimer = option
                                 } else if option.id == "pain" {
                                     activePainLog = option
+                                } else if option.id == "medsFood" {
+                                    activeMedicineLog = option
                                 } else {
                                     activeLogInput = .quickLog(option)
                                 }
@@ -180,12 +187,21 @@ struct BasicHealthView: View {
                 }
             }
             .sheet(item: $activeSeizureTimer) { option in
-                SeizureTimerSheet(option: option) { entry in
+                SeizureTimerSheet(option: option, initialSeizureType: mostRecentSeizureType) { entry in
                     saveLogEntry(entry)
                 }
             }
             .sheet(item: $activePainLog) { option in
                 PainLogEntrySheet(option: option) { entry in
+                    saveLogEntry(entry)
+                }
+            }
+            .sheet(item: $activeMedicineLog) { option in
+                MedicineLogSheet(
+                    option: option,
+                    medications: medicationsBinding,
+                    medicationCheckState: medicationCheckStateBinding
+                ) { entry in
                     saveLogEntry(entry)
                 }
             }
@@ -246,6 +262,57 @@ struct BasicHealthView: View {
         return (try? JSONDecoder().decode([HealthLogEntry].self, from: healthLogData)) ?? []
     }
 
+    private var medications: [MedicationSchedule] {
+        guard !medicationData.isEmpty else { return [] }
+        return (try? JSONDecoder().decode([MedicationSchedule].self, from: medicationData)) ?? []
+    }
+
+    private var medicationsBinding: Binding<[MedicationSchedule]> {
+        Binding {
+            medications
+        } set: { newMedications in
+            saveMedications(newMedications)
+        }
+    }
+
+    private var medicationCheckState: MedicationCheckState {
+        guard !medicationCheckData.isEmpty,
+              let savedState = try? JSONDecoder().decode(MedicationCheckState.self, from: medicationCheckData),
+              savedState.dateKey == MedicationCheckState.todayKey else {
+            return MedicationCheckState.today()
+        }
+
+        return savedState
+    }
+
+    private var medicationCheckStateBinding: Binding<MedicationCheckState> {
+        Binding {
+            medicationCheckState
+        } set: { newState in
+            saveMedicationCheckState(newState)
+        }
+    }
+
+    private var mostRecentSeizureType: String {
+        logEntries
+            .filter { $0.type == .quickLog && $0.categoryID == "seizure" }
+            .sorted { $0.timestamp > $1.timestamp }
+            .compactMap { seizureType(from: $0) }
+            .first ?? "Seizure Type"
+    }
+
+    private func seizureType(from entry: HealthLogEntry) -> String? {
+        let parts = entry.value
+            .components(separatedBy: "·")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+        guard parts.count > 1 else { return nil }
+
+        let type = parts[1]
+        guard !type.isEmpty, type != "Seizure Type" else { return nil }
+        return type
+    }
+
     private func saveLogEntry(_ entry: HealthLogEntry) {
         var updatedEntries = logEntries
         updatedEntries.append(entry)
@@ -253,6 +320,22 @@ struct BasicHealthView: View {
 
         if let data = try? JSONEncoder().encode(updatedEntries) {
             healthLogData = data
+        }
+    }
+
+    private func saveMedications(_ newMedications: [MedicationSchedule]) {
+        let sortedMedications = newMedications.sorted {
+            $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+        }
+
+        if let data = try? JSONEncoder().encode(sortedMedications) {
+            medicationData = data
+        }
+    }
+
+    private func saveMedicationCheckState(_ state: MedicationCheckState) {
+        if let data = try? JSONEncoder().encode(state) {
+            medicationCheckData = data
         }
     }
 
@@ -368,7 +451,7 @@ struct QuickLogOption: Identifiable {
         QuickLogOption(id: "allergy", title: "Allergic Reaction", icon: "allergens.fill", tint: Color(red: 0.96, green: 0.58, blue: 0.43)),
         QuickLogOption(id: "pain", title: "Pain", icon: "cross.case.fill", tint: Color(red: 0.92, green: 0.41, blue: 0.47)),
         QuickLogOption(id: "discomfort", title: "Discomfort", icon: "thermometer.medium", tint: Color(red: 0.88, green: 0.72, blue: 0.45)),
-        QuickLogOption(id: "medsFood", title: "Meds/Food", icon: "pills.fill", tint: Color(red: 0.38, green: 0.75, blue: 0.55))
+        QuickLogOption(id: "medsFood", title: "Medicine", icon: "pills.fill", tint: Color(red: 0.38, green: 0.75, blue: 0.55))
     ]
 
     static let defaultSelectionString = "seizure,meltdown,medsFood"
@@ -510,6 +593,164 @@ struct HealthLogEntry: Identifiable, Codable {
     let severity: Int
     let value: String
     let comments: String
+}
+
+enum MedicationDayTime: String, CaseIterable, Codable, Identifiable {
+    case morning
+    case noon
+    case evening
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .morning:
+            return "Morning"
+        case .noon:
+            return "Noon"
+        case .evening:
+            return "Evening"
+        }
+    }
+}
+
+enum MedicationWeekday: String, CaseIterable, Codable, Identifiable {
+    case sunday
+    case monday
+    case tuesday
+    case wednesday
+    case thursday
+    case friday
+    case saturday
+
+    var id: String { rawValue }
+
+    var shortTitle: String {
+        switch self {
+        case .sunday:
+            return "Sun"
+        case .monday:
+            return "Mon"
+        case .tuesday:
+            return "Tue"
+        case .wednesday:
+            return "Wed"
+        case .thursday:
+            return "Thu"
+        case .friday:
+            return "Fri"
+        case .saturday:
+            return "Sat"
+        }
+    }
+
+    var calendarWeekday: Int {
+        switch self {
+        case .sunday:
+            return 1
+        case .monday:
+            return 2
+        case .tuesday:
+            return 3
+        case .wednesday:
+            return 4
+        case .thursday:
+            return 5
+        case .friday:
+            return 6
+        case .saturday:
+            return 7
+        }
+    }
+
+    static func today(calendar: Calendar = .current) -> MedicationWeekday {
+        let weekday = calendar.component(.weekday, from: Date())
+        return allCases.first { $0.calendarWeekday == weekday } ?? .monday
+    }
+}
+
+enum MedicationScheduleMode: String, CaseIterable, Codable, Identifiable {
+    case daily
+    case weekly
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .daily:
+            return "Times per day"
+        case .weekly:
+            return "Times per week"
+        }
+    }
+}
+
+struct MedicationSchedule: Identifiable, Codable, Equatable {
+    var id: UUID
+    var name: String
+    var nickname: String
+    var mode: MedicationScheduleMode
+    var dailyTimes: [MedicationDayTime]
+    var weeklyDays: [MedicationWeekday]
+    var weeklyTimes: [MedicationDayTime]
+    var doses: [String: String]
+
+    static func empty() -> MedicationSchedule {
+        MedicationSchedule(
+            id: UUID(),
+            name: "",
+            nickname: "",
+            mode: .daily,
+            dailyTimes: [],
+            weeklyDays: [],
+            weeklyTimes: [],
+            doses: [:]
+        )
+    }
+
+    var displayName: String {
+        let nicknameText = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nameText = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return nicknameText.isEmpty ? nameText : nicknameText
+    }
+
+    var legalName: String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func dose(for day: MedicationWeekday?, time: MedicationDayTime) -> String {
+        let key = doseKey(day: mode == .weekly ? day : nil, time: time)
+        return doses[key, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func doseKey(day: MedicationWeekday?, time: MedicationDayTime) -> String {
+        if let day {
+            return "\(day.rawValue).\(time.rawValue)"
+        }
+
+        return time.rawValue
+    }
+}
+
+struct MedicationCheckState: Codable, Equatable {
+    var dateKey: String
+    var checkedIDs: [String]
+
+    static var todayKey: String {
+        dateKey(for: Date())
+    }
+
+    static func today() -> MedicationCheckState {
+        MedicationCheckState(dateKey: todayKey, checkedIDs: [])
+    }
+
+    static func dateKey(for date: Date, calendar: Calendar = .current) -> String {
+        let components = calendar.dateComponents([.year, .month, .day], from: date)
+        let year = components.year ?? 0
+        let month = components.month ?? 0
+        let day = components.day ?? 0
+        return String(format: "%04d-%02d-%02d", year, month, day)
+    }
 }
 
 struct QuickLogCard: View {
@@ -824,6 +1065,621 @@ struct HealthLogEntrySheet: View {
     }
 }
 
+struct MedicineLogSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let option: QuickLogOption
+    @Binding var medications: [MedicationSchedule]
+    @Binding var medicationCheckState: MedicationCheckState
+    let onSave: (HealthLogEntry) -> Void
+
+    @State private var checkedMedicationIDs: Set<String> = []
+    @State private var editingMedication: MedicationSchedule?
+
+    private var today: MedicationWeekday {
+        MedicationWeekday.today()
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(spacing: 12) {
+                        Image(systemName: option.icon)
+                            .font(.title2.weight(.bold))
+                            .foregroundStyle(option.tint)
+                            .frame(width: 44, height: 44)
+                            .background(option.tint.opacity(0.16))
+                            .clipShape(Circle())
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Medicine")
+                                .font(.title3.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            Text(today.shortTitle)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    ForEach(MedicationDayTime.allCases) { time in
+                        medicationChecklistSection(for: time)
+                    }
+                }
+                .padding(18)
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle("Medicine")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button {
+                            editingMedication = MedicationSchedule.empty()
+                        } label: {
+                            Label("Add New", systemImage: "plus")
+                        }
+
+                        if medications.isEmpty {
+                            Text("No medicines saved")
+                        } else {
+                            Section("Edit Existing") {
+                                ForEach(medications) { medication in
+                                    Button(medication.displayName.isEmpty ? "Unnamed Medicine" : medication.displayName) {
+                                        editingMedication = medication
+                                    }
+                                }
+                            }
+                        }
+                    } label: {
+                        Text("Edit")
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(AppTheme.accent)
+                    }
+                }
+
+                ToolbarItem(placement: .bottomBar) {
+                    Button {
+                        save()
+                    } label: {
+                        Text("Save Checked Medicine")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(AppTheme.accent)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                }
+            }
+        }
+        .presentationDetents([.large])
+        .onAppear {
+            loadSavedCheckedMedicationIDs()
+        }
+        .sheet(item: $editingMedication) { medication in
+            MedicationEditorSheet(medication: medication) { savedMedication in
+                upsertMedication(savedMedication)
+            }
+        }
+    }
+
+    private func medicationChecklistSection(for time: MedicationDayTime) -> some View {
+        let rows = checklistRows(for: time)
+
+        return VStack(alignment: .leading, spacing: 12) {
+            Text(time.title)
+                .font(.headline.weight(.bold))
+                .foregroundStyle(AppTheme.text)
+
+            if rows.isEmpty {
+                Text("None")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .background(AppTheme.fieldBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            } else {
+                VStack(spacing: 10) {
+                    ForEach(rows) { row in
+                        MedicineChecklistRow(
+                            row: row,
+                            isChecked: checkedMedicationIDs.contains(row.id),
+                            tint: option.tint
+                        ) {
+                            toggleChecked(row.id)
+                        }
+                    }
+                }
+            }
+        }
+        .authPanel()
+    }
+
+    private func checklistRows(for time: MedicationDayTime) -> [MedicationChecklistItem] {
+        medications.compactMap { medication in
+            switch medication.mode {
+            case .daily:
+                guard medication.dailyTimes.contains(time) else { return nil }
+                return MedicationChecklistItem(
+                    id: "\(medication.id.uuidString).\(time.rawValue)",
+                    medication: medication,
+                    time: time,
+                    dose: medication.dose(for: nil, time: time)
+                )
+            case .weekly:
+                guard medication.weeklyDays.contains(today), medication.weeklyTimes.contains(time) else { return nil }
+                return MedicationChecklistItem(
+                    id: "\(medication.id.uuidString).\(today.rawValue).\(time.rawValue)",
+                    medication: medication,
+                    time: time,
+                    dose: medication.dose(for: today, time: time)
+                )
+            }
+        }
+    }
+
+    private func toggleChecked(_ id: String) {
+        if checkedMedicationIDs.contains(id) {
+            checkedMedicationIDs.remove(id)
+        } else {
+            checkedMedicationIDs.insert(id)
+        }
+    }
+
+    private func upsertMedication(_ medication: MedicationSchedule) {
+        if let index = medications.firstIndex(where: { $0.id == medication.id }) {
+            medications[index] = medication
+        } else {
+            medications.append(medication)
+        }
+
+        checkedMedicationIDs.formIntersection(currentChecklistRowIDs)
+    }
+
+    private func save() {
+        persistCheckedMedicationIDs()
+
+        let allRows = MedicationDayTime.allCases.flatMap { checklistRows(for: $0) }
+        let checkedRows = allRows.filter { checkedMedicationIDs.contains($0.id) }
+        let checkedSummary = checkedRows.isEmpty
+            ? "No medicine checked"
+            : checkedRows.map { "\($0.time.title): \($0.medication.displayName)\($0.dose.isEmpty ? "" : " \($0.dose)")" }.joined(separator: "\n")
+
+        let sectionSummary = MedicationDayTime.allCases.map { time in
+            let rows = checklistRows(for: time)
+            guard !rows.isEmpty else { return "\(time.title): None" }
+
+            let names = rows.map { row in
+                let checkedMark = checkedMedicationIDs.contains(row.id) ? "Checked" : "Not checked"
+                let doseText = row.dose.isEmpty ? "" : " \(row.dose)"
+                return "\(checkedMark) - \(row.medication.displayName)\(doseText)"
+            }
+            .joined(separator: "; ")
+
+            return "\(time.title): \(names)"
+        }
+        .joined(separator: "\n")
+
+        let entry = HealthLogEntry(
+            id: UUID(),
+            type: .quickLog,
+            categoryID: option.id,
+            title: option.title,
+            timestamp: Date(),
+            severity: 1,
+            value: checkedSummary,
+            comments: sectionSummary
+        )
+        onSave(entry)
+        dismiss()
+    }
+
+    private var currentChecklistRowIDs: Set<String> {
+        Set(MedicationDayTime.allCases.flatMap { time in
+            checklistRows(for: time).map(\.id)
+        })
+    }
+
+    private func loadSavedCheckedMedicationIDs() {
+        guard medicationCheckState.dateKey == MedicationCheckState.todayKey else {
+            checkedMedicationIDs = []
+            return
+        }
+
+        checkedMedicationIDs = Set(medicationCheckState.checkedIDs)
+            .intersection(currentChecklistRowIDs)
+    }
+
+    private func persistCheckedMedicationIDs() {
+        let savedIDs = checkedMedicationIDs
+            .intersection(currentChecklistRowIDs)
+            .sorted()
+
+        medicationCheckState = MedicationCheckState(
+            dateKey: MedicationCheckState.todayKey,
+            checkedIDs: savedIDs
+        )
+    }
+}
+
+struct MedicationChecklistItem: Identifiable {
+    let id: String
+    let medication: MedicationSchedule
+    let time: MedicationDayTime
+    let dose: String
+}
+
+struct MedicineChecklistRow: View {
+    let row: MedicationChecklistItem
+    let isChecked: Bool
+    let tint: Color
+    let action: () -> Void
+
+    var body: some View {
+        Button {
+            action()
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: isChecked ? "checkmark.square.fill" : "square")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(isChecked ? tint : .secondary)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(row.medication.displayName.isEmpty ? "Unnamed Medicine" : row.medication.displayName)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(AppTheme.text)
+
+                    if !row.dose.isEmpty {
+                        Text(row.dose)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Spacer()
+            }
+            .padding(12)
+            .background(AppTheme.fieldBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct MedicationEditorSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let onSave: (MedicationSchedule) -> Void
+
+    @State private var draft: MedicationSchedule
+
+    init(medication: MedicationSchedule, onSave: @escaping (MedicationSchedule) -> Void) {
+        self.onSave = onSave
+        self._draft = State(initialValue: medication)
+    }
+
+    private var canSave: Bool {
+        let hasName = !draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+        switch draft.mode {
+        case .daily:
+            return hasName && !draft.dailyTimes.isEmpty
+        case .weekly:
+            return hasName && !draft.weeklyDays.isEmpty && !draft.weeklyTimes.isEmpty
+        }
+    }
+
+    private var doseInputs: [MedicationDoseInput] {
+        switch draft.mode {
+        case .daily:
+            return sortedTimes(draft.dailyTimes).map { time in
+                MedicationDoseInput(
+                    id: draft.doseKey(day: nil, time: time),
+                    label: "\(time.title) dose"
+                )
+            }
+        case .weekly:
+            return sortedDays(draft.weeklyDays).flatMap { day in
+                sortedTimes(draft.weeklyTimes).map { time in
+                    MedicationDoseInput(
+                        id: draft.doseKey(day: day, time: time),
+                        label: "\(day.shortTitle) \(time.title) dose"
+                    )
+                }
+            }
+        }
+    }
+
+    private var firstEnteredDose: String? {
+        doseInputs
+            .compactMap { input in
+                let dose = draft.doses[input.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
+                return dose.isEmpty ? nil : dose
+            }
+            .first
+    }
+
+    private var canCopyDoseToAll: Bool {
+        doseInputs.count > 1 && firstEnteredDose != nil
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        TextField("Name of medicine", text: $draft.name)
+                            .textInputAutocapitalization(.words)
+                            .padding(12)
+                            .background(AppTheme.fieldBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                        TextField("Preferred nickname", text: $draft.nickname)
+                            .textInputAutocapitalization(.words)
+                            .padding(12)
+                            .background(AppTheme.fieldBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .authPanel()
+
+                    VStack(alignment: .leading, spacing: 14) {
+                        Picker("Schedule", selection: modeBinding) {
+                            ForEach(MedicationScheduleMode.allCases) { mode in
+                                Text(mode.title).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        if draft.mode == .daily {
+                            Text("Times per day")
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            HStack(spacing: 8) {
+                                ForEach(MedicationDayTime.allCases) { time in
+                                    MedicationChoicePill(
+                                        title: time.title,
+                                        isSelected: draft.dailyTimes.contains(time)
+                                    ) {
+                                        toggleDailyTime(time)
+                                    }
+                                }
+                            }
+                        } else {
+                            Text("Days of the week")
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
+                                ForEach(MedicationWeekday.allCases) { day in
+                                    MedicationChoicePill(
+                                        title: day.shortTitle,
+                                        isSelected: draft.weeklyDays.contains(day)
+                                    ) {
+                                        toggleWeeklyDay(day)
+                                    }
+                                }
+                            }
+
+                            Text("Times per day")
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            HStack(spacing: 8) {
+                                ForEach(MedicationDayTime.allCases) { time in
+                                    MedicationChoicePill(
+                                        title: time.title,
+                                        isSelected: draft.weeklyTimes.contains(time)
+                                    ) {
+                                        toggleWeeklyTime(time)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .authPanel()
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("Dose")
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            Spacer()
+
+                            Button {
+                                copyFirstDoseToAll()
+                            } label: {
+                                HStack(spacing: 5) {
+                                    Image(systemName: "doc.on.doc")
+                                        .font(.caption.weight(.bold))
+
+                                    Text("Same dose")
+                                        .font(.caption.weight(.bold))
+                                }
+                                .foregroundStyle(canCopyDoseToAll ? AppTheme.accent : .secondary)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .background(AppTheme.fieldBackground)
+                                .clipShape(Capsule())
+                            }
+                            .disabled(!canCopyDoseToAll)
+                            .buttonStyle(.plain)
+                        }
+
+                        if doseInputs.isEmpty {
+                            Text("Choose a time to add doses.")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(doseInputs) { input in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(input.label)
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+
+                                    TextField("Example: 5 mg, 1 tablet, 2 mL", text: doseBinding(for: input.id))
+                                        .padding(12)
+                                        .background(AppTheme.fieldBackground)
+                                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                }
+                            }
+                        }
+                    }
+                    .authPanel()
+                }
+                .padding(18)
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle("Medicine")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Save") {
+                        save()
+                    }
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(canSave ? AppTheme.accent : .secondary)
+                    .disabled(!canSave)
+                }
+            }
+        }
+        .presentationDetents([.large])
+    }
+
+    private var modeBinding: Binding<MedicationScheduleMode> {
+        Binding {
+            draft.mode
+        } set: { newMode in
+            setScheduleMode(newMode)
+        }
+    }
+
+    private func doseBinding(for key: String) -> Binding<String> {
+        Binding {
+            draft.doses[key, default: ""]
+        } set: { newValue in
+            draft.doses[key] = newValue
+        }
+    }
+
+    private func setScheduleMode(_ mode: MedicationScheduleMode) {
+        guard draft.mode != mode else { return }
+
+        draft.mode = mode
+
+        switch mode {
+        case .daily:
+            draft.weeklyDays.removeAll()
+            draft.weeklyTimes.removeAll()
+            draft.doses = draft.doses.filter { !$0.key.contains(".") }
+        case .weekly:
+            draft.dailyTimes.removeAll()
+            draft.doses = draft.doses.filter { $0.key.contains(".") }
+        }
+    }
+
+    private func copyFirstDoseToAll() {
+        guard let dose = firstEnteredDose else { return }
+
+        for input in doseInputs {
+            draft.doses[input.id] = dose
+        }
+    }
+
+    private func toggleDailyTime(_ time: MedicationDayTime) {
+        toggle(time, in: &draft.dailyTimes)
+    }
+
+    private func toggleWeeklyTime(_ time: MedicationDayTime) {
+        toggle(time, in: &draft.weeklyTimes)
+    }
+
+    private func toggleWeeklyDay(_ day: MedicationWeekday) {
+        toggle(day, in: &draft.weeklyDays)
+    }
+
+    private func toggle<T: Equatable>(_ value: T, in values: inout [T]) {
+        if let index = values.firstIndex(of: value) {
+            values.remove(at: index)
+        } else {
+            values.append(value)
+        }
+    }
+
+    private func save() {
+        var saved = draft
+        saved.name = saved.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        saved.nickname = saved.nickname.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let activeDoseKeys = Set(doseInputs.map(\.id))
+        saved.doses = saved.doses.reduce(into: [:]) { result, item in
+            let value = item.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if activeDoseKeys.contains(item.key), !value.isEmpty {
+                result[item.key] = value
+            }
+        }
+
+        onSave(saved)
+        dismiss()
+    }
+
+    private func sortedTimes(_ times: [MedicationDayTime]) -> [MedicationDayTime] {
+        MedicationDayTime.allCases.filter { times.contains($0) }
+    }
+
+    private func sortedDays(_ days: [MedicationWeekday]) -> [MedicationWeekday] {
+        MedicationWeekday.allCases.filter { days.contains($0) }
+    }
+}
+
+struct MedicationDoseInput: Identifiable {
+    let id: String
+    let label: String
+}
+
+struct MedicationChoicePill: View {
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button {
+            action()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.caption.weight(.bold))
+
+                Text(title)
+                    .font(.caption.weight(.bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+            }
+            .foregroundStyle(isSelected ? .white : AppTheme.text)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 8)
+            .background(isSelected ? AppTheme.accent : AppTheme.fieldBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 struct PainLogEntrySheet: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -833,13 +1689,12 @@ struct PainLogEntrySheet: View {
     @State private var useCurrentTime = true
     @State private var timestamp = Date()
     @State private var severity = 3.0
-    @State private var selectedSide: PainBodySide = .front
-    @State private var selectedLocation = ""
+    @State private var painPoints: [PainPoint] = []
     @State private var shortComment = ""
     @State private var indicators = ""
 
     private var displayLocation: String {
-        selectedLocation.isEmpty ? "Tap a body area" : selectedLocation
+        painPoints.isEmpty ? "Tap the body to add a pain dot" : "\(painPoints.count) pain location\(painPoints.count == 1 ? "" : "s")"
     }
 
     var body: some View {
@@ -877,8 +1732,7 @@ struct PainLogEntrySheet: View {
                         .opacity(useCurrentTime ? 0.55 : 1)
 
                         PainBodySelector(
-                            selectedSide: $selectedSide,
-                            selectedLocation: $selectedLocation,
+                            painPoints: $painPoints,
                             tint: option.tint
                         )
 
@@ -941,8 +1795,11 @@ struct PainLogEntrySheet: View {
     }
 
     private func save() {
-        let location = selectedLocation.trimmingCharacters(in: .whitespacesAndNewlines)
-        let savedLocation = location.isEmpty ? "Pain location not selected" : "\(selectedSide.rawValue): \(location)"
+        let savedLocation = painPoints.isEmpty
+            ? "Pain location not selected"
+            : painPoints
+                .map { "\($0.side.rawValue): \(Int($0.x * 100))%, \(Int($0.y * 100))%" }
+                .joined(separator: "; ")
         let notes = [
             shortComment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : "Comment: \(shortComment.trimmingCharacters(in: .whitespacesAndNewlines))",
             indicators.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : "Indicators: \(indicators.trimmingCharacters(in: .whitespacesAndNewlines))"
@@ -972,45 +1829,18 @@ enum PainBodySide: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-struct PainLocation: Identifiable {
-    let id: String
+struct PainPoint: Identifiable, Equatable {
+    let id = UUID()
     let side: PainBodySide
-    let label: String
-    let x: Double
-    let y: Double
+    let x: CGFloat
+    let y: CGFloat
 }
 
 struct PainBodySelector: View {
-    @Binding var selectedSide: PainBodySide
-    @Binding var selectedLocation: String
+    @Binding var painPoints: [PainPoint]
     let tint: Color
 
-    private let locations: [PainLocation] = [
-        PainLocation(id: "front-head", side: .front, label: "Head", x: 0.50, y: 0.12),
-        PainLocation(id: "front-throat", side: .front, label: "Throat", x: 0.50, y: 0.23),
-        PainLocation(id: "front-chest", side: .front, label: "Chest", x: 0.50, y: 0.34),
-        PainLocation(id: "front-belly", side: .front, label: "Belly", x: 0.50, y: 0.47),
-        PainLocation(id: "front-left-arm", side: .front, label: "Left arm", x: 0.31, y: 0.39),
-        PainLocation(id: "front-right-arm", side: .front, label: "Right arm", x: 0.69, y: 0.39),
-        PainLocation(id: "front-left-hand", side: .front, label: "Left hand", x: 0.24, y: 0.58),
-        PainLocation(id: "front-right-hand", side: .front, label: "Right hand", x: 0.76, y: 0.58),
-        PainLocation(id: "front-left-leg", side: .front, label: "Left leg", x: 0.42, y: 0.75),
-        PainLocation(id: "front-right-leg", side: .front, label: "Right leg", x: 0.58, y: 0.75),
-        PainLocation(id: "back-head", side: .back, label: "Head", x: 0.50, y: 0.12),
-        PainLocation(id: "back-neck", side: .back, label: "Neck", x: 0.50, y: 0.23),
-        PainLocation(id: "back-upper", side: .back, label: "Upper back", x: 0.50, y: 0.34),
-        PainLocation(id: "back-lower", side: .back, label: "Lower back", x: 0.50, y: 0.49),
-        PainLocation(id: "back-left-shoulder", side: .back, label: "Left shoulder", x: 0.34, y: 0.31),
-        PainLocation(id: "back-right-shoulder", side: .back, label: "Right shoulder", x: 0.66, y: 0.31),
-        PainLocation(id: "back-left-hip", side: .back, label: "Left hip", x: 0.42, y: 0.60),
-        PainLocation(id: "back-right-hip", side: .back, label: "Right hip", x: 0.58, y: 0.60),
-        PainLocation(id: "back-left-leg", side: .back, label: "Left leg", x: 0.42, y: 0.78),
-        PainLocation(id: "back-right-leg", side: .back, label: "Right leg", x: 0.58, y: 0.78)
-    ]
-
-    private var visibleLocations: [PainLocation] {
-        locations.filter { $0.side == selectedSide }
-    }
+    @State private var selectedSide: PainBodySide = .front
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1018,107 +1848,464 @@ struct PainBodySelector: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(AppTheme.text)
 
-            Picker("Body side", selection: $selectedSide) {
-                ForEach(PainBodySide.allCases) { side in
-                    Text(side.rawValue).tag(side)
-                }
-            }
-            .pickerStyle(.segmented)
-
-            ZStack {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(AppTheme.fieldBackground)
-
-                GeometryReader { proxy in
-                    ZStack {
-                        PainBodySilhouette(side: selectedSide, tint: tint)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                        ForEach(visibleLocations) { location in
-                            Button {
-                                selectedLocation = location.label
-                            } label: {
-                                Image(systemName: selectedLocation == location.label ? "checkmark" : "plus")
-                                    .font(.caption.weight(.black))
-                                    .foregroundStyle(selectedLocation == location.label ? .white : tint)
-                                    .frame(width: 26, height: 26)
-                                    .background(selectedLocation == location.label ? tint : Color.white)
-                                    .clipShape(Circle())
-                                    .shadow(color: Color.black.opacity(0.12), radius: 5, x: 0, y: 2)
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("\(location.label) pain location")
-                            .position(
-                                x: proxy.size.width * location.x,
-                                y: proxy.size.height * location.y
-                            )
-                        }
+            VStack(spacing: 10) {
+                Picker("Body side", selection: $selectedSide) {
+                    ForEach(PainBodySide.allCases) { side in
+                        Text(side.rawValue).tag(side)
                     }
                 }
-                .padding(12)
+                .pickerStyle(.segmented)
+
+                TappablePainBodyMap(
+                    side: selectedSide,
+                    painPoints: $painPoints,
+                    tint: tint
+                )
+                .frame(height: 430)
+
+                if !painPoints.isEmpty {
+                    Button {
+                        painPoints.removeAll()
+                    } label: {
+                        Label("Clear pain dots", systemImage: "xmark.circle")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
-            .frame(height: 360)
+            .padding(12)
+            .background(AppTheme.fieldBackground)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
-            Text(selectedLocation.isEmpty ? "No location selected" : "\(selectedSide.rawValue): \(selectedLocation)")
+            Text(painPoints.isEmpty ? "Tap directly on the body to mark pain." : "\(painPoints.count) pain dot\(painPoints.count == 1 ? "" : "s") marked")
                 .font(.caption.weight(.bold))
-                .foregroundStyle(selectedLocation.isEmpty ? .secondary : tint)
+                .foregroundStyle(painPoints.isEmpty ? .secondary : tint)
         }
     }
+}
+
+struct TappablePainBodyMap: View {
+    let side: PainBodySide
+    @Binding var painPoints: [PainPoint]
+    let tint: Color
+
+    private var visiblePoints: [PainPoint] {
+        painPoints.filter { $0.side == side }
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Text(side.rawValue)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+
+            GeometryReader { proxy in
+                ZStack {
+                    ImprovedPainBodySilhouette(side: side, tint: tint)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    ForEach(visiblePoints) { point in
+                        Circle()
+                            .fill(tint)
+                            .frame(width: 14, height: 14)
+                            .overlay {
+                                Circle()
+                                    .stroke(.white, lineWidth: 3)
+                            }
+                            .shadow(color: tint.opacity(0.35), radius: 5, x: 0, y: 2)
+                            .position(
+                                x: proxy.size.width * point.x,
+                                y: proxy.size.height * point.y
+                            )
+                    }
+                }
+                .contentShape(Rectangle())
+                .gesture(
+                    SpatialTapGesture()
+                        .onEnded { value in
+                            let normalizedX = min(max(value.location.x / proxy.size.width, 0), 1)
+                            let normalizedY = min(max(value.location.y / proxy.size.height, 0), 1)
+
+                            guard isInsideBody(x: normalizedX, y: normalizedY) else { return }
+
+                            withAnimation(.spring(response: 0.24, dampingFraction: 0.74)) {
+                                painPoints.append(PainPoint(side: side, x: normalizedX, y: normalizedY))
+                            }
+                        }
+                )
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(side.rawValue) body pain map")
+    }
+
+    private func isInsideBody(x: CGFloat, y: CGFloat) -> Bool {
+        func ellipse(centerX: CGFloat, centerY: CGFloat, radiusX: CGFloat, radiusY: CGFloat) -> Bool {
+            let dx = (x - centerX) / radiusX
+            let dy = (y - centerY) / radiusY
+            return (dx * dx) + (dy * dy) <= 1
+        }
+
+        func segment(startX: CGFloat, startY: CGFloat, endX: CGFloat, endY: CGFloat, radius: CGFloat) -> Bool {
+            let vx = endX - startX
+            let vy = endY - startY
+            let wx = x - startX
+            let wy = y - startY
+            let lengthSquared = (vx * vx) + (vy * vy)
+            let projection = max(0, min(1, ((wx * vx) + (wy * vy)) / lengthSquared))
+            let nearestX = startX + projection * vx
+            let nearestY = startY + projection * vy
+            let dx = x - nearestX
+            let dy = y - nearestY
+            return sqrt((dx * dx) + (dy * dy)) <= radius
+        }
+
+        let head = ellipse(centerX: 0.50, centerY: 0.12, radiusX: 0.13, radiusY: 0.09)
+        let neck = x >= 0.44 && x <= 0.56 && y >= 0.19 && y <= 0.27
+        let torso = x >= 0.31 && x <= 0.69 && y >= 0.25 && y <= 0.58
+        let leftArm = segment(startX: 0.33, startY: 0.30, endX: 0.18, endY: 0.67, radius: 0.065)
+        let rightArm = segment(startX: 0.67, startY: 0.30, endX: 0.82, endY: 0.67, radius: 0.065)
+        let leftHand = ellipse(centerX: 0.18, centerY: 0.69, radiusX: 0.07, radiusY: 0.045)
+        let rightHand = ellipse(centerX: 0.82, centerY: 0.69, radiusX: 0.07, radiusY: 0.045)
+        let leftLeg = segment(startX: 0.43, startY: 0.56, endX: 0.39, endY: 0.92, radius: 0.07)
+        let rightLeg = segment(startX: 0.57, startY: 0.56, endX: 0.61, endY: 0.92, radius: 0.07)
+        let feet = ellipse(centerX: 0.41, centerY: 0.95, radiusX: 0.07, radiusY: 0.035)
+            || ellipse(centerX: 0.59, centerY: 0.95, radiusX: 0.07, radiusY: 0.035)
+
+        return head || neck || torso || leftArm || rightArm || leftHand || rightHand || leftLeg || rightLeg || feet
+    }
+}
+
+struct ImprovedPainBodySilhouette: View {
+    let side: PainBodySide
+    let tint: Color
+
+    private let fill = Color(red: 1.00, green: 0.78, blue: 0.84)
+
+    var body: some View {
+        GeometryReader { proxy in
+            let rect = bodyRect(in: proxy.size)
+
+            ZStack {
+                RoundedRectangle(cornerRadius: rect.width * 0.08, style: .continuous)
+                    .fill(fill)
+                    .frame(width: rect.width * 0.17, height: rect.height * 0.42)
+                    .position(x: rect.minX + rect.width * 0.37, y: rect.minY + rect.height * 0.76)
+
+                RoundedRectangle(cornerRadius: rect.width * 0.08, style: .continuous)
+                    .fill(fill)
+                    .frame(width: rect.width * 0.17, height: rect.height * 0.42)
+                    .position(x: rect.minX + rect.width * 0.63, y: rect.minY + rect.height * 0.76)
+
+                RoundedRectangle(cornerRadius: rect.width * 0.08, style: .continuous)
+                    .fill(fill)
+                    .frame(width: rect.width * 0.12, height: rect.height * 0.39)
+                    .position(x: rect.minX + rect.width * 0.15, y: rect.minY + rect.height * 0.47)
+
+                RoundedRectangle(cornerRadius: rect.width * 0.08, style: .continuous)
+                    .fill(fill)
+                    .frame(width: rect.width * 0.12, height: rect.height * 0.39)
+                    .position(x: rect.minX + rect.width * 0.85, y: rect.minY + rect.height * 0.47)
+
+                RoundedRectangle(cornerRadius: rect.width * 0.15, style: .continuous)
+                    .fill(fill)
+                    .frame(width: rect.width * 0.56, height: rect.height * 0.47)
+                    .position(x: rect.midX, y: rect.minY + rect.height * 0.43)
+
+                RoundedRectangle(cornerRadius: rect.width * 0.09, style: .continuous)
+                    .fill(fill)
+                    .frame(width: rect.width * 0.20, height: rect.height * 0.22)
+                    .position(x: rect.midX, y: rect.minY + rect.height * 0.24)
+
+                Circle()
+                    .fill(fill)
+                    .frame(width: rect.width * 0.33, height: rect.width * 0.33)
+                    .position(x: rect.midX, y: rect.minY + rect.height * 0.09)
+            }
+        }
+    }
+
+    private func bodyRect(in size: CGSize) -> CGRect {
+        let width = min(size.width * 0.72, size.height * 0.42)
+        let height = min(size.height * 0.98, width / 0.42)
+        return CGRect(
+            x: (size.width - width) / 2,
+            y: (size.height - height) / 2,
+            width: width,
+            height: height
+        )
+    }
+
+    private func p(_ x: CGFloat, _ y: CGFloat, _ rect: CGRect) -> CGPoint {
+        CGPoint(x: rect.minX + rect.width * x, y: rect.minY + rect.height * y)
+    }
+
+    private func humanSilhouettePath(in rect: CGRect) -> Path {
+        var path = Path()
+
+        path.move(to: p(0.50, 0.03, rect))
+        path.addCurve(to: p(0.39, 0.06, rect), control1: p(0.45, 0.03, rect), control2: p(0.41, 0.04, rect))
+        path.addCurve(to: p(0.36, 0.15, rect), control1: p(0.36, 0.09, rect), control2: p(0.35, 0.12, rect))
+        path.addCurve(to: p(0.38, 0.22, rect), control1: p(0.36, 0.18, rect), control2: p(0.37, 0.20, rect))
+        path.addCurve(to: p(0.42, 0.24, rect), control1: p(0.39, 0.23, rect), control2: p(0.40, 0.24, rect))
+        path.addLine(to: p(0.41, 0.28, rect))
+        path.addCurve(to: p(0.31, 0.30, rect), control1: p(0.37, 0.29, rect), control2: p(0.34, 0.29, rect))
+        path.addCurve(to: p(0.27, 0.36, rect), control1: p(0.28, 0.31, rect), control2: p(0.27, 0.33, rect))
+        path.addCurve(to: p(0.24, 0.54, rect), control1: p(0.27, 0.42, rect), control2: p(0.25, 0.48, rect))
+        path.addCurve(to: p(0.18, 0.70, rect), control1: p(0.23, 0.60, rect), control2: p(0.20, 0.65, rect))
+        path.addCurve(to: p(0.14, 0.78, rect), control1: p(0.17, 0.73, rect), control2: p(0.15, 0.75, rect))
+        path.addCurve(to: p(0.16, 0.84, rect), control1: p(0.12, 0.82, rect), control2: p(0.14, 0.84, rect))
+        path.addCurve(to: p(0.20, 0.79, rect), control1: p(0.18, 0.86, rect), control2: p(0.20, 0.83, rect))
+        path.addCurve(to: p(0.23, 0.73, rect), control1: p(0.20, 0.77, rect), control2: p(0.21, 0.75, rect))
+        path.addCurve(to: p(0.29, 0.57, rect), control1: p(0.25, 0.68, rect), control2: p(0.28, 0.63, rect))
+        path.addCurve(to: p(0.34, 0.42, rect), control1: p(0.30, 0.51, rect), control2: p(0.32, 0.46, rect))
+        path.addCurve(to: p(0.37, 0.61, rect), control1: p(0.36, 0.50, rect), control2: p(0.36, 0.56, rect))
+        path.addCurve(to: p(0.40, 0.67, rect), control1: p(0.38, 0.64, rect), control2: p(0.39, 0.66, rect))
+        path.addCurve(to: p(0.36, 0.82, rect), control1: p(0.38, 0.72, rect), control2: p(0.36, 0.77, rect))
+        path.addCurve(to: p(0.35, 0.93, rect), control1: p(0.36, 0.87, rect), control2: p(0.36, 0.90, rect))
+        path.addCurve(to: p(0.31, 0.98, rect), control1: p(0.34, 0.95, rect), control2: p(0.31, 0.96, rect))
+        path.addCurve(to: p(0.45, 0.98, rect), control1: p(0.30, 1.01, rect), control2: p(0.43, 1.00, rect))
+        path.addCurve(to: p(0.48, 0.82, rect), control1: p(0.47, 0.93, rect), control2: p(0.47, 0.88, rect))
+        path.addCurve(to: p(0.50, 0.67, rect), control1: p(0.48, 0.77, rect), control2: p(0.49, 0.72, rect))
+        path.addCurve(to: p(0.52, 0.82, rect), control1: p(0.51, 0.72, rect), control2: p(0.52, 0.77, rect))
+        path.addCurve(to: p(0.55, 0.98, rect), control1: p(0.53, 0.88, rect), control2: p(0.53, 0.93, rect))
+        path.addCurve(to: p(0.69, 0.98, rect), control1: p(0.57, 1.00, rect), control2: p(0.70, 1.01, rect))
+        path.addCurve(to: p(0.65, 0.93, rect), control1: p(0.69, 0.96, rect), control2: p(0.66, 0.95, rect))
+        path.addCurve(to: p(0.64, 0.82, rect), control1: p(0.64, 0.90, rect), control2: p(0.64, 0.87, rect))
+        path.addCurve(to: p(0.60, 0.67, rect), control1: p(0.64, 0.77, rect), control2: p(0.62, 0.72, rect))
+        path.addCurve(to: p(0.63, 0.61, rect), control1: p(0.61, 0.66, rect), control2: p(0.62, 0.64, rect))
+        path.addCurve(to: p(0.66, 0.42, rect), control1: p(0.64, 0.56, rect), control2: p(0.64, 0.50, rect))
+        path.addCurve(to: p(0.71, 0.57, rect), control1: p(0.68, 0.46, rect), control2: p(0.70, 0.51, rect))
+        path.addCurve(to: p(0.77, 0.73, rect), control1: p(0.72, 0.63, rect), control2: p(0.75, 0.68, rect))
+        path.addCurve(to: p(0.80, 0.79, rect), control1: p(0.79, 0.75, rect), control2: p(0.80, 0.77, rect))
+        path.addCurve(to: p(0.84, 0.84, rect), control1: p(0.80, 0.83, rect), control2: p(0.82, 0.86, rect))
+        path.addCurve(to: p(0.86, 0.78, rect), control1: p(0.86, 0.84, rect), control2: p(0.88, 0.82, rect))
+        path.addCurve(to: p(0.82, 0.70, rect), control1: p(0.85, 0.75, rect), control2: p(0.83, 0.73, rect))
+        path.addCurve(to: p(0.76, 0.54, rect), control1: p(0.80, 0.65, rect), control2: p(0.77, 0.60, rect))
+        path.addCurve(to: p(0.73, 0.36, rect), control1: p(0.75, 0.48, rect), control2: p(0.73, 0.42, rect))
+        path.addCurve(to: p(0.69, 0.30, rect), control1: p(0.73, 0.33, rect), control2: p(0.72, 0.31, rect))
+        path.addCurve(to: p(0.59, 0.28, rect), control1: p(0.66, 0.29, rect), control2: p(0.63, 0.29, rect))
+        path.addLine(to: p(0.58, 0.24, rect))
+        path.addCurve(to: p(0.62, 0.22, rect), control1: p(0.60, 0.24, rect), control2: p(0.61, 0.23, rect))
+        path.addCurve(to: p(0.64, 0.15, rect), control1: p(0.63, 0.20, rect), control2: p(0.64, 0.18, rect))
+        path.addCurve(to: p(0.61, 0.06, rect), control1: p(0.65, 0.12, rect), control2: p(0.64, 0.09, rect))
+        path.addCurve(to: p(0.50, 0.03, rect), control1: p(0.59, 0.04, rect), control2: p(0.55, 0.03, rect))
+        path.closeSubpath()
+
+        return path
+    }
+
+    private func bodyPart(_ path: Path) -> some View {
+        path
+            .fill(fill)
+    }
+
+    private func headPath(in rect: CGRect) -> Path {
+        Path(ellipseIn: CGRect(
+            x: rect.minX + rect.width * 0.36,
+            y: rect.minY + rect.height * 0.03,
+            width: rect.width * 0.28,
+            height: rect.height * 0.16
+        ))
+    }
+
+    private func neckPath(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: p(0.43, 0.18, rect))
+        path.addLine(to: p(0.57, 0.18, rect))
+        path.addLine(to: p(0.61, 0.30, rect))
+        path.addLine(to: p(0.39, 0.30, rect))
+        path.closeSubpath()
+        return path
+    }
+
+    private func torsoPath(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: p(0.28, 0.29, rect))
+        path.addCurve(to: p(0.72, 0.29, rect), control1: p(0.39, 0.25, rect), control2: p(0.61, 0.25, rect))
+        path.addCurve(to: p(0.70, 0.51, rect), control1: p(0.76, 0.36, rect), control2: p(0.73, 0.45, rect))
+        path.addCurve(to: p(0.62, 0.63, rect), control1: p(0.68, 0.57, rect), control2: p(0.66, 0.61, rect))
+        path.addCurve(to: p(0.50, 0.65, rect), control1: p(0.58, 0.65, rect), control2: p(0.54, 0.66, rect))
+        path.addCurve(to: p(0.38, 0.63, rect), control1: p(0.46, 0.66, rect), control2: p(0.42, 0.65, rect))
+        path.addCurve(to: p(0.30, 0.51, rect), control1: p(0.34, 0.61, rect), control2: p(0.32, 0.57, rect))
+        path.addCurve(to: p(0.28, 0.29, rect), control1: p(0.27, 0.45, rect), control2: p(0.24, 0.36, rect))
+        path.closeSubpath()
+        return path
+    }
+
+    private func leftArmPath(in rect: CGRect) -> Path {
+        armPath(in: rect, left: true)
+    }
+
+    private func rightArmPath(in rect: CGRect) -> Path {
+        armPath(in: rect, left: false)
+    }
+
+    private func armPath(in rect: CGRect, left: Bool) -> Path {
+        func x(_ frontX: CGFloat) -> CGFloat {
+            left ? frontX : 1 - frontX
+        }
+
+        var path = Path()
+        path.move(to: p(x(0.31), 0.31, rect))
+        path.addCurve(to: p(x(0.20), 0.60, rect), control1: p(x(0.22), 0.40, rect), control2: p(x(0.23), 0.51, rect))
+        path.addCurve(to: p(x(0.10), 0.74, rect), control1: p(x(0.19), 0.66, rect), control2: p(x(0.14), 0.70, rect))
+        path.addCurve(to: p(x(0.07), 0.80, rect), control1: p(x(0.06), 0.77, rect), control2: p(x(0.05), 0.79, rect))
+        path.addCurve(to: p(x(0.16), 0.80, rect), control1: p(x(0.09), 0.84, rect), control2: p(x(0.14), 0.82, rect))
+        path.addCurve(to: p(x(0.21), 0.73, rect), control1: p(x(0.17), 0.86, rect), control2: p(x(0.22), 0.82, rect))
+        path.addCurve(to: p(x(0.29), 0.53, rect), control1: p(x(0.22), 0.66, rect), control2: p(x(0.27), 0.60, rect))
+        path.addCurve(to: p(x(0.36), 0.34, rect), control1: p(x(0.30), 0.45, rect), control2: p(x(0.33), 0.39, rect))
+        path.addCurve(to: p(x(0.31), 0.31, rect), control1: p(x(0.35), 0.32, rect), control2: p(x(0.33), 0.31, rect))
+        path.closeSubpath()
+        return path
+    }
+
+    private func leftLegPath(in rect: CGRect) -> Path {
+        legPath(in: rect, left: true)
+    }
+
+    private func rightLegPath(in rect: CGRect) -> Path {
+        legPath(in: rect, left: false)
+    }
+
+    private func legPath(in rect: CGRect, left: Bool) -> Path {
+        let hipOuter: CGFloat = left ? 0.38 : 0.62
+        let kneeOuter: CGFloat = left ? 0.34 : 0.66
+        let ankleOuter: CGFloat = left ? 0.35 : 0.65
+        let footOuter: CGFloat = left ? 0.28 : 0.72
+        let footInner: CGFloat = left ? 0.48 : 0.52
+        let inner: CGFloat = left ? 0.49 : 0.51
+
+        var path = Path()
+        path.move(to: p(hipOuter, 0.61, rect))
+        path.addCurve(to: p(kneeOuter, 0.79, rect), control1: p(left ? 0.35 : 0.65, 0.68, rect), control2: p(kneeOuter, 0.73, rect))
+        path.addCurve(to: p(ankleOuter, 0.93, rect), control1: p(kneeOuter, 0.86, rect), control2: p(ankleOuter, 0.90, rect))
+        path.addCurve(to: p(footOuter, 0.97, rect), control1: p(left ? 0.33 : 0.67, 0.95, rect), control2: p(left ? 0.29 : 0.71, 0.95, rect))
+        path.addCurve(to: p(footInner, 0.98, rect), control1: p(left ? 0.31 : 0.69, 1.00, rect), control2: p(left ? 0.44 : 0.56, 1.00, rect))
+        path.addCurve(to: p(inner, 0.66, rect), control1: p(left ? 0.47 : 0.53, 0.89, rect), control2: p(left ? 0.48 : 0.52, 0.75, rect))
+        path.addCurve(to: p(hipOuter, 0.61, rect), control1: p(left ? 0.47 : 0.53, 0.63, rect), control2: p(left ? 0.43 : 0.57, 0.61, rect))
+        path.closeSubpath()
+        return path
+    }
+
 }
 
 struct PainBodySilhouette: View {
     let side: PainBodySide
     let tint: Color
 
+    private let fill = Color(red: 1.00, green: 0.87, blue: 0.90)
+
     var body: some View {
-        ZStack {
-            Capsule()
-                .fill(tint.opacity(0.18))
-                .frame(width: 92, height: 150)
-                .offset(y: -34)
+        GeometryReader { proxy in
+            let drawingRect = centeredRect(in: proxy.size)
 
-            Circle()
-                .fill(tint.opacity(0.22))
-                .frame(width: 56, height: 56)
-                .offset(y: -146)
+            ZStack {
+                bodyPath(in: drawingRect)
+                    .fill(fill)
 
-            Capsule()
-                .fill(tint.opacity(0.18))
-                .frame(width: 30, height: 136)
-                .rotationEffect(.degrees(-17))
-                .offset(x: -68, y: -38)
+                bodyPath(in: drawingRect)
+                    .stroke(tint.opacity(0.42), style: StrokeStyle(lineWidth: 2.3, lineCap: .round, lineJoin: .round))
 
-            Capsule()
-                .fill(tint.opacity(0.18))
-                .frame(width: 30, height: 136)
-                .rotationEffect(.degrees(17))
-                .offset(x: 68, y: -38)
-
-            Capsule()
-                .fill(tint.opacity(0.18))
-                .frame(width: 34, height: 150)
-                .rotationEffect(.degrees(7))
-                .offset(x: -24, y: 118)
-
-            Capsule()
-                .fill(tint.opacity(0.18))
-                .frame(width: 34, height: 150)
-                .rotationEffect(.degrees(-7))
-                .offset(x: 24, y: 118)
-
-            if side == .back {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(tint.opacity(0.38), lineWidth: 2)
-                    .frame(width: 44, height: 92)
-                    .offset(y: -34)
-            } else {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(tint.opacity(0.10))
-                    .frame(width: 46, height: 58)
-                    .offset(y: -58)
+                detailPath(in: drawingRect)
+                    .stroke(tint.opacity(0.38), style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round))
             }
         }
+    }
+
+    private func centeredRect(in size: CGSize) -> CGRect {
+        let width = min(size.width, size.height * 0.52)
+        let height = min(size.height, width / 0.52)
+        return CGRect(
+            x: (size.width - width) / 2,
+            y: (size.height - height) / 2,
+            width: width,
+            height: height
+        )
+    }
+
+    private func point(_ x: CGFloat, _ y: CGFloat, in rect: CGRect) -> CGPoint {
+        CGPoint(x: rect.minX + (rect.width * x), y: rect.minY + (rect.height * y))
+    }
+
+    private func bodyPath(in rect: CGRect) -> Path {
+        var path = Path()
+
+        path.move(to: point(0.50, 0.03, in: rect))
+        path.addCurve(to: point(0.36, 0.16, in: rect), control1: point(0.41, 0.03, in: rect), control2: point(0.35, 0.08, in: rect))
+        path.addCurve(to: point(0.42, 0.25, in: rect), control1: point(0.36, 0.20, in: rect), control2: point(0.38, 0.23, in: rect))
+        path.addLine(to: point(0.39, 0.31, in: rect))
+        path.addLine(to: point(0.27, 0.33, in: rect))
+        path.addCurve(to: point(0.20, 0.45, in: rect), control1: point(0.22, 0.34, in: rect), control2: point(0.19, 0.38, in: rect))
+        path.addCurve(to: point(0.16, 0.65, in: rect), control1: point(0.20, 0.51, in: rect), control2: point(0.16, 0.57, in: rect))
+        path.addCurve(to: point(0.07, 0.77, in: rect), control1: point(0.14, 0.71, in: rect), control2: point(0.09, 0.75, in: rect))
+        path.addCurve(to: point(0.03, 0.81, in: rect), control1: point(0.03, 0.79, in: rect), control2: point(0.02, 0.81, in: rect))
+        path.addCurve(to: point(0.12, 0.81, in: rect), control1: point(0.05, 0.85, in: rect), control2: point(0.09, 0.84, in: rect))
+        path.addCurve(to: point(0.16, 0.76, in: rect), control1: point(0.11, 0.86, in: rect), control2: point(0.16, 0.86, in: rect))
+        path.addCurve(to: point(0.24, 0.61, in: rect), control1: point(0.18, 0.70, in: rect), control2: point(0.23, 0.66, in: rect))
+        path.addCurve(to: point(0.32, 0.47, in: rect), control1: point(0.25, 0.55, in: rect), control2: point(0.31, 0.51, in: rect))
+        path.addCurve(to: point(0.34, 0.70, in: rect), control1: point(0.36, 0.55, in: rect), control2: point(0.36, 0.63, in: rect))
+        path.addCurve(to: point(0.38, 0.95, in: rect), control1: point(0.34, 0.78, in: rect), control2: point(0.34, 0.88, in: rect))
+        path.addCurve(to: point(0.49, 0.96, in: rect), control1: point(0.42, 0.99, in: rect), control2: point(0.47, 0.98, in: rect))
+        path.addCurve(to: point(0.50, 0.74, in: rect), control1: point(0.48, 0.87, in: rect), control2: point(0.49, 0.80, in: rect))
+        path.addCurve(to: point(0.51, 0.96, in: rect), control1: point(0.51, 0.80, in: rect), control2: point(0.52, 0.87, in: rect))
+        path.addCurve(to: point(0.62, 0.95, in: rect), control1: point(0.53, 0.98, in: rect), control2: point(0.58, 0.99, in: rect))
+        path.addCurve(to: point(0.66, 0.70, in: rect), control1: point(0.66, 0.88, in: rect), control2: point(0.66, 0.78, in: rect))
+        path.addCurve(to: point(0.68, 0.47, in: rect), control1: point(0.64, 0.63, in: rect), control2: point(0.64, 0.55, in: rect))
+        path.addCurve(to: point(0.76, 0.61, in: rect), control1: point(0.69, 0.51, in: rect), control2: point(0.75, 0.55, in: rect))
+        path.addCurve(to: point(0.84, 0.76, in: rect), control1: point(0.77, 0.66, in: rect), control2: point(0.82, 0.70, in: rect))
+        path.addCurve(to: point(0.88, 0.81, in: rect), control1: point(0.84, 0.86, in: rect), control2: point(0.89, 0.86, in: rect))
+        path.addCurve(to: point(0.97, 0.81, in: rect), control1: point(0.91, 0.84, in: rect), control2: point(0.95, 0.85, in: rect))
+        path.addCurve(to: point(0.93, 0.77, in: rect), control1: point(0.98, 0.81, in: rect), control2: point(0.97, 0.79, in: rect))
+        path.addCurve(to: point(0.84, 0.65, in: rect), control1: point(0.91, 0.75, in: rect), control2: point(0.86, 0.71, in: rect))
+        path.addCurve(to: point(0.80, 0.45, in: rect), control1: point(0.84, 0.57, in: rect), control2: point(0.80, 0.51, in: rect))
+        path.addCurve(to: point(0.73, 0.33, in: rect), control1: point(0.81, 0.38, in: rect), control2: point(0.78, 0.34, in: rect))
+        path.addLine(to: point(0.61, 0.31, in: rect))
+        path.addLine(to: point(0.58, 0.25, in: rect))
+        path.addCurve(to: point(0.64, 0.16, in: rect), control1: point(0.62, 0.23, in: rect), control2: point(0.64, 0.20, in: rect))
+        path.addCurve(to: point(0.50, 0.03, in: rect), control1: point(0.65, 0.08, in: rect), control2: point(0.59, 0.03, in: rect))
+        path.closeSubpath()
+
+        return path
+    }
+
+    private func detailPath(in rect: CGRect) -> Path {
+        var path = Path()
+
+        if side == .front {
+            path.move(to: point(0.32, 0.45, in: rect))
+            path.addQuadCurve(to: point(0.46, 0.45, in: rect), control: point(0.39, 0.51, in: rect))
+            path.move(to: point(0.54, 0.45, in: rect))
+            path.addQuadCurve(to: point(0.68, 0.45, in: rect), control: point(0.61, 0.51, in: rect))
+            path.move(to: point(0.50, 0.56, in: rect))
+            path.addQuadCurve(to: point(0.50, 0.57, in: rect), control: point(0.49, 0.57, in: rect))
+            path.move(to: point(0.40, 0.74, in: rect))
+            path.addQuadCurve(to: point(0.46, 0.73, in: rect), control: point(0.43, 0.77, in: rect))
+            path.move(to: point(0.60, 0.74, in: rect))
+            path.addQuadCurve(to: point(0.54, 0.73, in: rect), control: point(0.57, 0.77, in: rect))
+            path.move(to: point(0.42, 0.88, in: rect))
+            path.addQuadCurve(to: point(0.35, 0.88, in: rect), control: point(0.38, 0.86, in: rect))
+            path.move(to: point(0.58, 0.88, in: rect))
+            path.addQuadCurve(to: point(0.65, 0.88, in: rect), control: point(0.62, 0.86, in: rect))
+        } else {
+            path.move(to: point(0.50, 0.31, in: rect))
+            path.addLine(to: point(0.50, 0.63, in: rect))
+            path.move(to: point(0.35, 0.43, in: rect))
+            path.addQuadCurve(to: point(0.45, 0.35, in: rect), control: point(0.44, 0.44, in: rect))
+            path.move(to: point(0.65, 0.43, in: rect))
+            path.addQuadCurve(to: point(0.55, 0.35, in: rect), control: point(0.56, 0.44, in: rect))
+            path.move(to: point(0.36, 0.72, in: rect))
+            path.addQuadCurve(to: point(0.49, 0.71, in: rect), control: point(0.42, 0.76, in: rect))
+            path.move(to: point(0.64, 0.72, in: rect))
+            path.addQuadCurve(to: point(0.51, 0.71, in: rect), control: point(0.58, 0.76, in: rect))
+            path.move(to: point(0.42, 0.88, in: rect))
+            path.addQuadCurve(to: point(0.35, 0.88, in: rect), control: point(0.38, 0.86, in: rect))
+            path.move(to: point(0.58, 0.88, in: rect))
+            path.addQuadCurve(to: point(0.65, 0.88, in: rect), control: point(0.62, 0.86, in: rect))
+        }
+
+        return path
     }
 }
 
@@ -1126,6 +2313,7 @@ struct SeizureTimerSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     let option: QuickLogOption
+    let initialSeizureType: String
     let onSave: (HealthLogEntry) -> Void
 
     @State private var startTime = Date()
@@ -1149,6 +2337,10 @@ struct SeizureTimerSheet: View {
         "Infantile spasm",
         "Other"
     ]
+
+    private var defaultSeizureType: String {
+        seizureTypes.contains(initialSeizureType) ? initialSeizureType : "Seizure Type"
+    }
 
     var body: some View {
         NavigationStack {
@@ -1343,7 +2535,7 @@ struct SeizureTimerSheet: View {
             elapsedSeconds = 0
             isRunning = true
             isStopped = false
-            seizureType = "Seizure Type"
+            seizureType = defaultSeizureType
         }
     }
 
@@ -1488,17 +2680,8 @@ struct QuickLogTrendsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Quick-log Trends")
-                        .font(.largeTitle.weight(.bold))
-
-                    Text("Chart previews for the quick-log buttons selected on the dashboard.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-
                 if options.isEmpty {
-                    Text("Choose quick-log buttons on the dashboard to see trends here.")
+                    Text("Choose quick-log buttons on the dashboard to see history here.")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .authPanel()
@@ -1516,7 +2699,8 @@ struct QuickLogTrendsView: View {
             .padding(18)
         }
         .background(AppTheme.background.ignoresSafeArea())
-        .navigationTitle("Trends")
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     private func entriesFor(_ option: QuickLogOption) -> [HealthLogEntry] {
@@ -1541,47 +2725,99 @@ struct QuickLogTrendPreviewCard: View {
     }
 
     var body: some View {
-        Button {
-        } label: {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 12) {
-                    Image(systemName: option.icon)
-                        .font(.title2.weight(.bold))
-                        .foregroundStyle(option.tint)
-                        .frame(width: 48, height: 48)
-                        .background(option.tint.opacity(0.16))
-                        .clipShape(Circle())
+        if option.id == "seizure" {
+            NavigationLink {
+                SeizureHistoryDetailView(option: option, entries: entries)
+            } label: {
+                seizureHistoryCard
+            }
+            .buttonStyle(.plain)
+        } else {
+            Button {
+            } label: {
+                trendChartCard
+            }
+            .buttonStyle(.plain)
+        }
+    }
 
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(option.title)
-                            .font(.title3.weight(.bold))
-                            .foregroundStyle(AppTheme.text)
+    private var cardHeader: some View {
+        HStack(spacing: 12) {
+            Image(systemName: option.icon)
+                .font(.title2.weight(.bold))
+                .foregroundStyle(option.tint)
+                .frame(width: 48, height: 48)
+                .background(option.tint.opacity(0.16))
+                .clipShape(Circle())
 
-                        Text("\(entries.count) entries · Avg \(averageSeverityText)/5")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                    }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(option.title)
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(AppTheme.text)
 
-                    Spacer()
+                Text("\(entries.count) entries · Avg \(averageSeverityText)/5")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
 
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.bold))
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var trendChartCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            cardHeader
+
+            chartPreview
+                .frame(height: 110)
+                .padding(10)
+                .background(AppTheme.fieldBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.panel)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(color: Color.black.opacity(0.08), radius: 14, x: 0, y: 8)
+    }
+
+    private var seizureHistoryCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            cardHeader
+
+            HStack(spacing: 10) {
+                Image(systemName: "list.bullet.clipboard")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(option.tint)
+                    .frame(width: 36, height: 36)
+                    .background(option.tint.opacity(0.14))
+                    .clipShape(Circle())
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(entries.count) saved logs")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(AppTheme.text)
+
+                    Text("Dates, times, duration, type, triggers, and notes")
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
 
-                chartPreview
-                    .frame(height: 110)
-                    .padding(10)
-                    .background(AppTheme.fieldBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                Spacer()
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AppTheme.panel)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .shadow(color: Color.black.opacity(0.08), radius: 14, x: 0, y: 8)
+            .padding(12)
+            .background(AppTheme.fieldBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.panel)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(color: Color.black.opacity(0.08), radius: 14, x: 0, y: 8)
     }
 
     @ViewBuilder
@@ -1622,6 +2858,174 @@ struct QuickLogTrendPreviewCard: View {
 
     private var averageSeverityText: String {
         averageSeverity == 0 ? "0" : String(format: "%.1f", averageSeverity)
+    }
+}
+
+struct SeizureHistoryDetailView: View {
+    let option: QuickLogOption
+    let entries: [HealthLogEntry]
+
+    private var sortedEntries: [HealthLogEntry] {
+        entries.sorted { $0.timestamp > $1.timestamp }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                if sortedEntries.isEmpty {
+                    Text("No seizure logs saved yet.")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .authPanel()
+                } else {
+                    ForEach(sortedEntries) { entry in
+                        SeizureHistoryLogCard(entry: entry, tint: option.tint)
+                    }
+                }
+            }
+            .padding(18)
+        }
+        .background(AppTheme.background.ignoresSafeArea())
+        .navigationTitle("Seizure History")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct SeizureHistoryLogCard: View {
+    let entry: HealthLogEntry
+    let tint: Color
+
+    private var valueParts: [String] {
+        entry.value
+            .components(separatedBy: "·")
+            .map { clean($0) }
+    }
+
+    private var duration: String? {
+        guard let candidate = valueParts.first, durationSeconds(candidate) > 0 else { return nil }
+        return candidate
+    }
+
+    private var seizureType: String? {
+        guard valueParts.count > 1 else { return nil }
+        let candidate = valueParts[1]
+        guard !candidate.isEmpty, candidate != "Seizure Type" else { return nil }
+        return candidate
+    }
+
+    private var triggers: String? {
+        commentValue(prefix: "Triggers:")
+    }
+
+    private var memoNotes: String? {
+        commentValue(prefix: "Post-event notes:") ?? commentValue(prefix: "Memo notes:")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "timer")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(tint)
+                    .frame(width: 42, height: 42)
+                    .background(tint.opacity(0.15))
+                    .clipShape(Circle())
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(entry.timestamp, format: .dateTime.month().day().year())
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(AppTheme.text)
+
+                    Text(entry.timestamp, format: .dateTime.hour().minute())
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Text("\(entry.severity)/5")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(tint)
+                    .clipShape(Capsule())
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                if let duration {
+                    SeizureHistoryDetailRow(title: "Duration", value: duration)
+                }
+
+                if let seizureType {
+                    SeizureHistoryDetailRow(title: "Seizure Type", value: seizureType)
+                }
+
+                if let triggers {
+                    SeizureHistoryDetailRow(title: "Triggers", value: triggers)
+                }
+
+                if let memoNotes {
+                    SeizureHistoryDetailRow(title: "Memo Notes", value: memoNotes)
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.panel)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(color: Color.black.opacity(0.08), radius: 14, x: 0, y: 8)
+    }
+
+    private func commentValue(prefix: String) -> String? {
+        let matches = entry.comments
+            .components(separatedBy: "\n\n")
+            .map { clean($0) }
+            .first { $0.range(of: prefix, options: [.anchored, .caseInsensitive]) != nil }
+
+        guard let matches else { return nil }
+        let value = clean(String(matches.dropFirst(prefix.count)))
+        return value.isEmpty ? nil : value
+    }
+
+    private func durationSeconds(_ text: String) -> Int {
+        let pieces = text.split(separator: ":").compactMap { Int($0) }
+
+        if pieces.count == 2 {
+            return pieces[0] * 60 + pieces[1]
+        }
+
+        if pieces.count == 3 {
+            return pieces[0] * 3600 + pieces[1] * 60 + pieces[2]
+        }
+
+        return 0
+    }
+
+    private func clean(_ text: String) -> String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+struct SeizureHistoryDetailRow: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.caption.weight(.black))
+                .foregroundStyle(.secondary)
+
+            Text(value)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppTheme.text)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.fieldBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 

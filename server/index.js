@@ -2,17 +2,25 @@ import express from 'express';
 import cors from 'cors';
 import bcrypt from 'bcryptjs';
 import dotenv from 'dotenv';
+import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { pool } from './db.js';
 
 dotenv.config();
 
+const dirname = path.dirname(fileURLToPath(import.meta.url));
+const adminSitePath = path.join(dirname, '..', 'dist');
 const app = express();
 const port = Number(process.env.PORT || 3000);
 const host = process.env.HOST || '127.0.0.1';
 const roles = new Set(['patient', 'parent', 'caregiver', 'doctor', 'admin']);
+const adminSessionCookieName = 'care_portal_admin_session';
+const adminSessions = new Map();
 let databaseShapeReady = false;
 
-app.use(cors({ origin: true }));
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '20mb' }));
 
 function isValidEmail(email) {
@@ -27,6 +35,91 @@ function normalizeProfileImage(profileImage) {
   if (!profileImage) return null;
   const trimmedImage = String(profileImage).trim();
   return trimmedImage.startsWith('data:image/') ? trimmedImage : null;
+}
+
+function parseCookies(cookieHeader = '') {
+  return cookieHeader
+    .split(';')
+    .map((cookie) => cookie.trim())
+    .filter(Boolean)
+    .reduce((cookies, cookie) => {
+      const separatorIndex = cookie.indexOf('=');
+      if (separatorIndex === -1) return cookies;
+
+      const name = decodeURIComponent(cookie.slice(0, separatorIndex));
+      const value = decodeURIComponent(cookie.slice(separatorIndex + 1));
+      cookies[name] = value;
+      return cookies;
+    }, {});
+}
+
+function setAdminSessionCookie(res, token) {
+  const cookie = [
+    `${adminSessionCookieName}=${encodeURIComponent(token)}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    `Max-Age=${60 * 60 * 12}`
+  ].join('; ');
+
+  res.setHeader('Set-Cookie', cookie);
+}
+
+function clearAdminSessionCookie(res) {
+  res.setHeader(
+    'Set-Cookie',
+    `${adminSessionCookieName}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`
+  );
+}
+
+function publicUser(user) {
+  return {
+    id: user.id,
+    nickname: user.username,
+    email: user.email,
+    role: user.role,
+    profileImage: user.profile_image
+  };
+}
+
+async function getAdminUser(req) {
+  const cookies = parseCookies(req.headers.cookie || '');
+  const token = cookies[adminSessionCookieName];
+  const session = token ? adminSessions.get(token) : null;
+
+  if (!token || !session) {
+    return null;
+  }
+
+  const [rows] = await pool.execute(
+    'SELECT id, username, email, role, profile_image FROM users WHERE id = ? LIMIT 1',
+    [session.userId]
+  );
+
+  const user = rows[0];
+  if (!user || user.role !== 'admin') {
+    adminSessions.delete(token);
+    return null;
+  }
+
+  return publicUser(user);
+}
+
+async function requireAdmin(req, res, next) {
+  try {
+    await ensureDatabaseShapeReady();
+    const adminUser = await getAdminUser(req);
+
+    if (!adminUser) {
+      return res.status(401).json({ message: 'Admin access is required.' });
+    }
+
+    req.adminUser = adminUser;
+    next();
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Could not verify admin access right now.' });
+  }
 }
 
 function normalizeMealImage(imageData) {
@@ -148,6 +241,90 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true });
 });
 
+app.post('/api/admin/login', async (req, res) => {
+  const { username, password } = req.body;
+
+  if (!username || !password) {
+    return res.status(400).json({ message: 'Please enter an admin username and password.' });
+  }
+
+  try {
+    await ensureDatabaseShapeReady();
+
+    const [rows] = await pool.execute(
+      'SELECT id, username, email, password_hash, role, profile_image FROM users WHERE username = ?',
+      [username.trim()]
+    );
+
+    const user = rows[0];
+    if (!user) {
+      return res.status(401).json({ message: 'Invalid admin username or password.' });
+    }
+
+    const validPassword = await bcrypt.compare(password, user.password_hash);
+    if (!validPassword) {
+      return res.status(401).json({ message: 'Invalid admin username or password.' });
+    }
+
+    if (user.role !== 'admin') {
+      return res.status(403).json({ message: 'Only admin accounts can access this website.' });
+    }
+
+    const token = crypto.randomUUID();
+    adminSessions.set(token, {
+      userId: user.id,
+      createdAt: Date.now()
+    });
+    setAdminSessionCookie(res, token);
+
+    res.json({
+      message: 'Admin logged in successfully.',
+      user: publicUser(user)
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Could not log in right now.' });
+  }
+});
+
+app.get('/api/admin/session', requireAdmin, (req, res) => {
+  res.json({ user: req.adminUser });
+});
+
+app.post('/api/admin/logout', async (req, res) => {
+  const cookies = parseCookies(req.headers.cookie || '');
+  const token = cookies[adminSessionCookieName];
+
+  if (token) {
+    adminSessions.delete(token);
+  }
+
+  clearAdminSessionCookie(res);
+  res.json({ message: 'Logged out successfully.' });
+});
+
+app.get('/api/admin/app-users', requireAdmin, async (_req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      `SELECT
+        id,
+        username AS nickname,
+        email,
+        role,
+        profile_image AS profileImage,
+        DATE_FORMAT(created_at, '%Y-%m-%d %H:%i') AS createdAt
+      FROM users
+      WHERE role = 'parent'
+      ORDER BY created_at DESC`
+    );
+
+    res.json({ users: rows });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Could not load simulator app users right now.' });
+  }
+});
+
 app.post('/api/analyze-meal', async (req, res) => {
   const imageUrl = normalizeMealImage(req.body?.imageData);
   const apiKey = process.env.OPENAI_API_KEY;
@@ -225,7 +402,7 @@ app.post('/api/analyze-meal', async (req, res) => {
   }
 });
 
-app.get('/api/users', async (_req, res) => {
+app.get('/api/users', requireAdmin, async (_req, res) => {
   try {
     await ensureDatabaseShapeReady();
 
@@ -248,7 +425,7 @@ app.get('/api/users', async (_req, res) => {
   }
 });
 
-app.get('/api/users/:id', async (req, res) => {
+app.get('/api/users/:id', requireAdmin, async (req, res) => {
   const userId = Number(req.params.id);
 
   if (!Number.isInteger(userId) || userId <= 0) {
@@ -288,8 +465,9 @@ app.post('/api/signup', async (req, res) => {
   const { nickname, username, password, verifyPassword, email, role } = req.body;
   const requestedNickname = (nickname || username || '').trim();
   const requestedEmail = (email || '').trim().toLowerCase();
+  const requestedRole = role || 'parent';
 
-  if (!requestedNickname || !password || !verifyPassword || !requestedEmail || !role) {
+  if (!requestedNickname || !password || !verifyPassword || !requestedEmail || !requestedRole) {
     return res.status(400).json({ message: 'Please fill out every field.' });
   }
 
@@ -307,12 +485,17 @@ app.post('/api/signup', async (req, res) => {
     return res.status(400).json({ message: 'Passwords do not match.' });
   }
 
-  if (!roles.has(role)) {
+  if (!roles.has(requestedRole)) {
     return res.status(400).json({ message: 'Please choose a valid account type.' });
   }
 
   try {
     await ensureDatabaseShapeReady();
+    const adminUser = await getAdminUser(req);
+
+    if (!adminUser && requestedRole !== 'parent') {
+      return res.status(403).json({ message: 'Only admins can create non-parent accounts.' });
+    }
 
     const [emailRows] = await pool.execute('SELECT id FROM users WHERE email = ? LIMIT 1', [
       requestedEmail
@@ -334,7 +517,7 @@ app.post('/api/signup', async (req, res) => {
 
     await pool.execute(
       'INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)',
-      [requestedNickname, requestedEmail, passwordHash, role]
+      [requestedNickname, requestedEmail, passwordHash, requestedRole]
     );
 
     res.status(201).json({ message: 'Account created successfully.' });
@@ -348,7 +531,7 @@ app.post('/api/signup', async (req, res) => {
   }
 });
 
-app.put('/api/users/:id', async (req, res) => {
+app.put('/api/users/:id', requireAdmin, async (req, res) => {
   const userId = Number(req.params.id);
   const { nickname, username, email, password, profileImage } = req.body;
   const requestedNickname = (nickname || username || '').trim();
@@ -435,7 +618,7 @@ app.put('/api/users/:id', async (req, res) => {
   }
 });
 
-app.patch('/api/users/:id/role', async (req, res) => {
+app.patch('/api/users/:id/role', requireAdmin, async (req, res) => {
   const userId = Number(req.params.id);
   const { role } = req.body;
 
@@ -463,7 +646,7 @@ app.patch('/api/users/:id/role', async (req, res) => {
   }
 });
 
-app.delete('/api/users/:id', async (req, res) => {
+app.delete('/api/users/:id', requireAdmin, async (req, res) => {
   const userId = Number(req.params.id);
 
   if (!Number.isInteger(userId) || userId <= 0) {
@@ -524,6 +707,18 @@ app.post('/api/login', async (req, res) => {
     res.status(500).json({ message: 'Could not log in right now.' });
   }
 });
+
+if (fs.existsSync(adminSitePath)) {
+  app.use(express.static(adminSitePath));
+
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api/')) {
+      return next();
+    }
+
+    res.sendFile(path.join(adminSitePath, 'index.html'));
+  });
+}
 
 await ensureDatabaseShape();
 
