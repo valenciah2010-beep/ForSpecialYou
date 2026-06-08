@@ -5,6 +5,15 @@ struct LoginView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
+            Button {
+                viewModel.showHome()
+            } label: {
+                Label("Home", systemImage: "chevron.left")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(AppTheme.accent)
+            }
+            .buttonStyle(.plain)
+
             VStack(alignment: .leading, spacing: 6) {
                 Text("Welcome Back")
                     .font(.title2.weight(.bold))

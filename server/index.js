@@ -82,6 +82,33 @@ function publicUser(user) {
   };
 }
 
+function blockFieldsSQL(prefix = '') {
+  const tablePrefix = prefix ? `${prefix}.` : '';
+  return `
+    ${tablePrefix}blocked_indefinitely AS blockedIndefinitely,
+    DATE_FORMAT(${tablePrefix}blocked_until, '%Y-%m-%d %H:%i') AS blockedUntil,
+    CASE
+      WHEN ${tablePrefix}blocked_indefinitely = 1
+        OR (${tablePrefix}blocked_until IS NOT NULL AND ${tablePrefix}blocked_until > NOW())
+      THEN 1
+      ELSE 0
+    END AS isBlocked,
+  `;
+}
+
+function activeBlockMessage(user) {
+  if (Number(user.blockedIndefinitely || user.blocked_indefinitely) === 1) {
+    return 'This account is blocked until an admin unblocks it.';
+  }
+
+  const blockedUntil = user.blockedUntil || user.blocked_until;
+  if (blockedUntil) {
+    return `This account is blocked until ${blockedUntil}.`;
+  }
+
+  return 'This account is currently blocked.';
+}
+
 function parseStoredJSON(value, fallback) {
   if (!value) return fallback;
 
@@ -240,17 +267,52 @@ async function ensureDatabaseShape() {
   }
 
   try {
+    const [columns] = await pool.execute(
+      `SELECT COLUMN_NAME
+       FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'users'
+        AND COLUMN_NAME IN ('blocked_until', 'blocked_indefinitely')`
+    );
+    const existingColumns = new Set(columns.map((column) => column.COLUMN_NAME));
+
+    if (!existingColumns.has('blocked_until')) {
+      await pool.execute('ALTER TABLE users ADD COLUMN blocked_until DATETIME NULL');
+    }
+
+    if (!existingColumns.has('blocked_indefinitely')) {
+      await pool.execute('ALTER TABLE users ADD COLUMN blocked_indefinitely TINYINT(1) NOT NULL DEFAULT 0');
+    }
+  } catch (error) {
+    setupFailed = true;
+    console.error('User block setup check failed:', error.message);
+  }
+
+  try {
     await pool.execute(
       `CREATE TABLE IF NOT EXISTS parent_app_data (
         user_id INT PRIMARY KEY,
         child_profile LONGTEXT NULL,
         health_logs LONGTEXT NULL,
+        saved_meals LONGTEXT NULL,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         CONSTRAINT parent_app_data_user_fk
           FOREIGN KEY (user_id) REFERENCES users(id)
           ON DELETE CASCADE
       )`
     );
+
+    const [columns] = await pool.execute(
+      `SELECT COLUMN_NAME
+       FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'parent_app_data'
+        AND COLUMN_NAME = 'saved_meals'`
+    );
+
+    if (columns.length === 0) {
+      await pool.execute('ALTER TABLE parent_app_data ADD COLUMN saved_meals LONGTEXT NULL AFTER health_logs');
+    }
   } catch (error) {
     setupFailed = true;
     console.error('Parent app data setup check failed:', error.message);
@@ -280,7 +342,23 @@ app.post('/api/admin/login', async (req, res) => {
     await ensureDatabaseShapeReady();
 
     const [rows] = await pool.execute(
-      'SELECT id, username, email, password_hash, role, profile_image FROM users WHERE username = ?',
+      `SELECT
+        id,
+        username,
+        email,
+        password_hash,
+        role,
+        profile_image,
+        blocked_indefinitely,
+        DATE_FORMAT(blocked_until, '%Y-%m-%d %H:%i') AS blockedUntil,
+        CASE
+          WHEN blocked_indefinitely = 1
+            OR (blocked_until IS NOT NULL AND blocked_until > NOW())
+          THEN 1
+          ELSE 0
+        END AS isBlocked
+       FROM users
+       WHERE username = ?`,
       [username.trim()]
     );
 
@@ -340,6 +418,7 @@ app.get('/api/admin/app-users', requireAdmin, async (_req, res) => {
         email,
         role,
         profile_image AS profileImage,
+        ${blockFieldsSQL()}
         DATE_FORMAT(created_at, '%Y-%m-%d %H:%i') AS createdAt
       FROM users
       WHERE role = 'parent'
@@ -368,9 +447,11 @@ app.get('/api/admin/app-users/:id/details', requireAdmin, async (req, res) => {
         users.email,
         users.role,
         users.profile_image AS profileImage,
+        ${blockFieldsSQL('users')}
         DATE_FORMAT(users.created_at, '%Y-%m-%d %H:%i') AS createdAt,
         parent_app_data.child_profile AS childProfile,
         parent_app_data.health_logs AS healthLogs,
+        parent_app_data.saved_meals AS savedMeals,
         DATE_FORMAT(parent_app_data.updated_at, '%Y-%m-%d %H:%i') AS appDataUpdatedAt
       FROM users
       LEFT JOIN parent_app_data ON parent_app_data.user_id = users.id
@@ -391,10 +472,14 @@ app.get('/api/admin/app-users/:id/details', requireAdmin, async (req, res) => {
         email: row.email,
         role: row.role,
         profileImage: row.profileImage,
+        blockedIndefinitely: Boolean(row.blockedIndefinitely),
+        blockedUntil: row.blockedUntil,
+        isBlocked: Boolean(row.isBlocked),
         createdAt: row.createdAt
       },
       childProfile: parseStoredJSON(row.childProfile, {}),
       healthLogs: parseStoredJSON(row.healthLogs, []),
+      savedMeals: parseStoredJSON(row.savedMeals, []),
       appDataUpdatedAt: row.appDataUpdatedAt
     });
   } catch (error) {
@@ -403,16 +488,107 @@ app.get('/api/admin/app-users/:id/details', requireAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/app-data', async (req, res) => {
-  const userId = Number(req.body?.userId);
-  const hasChildProfile = Object.prototype.hasOwnProperty.call(req.body || {}, 'childProfile');
-  const hasHealthLogs = Object.prototype.hasOwnProperty.call(req.body || {}, 'healthLogs');
+app.patch('/api/admin/app-users/:id/block', requireAdmin, async (req, res) => {
+  const userId = Number(req.params.id);
+  const { mode, untilDate } = req.body || {};
 
   if (!Number.isInteger(userId) || userId <= 0) {
     return res.status(400).json({ message: 'Please choose a valid parent user.' });
   }
 
-  if (!hasChildProfile && !hasHealthLogs) {
+  if (mode !== 'indefinite' && mode !== 'duration') {
+    return res.status(400).json({ message: 'Please choose how long to block this user.' });
+  }
+
+  let blockedUntil = null;
+  let blockedIndefinitely = 1;
+
+  if (mode === 'duration') {
+    const normalizedUntilDate = String(untilDate || '').trim();
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedUntilDate)) {
+      return res.status(400).json({ message: 'Please type a valid unblock date.' });
+    }
+
+    const [year, month, day] = normalizedUntilDate.split('-').map(Number);
+    const unblockDate = new Date(year, month - 1, day);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    if (
+      Number.isNaN(unblockDate.getTime()) ||
+      unblockDate.getFullYear() !== year ||
+      unblockDate.getMonth() !== month - 1 ||
+      unblockDate.getDate() !== day ||
+      unblockDate <= today
+    ) {
+      return res.status(400).json({ message: 'Please choose a future unblock date.' });
+    }
+
+    blockedUntil = `${normalizedUntilDate} 23:59:59`;
+    blockedIndefinitely = 0;
+  }
+
+  try {
+    const [result] = await pool.execute(
+      `UPDATE users
+       SET blocked_until = ?, blocked_indefinitely = ?
+       WHERE id = ? AND role = 'parent'`,
+      [blockedUntil, blockedIndefinitely, userId]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'Parent user was not found.' });
+    }
+
+    res.json({
+      message: mode === 'indefinite'
+        ? 'User blocked until an admin unblocks them.'
+        : `User blocked until ${untilDate}.`
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Could not block user right now.' });
+  }
+});
+
+app.delete('/api/admin/app-users/:id/block', requireAdmin, async (req, res) => {
+  const userId = Number(req.params.id);
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ message: 'Please choose a valid parent user.' });
+  }
+
+  try {
+    const [result] = await pool.execute(
+      `UPDATE users
+       SET blocked_until = NULL, blocked_indefinitely = 0
+       WHERE id = ? AND role = 'parent'`,
+      [userId]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'Parent user was not found.' });
+    }
+
+    res.json({ message: 'User unblocked successfully.' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Could not unblock user right now.' });
+  }
+});
+
+app.post('/api/app-data', async (req, res) => {
+  const userId = Number(req.body?.userId);
+  const hasChildProfile = Object.prototype.hasOwnProperty.call(req.body || {}, 'childProfile');
+  const hasHealthLogs = Object.prototype.hasOwnProperty.call(req.body || {}, 'healthLogs');
+  const hasSavedMeals = Object.prototype.hasOwnProperty.call(req.body || {}, 'savedMeals');
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ message: 'Please choose a valid parent user.' });
+  }
+
+  if (!hasChildProfile && !hasHealthLogs && !hasSavedMeals) {
     return res.status(400).json({ message: 'No app data was provided.' });
   }
 
@@ -428,15 +604,17 @@ app.post('/api/app-data', async (req, res) => {
 
     const childProfile = hasChildProfile ? JSON.stringify(req.body.childProfile || {}) : null;
     const healthLogs = hasHealthLogs ? JSON.stringify(Array.isArray(req.body.healthLogs) ? req.body.healthLogs : []) : null;
+    const savedMeals = hasSavedMeals ? JSON.stringify(Array.isArray(req.body.savedMeals) ? req.body.savedMeals : []) : null;
 
     await pool.execute(
-      `INSERT INTO parent_app_data (user_id, child_profile, health_logs)
-       VALUES (?, ?, ?)
+      `INSERT INTO parent_app_data (user_id, child_profile, health_logs, saved_meals)
+       VALUES (?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
         child_profile = COALESCE(VALUES(child_profile), child_profile),
         health_logs = COALESCE(VALUES(health_logs), health_logs),
+        saved_meals = COALESCE(VALUES(saved_meals), saved_meals),
         updated_at = CURRENT_TIMESTAMP`,
-      [userId, childProfile, healthLogs]
+      [userId, childProfile, healthLogs, savedMeals]
     );
 
     res.json({ message: 'App data synced.' });
@@ -534,6 +712,7 @@ app.get('/api/users', requireAdmin, async (_req, res) => {
         email,
         role,
         profile_image AS profileImage,
+        ${blockFieldsSQL()}
         DATE_FORMAT(created_at, '%Y-%m-%d %H:%i') AS createdAt
       FROM users
       ORDER BY created_at DESC`
@@ -811,6 +990,10 @@ app.post('/api/login', async (req, res) => {
     const validPassword = await bcrypt.compare(password, user.password_hash);
     if (!validPassword) {
       return res.status(401).json({ message: 'Invalid nickname or password.' });
+    }
+
+    if (Number(user.isBlocked) === 1) {
+      return res.status(403).json({ message: activeBlockMessage(user) });
     }
 
     res.json({

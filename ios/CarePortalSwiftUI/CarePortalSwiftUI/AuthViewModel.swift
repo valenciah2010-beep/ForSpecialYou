@@ -3,11 +3,12 @@ import Foundation
 @MainActor
 final class AuthViewModel: ObservableObject {
     enum Screen {
+        case home
         case login
         case signup
     }
 
-    @Published var screen: Screen = .login
+    @Published var screen: Screen = .home
     @Published var loginNickname = ""
     @Published var loginPassword = ""
     @Published var signupNickname = ""
@@ -24,6 +25,11 @@ final class AuthViewModel: ObservableObject {
 
     init() {
         currentUser = Self.loadSavedUser()
+    }
+
+    func showHome() {
+        screen = .home
+        clearMessage()
     }
 
     func showLogin() {
@@ -111,7 +117,7 @@ final class AuthViewModel: ObservableObject {
         UserDefaults.standard.removeObject(forKey: Self.savedUserKey)
         loginNickname = ""
         loginPassword = ""
-        screen = .login
+        screen = .home
         clearMessage()
     }
 

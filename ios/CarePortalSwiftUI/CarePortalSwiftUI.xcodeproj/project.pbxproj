@@ -16,6 +16,8 @@
 		5C0000010000000000000007 /* SignupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C0000010000000000000107 /* SignupView.swift */; };
 		5C0000010000000000000008 /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C0000010000000000000108 /* WelcomeView.swift */; };
 		5C0000010000000000000009 /* AuthComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C0000010000000000000109 /* AuthComponents.swift */; };
+		5C000001000000000000000A /* CarePortalLogo.png in Resources */ = {isa = PBXBuildFile; fileRef = 5C0000010000000000000111 /* CarePortalLogo.png */; };
+		5C000001000000000000000B /* PainLocationBody.jpg in Resources */ = {isa = PBXBuildFile; fileRef = 5C0000010000000000000112 /* PainLocationBody.jpg */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -30,6 +32,8 @@
 		5C0000010000000000000108 /* WelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeView.swift; sourceTree = "<group>"; };
 		5C0000010000000000000109 /* AuthComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthComponents.swift; sourceTree = "<group>"; };
 		5C0000010000000000000110 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		5C0000010000000000000111 /* CarePortalLogo.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = CarePortalLogo.png; sourceTree = "<group>"; };
+		5C0000010000000000000112 /* PainLocationBody.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = PainLocationBody.jpg; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -64,6 +68,8 @@
 				5C0000010000000000000108 /* WelcomeView.swift */,
 				5C0000010000000000000109 /* AuthComponents.swift */,
 				5C0000010000000000000110 /* Info.plist */,
+				5C0000010000000000000111 /* CarePortalLogo.png */,
+				5C0000010000000000000112 /* PainLocationBody.jpg */,
 			);
 			path = CarePortalSwiftUI;
 			sourceTree = "<group>";
@@ -134,6 +140,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5C000001000000000000000A /* CarePortalLogo.png in Resources */,
+				5C000001000000000000000B /* PainLocationBody.jpg in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -44,11 +44,17 @@ struct AuthAPI {
         return response.message
     }
 
-    func syncAppData(userId: Int, childProfile: ChildProfileSync?, healthLogs: [HealthLogEntry]?) async throws {
+    func syncAppData(
+        userId: Int,
+        childProfile: ChildProfileSync?,
+        healthLogs: [HealthLogEntry]?,
+        savedMeals: [SavedMealEstimate]? = nil
+    ) async throws {
         let body = ParentAppDataSyncRequest(
             userId: userId,
             childProfile: childProfile,
-            healthLogs: healthLogs
+            healthLogs: healthLogs,
+            savedMeals: savedMeals
         )
         let _: MessageResponse = try await post("/api/app-data", body: body)
     }
@@ -61,7 +67,10 @@ struct AuthAPI {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(body)
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        request.httpBody = try encoder.encode(body)
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -127,4 +136,5 @@ private struct ParentAppDataSyncRequest: Encodable {
     let userId: Int
     let childProfile: ChildProfileSync?
     let healthLogs: [HealthLogEntry]?
+    let savedMeals: [SavedMealEstimate]?
 }

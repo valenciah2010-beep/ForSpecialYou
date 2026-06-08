@@ -3,6 +3,7 @@ import PhotosUI
 import UIKit
 import Charts
 import UniformTypeIdentifiers
+import UserNotifications
 
 struct WelcomeView: View {
     let user: CarePortalUser
@@ -23,11 +24,6 @@ struct WelcomeView: View {
             NutrientView(user: user)
                 .tabItem {
                     Label("Nutrient", systemImage: "leaf")
-                }
-
-            CommunityView()
-                .tabItem {
-                    Label("Community", systemImage: "person.3")
                 }
 
             ProfileView(user: user, logout: logout)
@@ -57,8 +53,11 @@ struct BasicHealthView: View {
     @State private var activeSeizureTimer: QuickLogOption?
     @State private var activePainLog: QuickLogOption?
     @State private var activeMedicineLog: QuickLogOption?
+    @State private var activeMoodLog: QuickLogOption?
     @State private var activeSleepSnapshot: SleepSnapshotEditorTarget?
+    @State private var activeNutritionSnapshot: SnapshotOption?
     @State private var draggingQuickLogID: String?
+    @State private var isSyncingParentAppData = false
 
     init(user: CarePortalUser) {
         self.user = user
@@ -135,6 +134,8 @@ struct BasicHealthView: View {
                                     activePainLog = option
                                 } else if option.id == "medsFood" {
                                     activeMedicineLog = option
+                                } else if option.id == "mood" {
+                                    activeMoodLog = option
                                 } else {
                                     activeLogInput = .quickLog(option)
                                 }
@@ -196,6 +197,8 @@ struct BasicHealthView: View {
                                         option: option,
                                         existingEntry: todaysSleepEntry
                                     )
+                                } else if option.id == "nutrition" {
+                                    activeNutritionSnapshot = option
                                 } else {
                                     activeLogInput = .snapshot(option)
                                 }
@@ -239,6 +242,11 @@ struct BasicHealthView: View {
                     saveSleepEntry(entry)
                 }
             }
+            .sheet(item: $activeNutritionSnapshot) { option in
+                NutritionSnapshotSheet(option: option) { entry in
+                    saveLogEntry(entry)
+                }
+            }
             .sheet(item: $activeSeizureTimer) { option in
                 SeizureTimerSheet(option: option, initialSeizureType: mostRecentSeizureType) { entry in
                     saveLogEntry(entry)
@@ -258,8 +266,14 @@ struct BasicHealthView: View {
                     saveLogEntry(entry)
                 }
             }
+            .sheet(item: $activeMoodLog) { option in
+                MoodLogSheet(option: option) { entry in
+                    saveLogEntry(entry)
+                }
+            }
             .onAppear {
                 syncParentAppData()
+                MedicationReminderScheduler.reschedule(medications: medications)
             }
         }
     }
@@ -296,7 +310,11 @@ struct BasicHealthView: View {
         let storedIDs = quickLogSelection.split(separator: ",").map(String.init)
         let knownIDs = Set(QuickLogOption.all.map(\.id))
         let orderedKnownIDs = storedIDs.filter { knownIDs.contains($0) }
-        return orderedKnownIDs.isEmpty ? QuickLogOption.defaultSelectionIDs : orderedKnownIDs
+        if orderedKnownIDs.isEmpty {
+            return QuickLogOption.defaultSelectionIDs
+        }
+
+        return orderedKnownIDs.contains("mood") ? orderedKnownIDs : orderedKnownIDs + ["mood"]
     }
 
     private var selectedQuickLogIDsBinding: Binding<Set<String>> {
@@ -450,6 +468,7 @@ struct BasicHealthView: View {
 
         if let data = try? JSONEncoder().encode(sortedMedications) {
             medicationData = data
+            MedicationReminderScheduler.reschedule(medications: sortedMedications)
         }
     }
 
@@ -464,11 +483,44 @@ struct BasicHealthView: View {
         let profileToSync = childProfileSync
 
         Task {
-            try? await AuthAPI().syncAppData(
+            await syncParentAppDataOnce(
                 userId: user.id,
                 childProfile: profileToSync,
-                healthLogs: logsToSync
+                healthLogs: logsToSync,
+                retryOnFailure: true
             )
+        }
+    }
+
+    @MainActor
+    private func syncParentAppDataOnce(
+        userId: Int,
+        childProfile: ChildProfileSync,
+        healthLogs: [HealthLogEntry],
+        retryOnFailure: Bool
+    ) async {
+        guard !isSyncingParentAppData else { return }
+        isSyncingParentAppData = true
+        defer { isSyncingParentAppData = false }
+
+        let attemptCount = retryOnFailure ? 2 : 1
+
+        for attempt in 1...attemptCount {
+            do {
+                try await AuthAPI().syncAppData(
+                    userId: userId,
+                    childProfile: childProfile,
+                    healthLogs: healthLogs
+                )
+                print("Parent app data synced for user \(userId). Logs: \(healthLogs.count)")
+                return
+            } catch {
+                print("Parent app data sync failed for user \(userId) on attempt \(attempt): \(error.localizedDescription)")
+
+                if attempt < attemptCount {
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                }
+            }
         }
     }
 
@@ -576,8 +628,9 @@ struct QuickLogOption: Identifiable {
     static let all: [QuickLogOption] = [
         QuickLogOption(id: "seizure", title: "Seizure Track", icon: "timer", tint: Color(red: 0.94, green: 0.31, blue: 0.29)),
         QuickLogOption(id: "meltdown", title: "Meltdown", icon: "exclamationmark.triangle.fill", tint: Color(red: 0.96, green: 0.74, blue: 0.24)),
+        QuickLogOption(id: "mood", title: "Mood", icon: "face.smiling", tint: Color(red: 0.95, green: 0.52, blue: 0.61)),
         QuickLogOption(id: "stimming", title: "Stimming/Tics", icon: "waveform.path.ecg", tint: Color(red: 0.51, green: 0.69, blue: 0.96)),
-        QuickLogOption(id: "bowel", title: "Bowel Movement", icon: "stomach.fill", tint: Color(red: 0.45, green: 0.75, blue: 0.52)),
+        QuickLogOption(id: "bowel", title: "Bowel Movement", icon: "figure.core.training", tint: Color(red: 0.45, green: 0.75, blue: 0.52)),
         QuickLogOption(id: "accident", title: "Accident", icon: "drop.triangle.fill", tint: Color(red: 0.69, green: 0.61, blue: 0.91)),
         QuickLogOption(id: "therapy", title: "Therapy Session", icon: "figure.mind.and.body", tint: Color(red: 0.60, green: 0.78, blue: 0.92)),
         QuickLogOption(id: "deescalation", title: "De-escalation", icon: "hand.raised.fill", tint: Color(red: 0.43, green: 0.77, blue: 0.62)),
@@ -587,7 +640,7 @@ struct QuickLogOption: Identifiable {
         QuickLogOption(id: "medsFood", title: "Medicine", icon: "pills.fill", tint: Color(red: 0.38, green: 0.75, blue: 0.55))
     ]
 
-    static let defaultSelectionString = "seizure,meltdown,medsFood"
+    static let defaultSelectionString = "seizure,meltdown,mood,medsFood"
     static let defaultSelectionIDs = defaultSelectionString.split(separator: ",").map(String.init)
 
     static func option(id: String) -> QuickLogOption? {
@@ -617,7 +670,7 @@ struct SnapshotOption: Identifiable {
         SnapshotOption(
             id: "digestion",
             title: "Gut & Digestion",
-            icon: "stomach.fill",
+            icon: "figure.core.training",
             value: "1 bowel movement",
             detail: "Normal",
             tint: Color(red: 0.45, green: 0.75, blue: 0.52),
@@ -752,11 +805,22 @@ enum MedicationDayTime: String, CaseIterable, Codable, Identifiable {
     var title: String {
         switch self {
         case .morning:
-            return "Morning"
+            return "Dose 1"
         case .noon:
-            return "Noon"
+            return "Dose 2"
         case .evening:
-            return "Evening"
+            return "Dose 3"
+        }
+    }
+
+    var defaultClockTime: String {
+        switch self {
+        case .morning:
+            return "08:00"
+        case .noon:
+            return "12:00"
+        case .evening:
+            return "18:00"
         }
     }
 }
@@ -814,10 +878,16 @@ enum MedicationWeekday: String, CaseIterable, Codable, Identifiable {
         let weekday = calendar.component(.weekday, from: Date())
         return allCases.first { $0.calendarWeekday == weekday } ?? .monday
     }
+
+    static func from(date: Date, calendar: Calendar = .current) -> MedicationWeekday? {
+        let weekday = calendar.component(.weekday, from: date)
+        return allCases.first { $0.calendarWeekday == weekday }
+    }
 }
 
 enum MedicationScheduleMode: String, CaseIterable, Codable, Identifiable {
     case daily
+    case intervalDays
     case weekly
 
     var id: String { rawValue }
@@ -825,9 +895,11 @@ enum MedicationScheduleMode: String, CaseIterable, Codable, Identifiable {
     var title: String {
         switch self {
         case .daily:
-            return "Times per day"
+            return "Daily"
+        case .intervalDays:
+            return "Every X days"
         case .weekly:
-            return "Times per week"
+            return "Certain days of the week"
         }
     }
 }
@@ -841,6 +913,15 @@ struct MedicationSchedule: Identifiable, Codable, Equatable {
     var weeklyDays: [MedicationWeekday]
     var weeklyTimes: [MedicationDayTime]
     var doses: [String: String]
+    var clockTimes: [String: String]
+    var medicineType: String
+    var amount: String
+    var unit: String
+    var duration: String
+    var startDate: Date
+    var intervalDays: Int
+    var prescribingDoctor: String
+    var instructions: String
 
     static func empty() -> MedicationSchedule {
         MedicationSchedule(
@@ -851,8 +932,96 @@ struct MedicationSchedule: Identifiable, Codable, Equatable {
             dailyTimes: [],
             weeklyDays: [],
             weeklyTimes: [],
-            doses: [:]
+            doses: [:],
+            clockTimes: [:],
+            medicineType: "Round Tablet",
+            amount: "",
+            unit: "Tablet(s)",
+            duration: "",
+            startDate: Date(),
+            intervalDays: 2,
+            prescribingDoctor: "",
+            instructions: ""
         )
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case nickname
+        case mode
+        case dailyTimes
+        case weeklyDays
+        case weeklyTimes
+        case doses
+        case clockTimes
+        case medicineType
+        case amount
+        case unit
+        case duration
+        case startDate
+        case intervalDays
+        case prescribingDoctor
+        case instructions
+    }
+
+    init(
+        id: UUID,
+        name: String,
+        nickname: String,
+        mode: MedicationScheduleMode,
+        dailyTimes: [MedicationDayTime],
+        weeklyDays: [MedicationWeekday],
+        weeklyTimes: [MedicationDayTime],
+        doses: [String: String],
+        clockTimes: [String: String],
+        medicineType: String,
+        amount: String,
+        unit: String,
+        duration: String,
+        startDate: Date,
+        intervalDays: Int,
+        prescribingDoctor: String,
+        instructions: String
+    ) {
+        self.id = id
+        self.name = name
+        self.nickname = nickname
+        self.mode = mode
+        self.dailyTimes = dailyTimes
+        self.weeklyDays = weeklyDays
+        self.weeklyTimes = weeklyTimes
+        self.doses = doses
+        self.clockTimes = clockTimes
+        self.medicineType = medicineType
+        self.amount = amount
+        self.unit = unit
+        self.duration = duration
+        self.startDate = startDate
+        self.intervalDays = intervalDays
+        self.prescribingDoctor = prescribingDoctor
+        self.instructions = instructions
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        nickname = try container.decode(String.self, forKey: .nickname)
+        mode = try container.decode(MedicationScheduleMode.self, forKey: .mode)
+        dailyTimes = try container.decode([MedicationDayTime].self, forKey: .dailyTimes)
+        weeklyDays = try container.decode([MedicationWeekday].self, forKey: .weeklyDays)
+        weeklyTimes = try container.decode([MedicationDayTime].self, forKey: .weeklyTimes)
+        doses = try container.decode([String: String].self, forKey: .doses)
+        clockTimes = try container.decodeIfPresent([String: String].self, forKey: .clockTimes) ?? [:]
+        medicineType = try container.decodeIfPresent(String.self, forKey: .medicineType) ?? "Round Tablet"
+        amount = try container.decodeIfPresent(String.self, forKey: .amount) ?? ""
+        unit = try container.decodeIfPresent(String.self, forKey: .unit) ?? "Tablet(s)"
+        duration = try container.decodeIfPresent(String.self, forKey: .duration) ?? ""
+        startDate = try container.decodeIfPresent(Date.self, forKey: .startDate) ?? Date()
+        intervalDays = try container.decodeIfPresent(Int.self, forKey: .intervalDays) ?? 2
+        prescribingDoctor = try container.decodeIfPresent(String.self, forKey: .prescribingDoctor) ?? ""
+        instructions = try container.decodeIfPresent(String.self, forKey: .instructions) ?? ""
     }
 
     var displayName: String {
@@ -870,6 +1039,19 @@ struct MedicationSchedule: Identifiable, Codable, Equatable {
         return doses[key, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    func clockTime(for day: MedicationWeekday?, time: MedicationDayTime) -> String {
+        let key = doseKey(day: mode == .weekly ? day : nil, time: time)
+        return clockTimes[key, default: time.defaultClockTime]
+    }
+
+    func clockTimeText(for day: MedicationWeekday?, time: MedicationDayTime) -> String {
+        MedicationTimeFormatting.displayText(for: clockTime(for: day, time: time))
+    }
+
+    func clockTimeMinutes(for day: MedicationWeekday?, time: MedicationDayTime) -> Int {
+        MedicationTimeFormatting.minutes(for: clockTime(for: day, time: time))
+    }
+
     func doseKey(day: MedicationWeekday?, time: MedicationDayTime) -> String {
         if let day {
             return "\(day.rawValue).\(time.rawValue)"
@@ -877,6 +1059,191 @@ struct MedicationSchedule: Identifiable, Codable, Equatable {
 
         return time.rawValue
     }
+}
+
+enum MedicationTimeFormatting {
+    static func displayText(for storedTime: String) -> String {
+        let minutes = minutes(for: storedTime)
+        let hour = minutes / 60
+        let minute = minutes % 60
+        let period = hour >= 12 ? "PM" : "AM"
+        let displayHour = hour % 12 == 0 ? 12 : hour % 12
+        return String(format: "%d:%02d %@", displayHour, minute, period)
+    }
+
+    static func minutes(for storedTime: String) -> Int {
+        let pieces = storedTime.split(separator: ":").compactMap { Int($0) }
+        guard pieces.count == 2 else { return 0 }
+        return max(0, min(23, pieces[0])) * 60 + max(0, min(59, pieces[1]))
+    }
+
+    static func storedTime(from date: Date, calendar: Calendar = .current) -> String {
+        let hour = calendar.component(.hour, from: date)
+        let minute = calendar.component(.minute, from: date)
+        return String(format: "%02d:%02d", hour, minute)
+    }
+
+    static func date(from storedTime: String, calendar: Calendar = .current) -> Date {
+        let minutes = minutes(for: storedTime)
+        let hour = minutes / 60
+        let minute = minutes % 60
+        return calendar.date(
+            bySettingHour: hour,
+            minute: minute,
+            second: 0,
+            of: Date()
+        ) ?? Date()
+    }
+}
+
+enum MedicationReminderScheduler {
+    private static let identifierPrefix = "medicine-reminder."
+    private static let maxPendingNotifications = 60
+    private static let horizonDays = 60
+
+    static func reschedule(medications: [MedicationSchedule], calendar: Calendar = .current) {
+        let center = UNUserNotificationCenter.current()
+
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+            guard granted else { return }
+
+            center.getPendingNotificationRequests { existingRequests in
+                let oldIDs = existingRequests
+                    .map(\.identifier)
+                    .filter { $0.hasPrefix(identifierPrefix) }
+
+                if !oldIDs.isEmpty {
+                    center.removePendingNotificationRequests(withIdentifiers: oldIDs)
+                }
+
+                let requests = notificationRequests(for: medications, calendar: calendar)
+                requests.prefix(maxPendingNotifications).forEach { request in
+                    center.add(request)
+                }
+            }
+        }
+    }
+
+    private static func notificationRequests(for medications: [MedicationSchedule], calendar: Calendar) -> [UNNotificationRequest] {
+        let now = Date()
+        let today = calendar.startOfDay(for: now)
+        let upcomingDoses = medications.flatMap { medication in
+            scheduledDoses(for: medication, from: today, now: now, calendar: calendar)
+        }
+
+        return upcomingDoses
+            .sorted { $0.fireDate < $1.fireDate }
+            .map { dose in
+                let content = UNMutableNotificationContent()
+                content.title = "Medicine Reminder"
+                content.body = dose.bodyText
+                content.sound = .default
+
+                let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: dose.fireDate)
+                let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
+                return UNNotificationRequest(identifier: dose.identifier, content: content, trigger: trigger)
+            }
+    }
+
+    private static func scheduledDoses(
+        for medication: MedicationSchedule,
+        from today: Date,
+        now: Date,
+        calendar: Calendar
+    ) -> [ScheduledMedicationDose] {
+        let startDay = calendar.startOfDay(for: medication.startDate)
+        let endDay = medicationEndDay(for: medication, calendar: calendar)
+        var doses: [ScheduledMedicationDose] = []
+
+        for offset in 0..<horizonDays {
+            guard let day = calendar.date(byAdding: .day, value: offset, to: today),
+                  day >= startDay else {
+                continue
+            }
+
+            if let endDay, day > endDay {
+                continue
+            }
+
+            let dayTimes = dueTimes(for: medication, on: day, startDay: startDay, calendar: calendar)
+
+            for dayTime in dayTimes {
+                let doseDay = medication.mode == .weekly ? MedicationWeekday.from(date: day, calendar: calendar) : nil
+                let storedTime = medication.clockTime(for: doseDay, time: dayTime)
+                let minutes = MedicationTimeFormatting.minutes(for: storedTime)
+                guard let fireDate = calendar.date(
+                    bySettingHour: minutes / 60,
+                    minute: minutes % 60,
+                    second: 0,
+                    of: day
+                ), fireDate > now else {
+                    continue
+                }
+
+                doses.append(
+                    ScheduledMedicationDose(
+                        identifier: "\(identifierPrefix)\(medication.id.uuidString).\(dateKey(day, calendar: calendar)).\(medication.doseKey(day: doseDay, time: dayTime))",
+                        fireDate: fireDate,
+                        bodyText: reminderBody(for: medication, day: doseDay, time: dayTime)
+                    )
+                )
+            }
+        }
+
+        return doses
+    }
+
+    private static func dueTimes(
+        for medication: MedicationSchedule,
+        on day: Date,
+        startDay: Date,
+        calendar: Calendar
+    ) -> [MedicationDayTime] {
+        switch medication.mode {
+        case .daily:
+            return medication.dailyTimes
+        case .intervalDays:
+            let daysSinceStart = calendar.dateComponents([.day], from: startDay, to: day).day ?? 0
+            return daysSinceStart >= 0 && daysSinceStart % max(1, medication.intervalDays) == 0
+                ? medication.dailyTimes
+                : []
+        case .weekly:
+            guard let weekday = MedicationWeekday.from(date: day, calendar: calendar),
+                  medication.weeklyDays.contains(weekday) else {
+                return []
+            }
+
+            return medication.weeklyTimes
+        }
+    }
+
+    private static func reminderBody(for medication: MedicationSchedule, day: MedicationWeekday?, time: MedicationDayTime) -> String {
+        let name = medication.displayName.isEmpty ? "medicine" : medication.displayName
+        let dose = medication.dose(for: day, time: time)
+        return dose.isEmpty ? "Time to take \(name)." : "Time to take \(name) \(dose)."
+    }
+
+    private static func medicationEndDay(for medication: MedicationSchedule, calendar: Calendar) -> Date? {
+        let duration = medication.duration.lowercased()
+        guard duration.contains("day"),
+              let numberText = duration.split(separator: " ").first,
+              let days = Int(numberText) else {
+            return nil
+        }
+
+        return calendar.date(byAdding: .day, value: max(0, days - 1), to: calendar.startOfDay(for: medication.startDate))
+    }
+
+    private static func dateKey(_ date: Date, calendar: Calendar) -> String {
+        let components = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d%02d%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+    }
+}
+
+struct ScheduledMedicationDose {
+    let identifier: String
+    let fireDate: Date
+    let bodyText: String
 }
 
 struct MedicationCheckState: Codable, Equatable {
@@ -1611,6 +1978,661 @@ struct HealthLogEntrySheet: View {
     }
 }
 
+struct NutritionSnapshotSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let option: SnapshotOption
+    let onSave: (HealthLogEntry) -> Void
+
+    @State private var calorieGoal = ""
+    @State private var proteinGoal = ""
+    @State private var carbsGoal = ""
+    @State private var fatGoal = ""
+    @State private var calciumGoal = ""
+    @State private var vitaminDGoal = ""
+    @State private var ironGoal = ""
+    @State private var otherSupplements = ""
+    @State private var waterGoal = ""
+    @State private var notes = ""
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(spacing: 12) {
+                        Image(systemName: option.icon)
+                            .font(.title2.weight(.bold))
+                            .foregroundStyle(option.tint)
+                            .frame(width: 44, height: 44)
+                            .background(option.tint.opacity(0.16))
+                            .clipShape(Circle())
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Nutrition Goals")
+                                .font(.title3.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            Text("Calories, macros, supplements, and hydration")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 16) {
+                        NutritionGoalSection(title: "Calories") {
+                            NutritionGoalField(title: "Daily calorie goal", placeholder: "kcal", text: $calorieGoal)
+                        }
+
+                        NutritionGoalSection(title: "Macronutrients") {
+                            NutritionGoalField(title: "Protein", placeholder: "grams", text: $proteinGoal)
+                            NutritionGoalField(title: "Carbs", placeholder: "grams", text: $carbsGoal)
+                            NutritionGoalField(title: "Fats", placeholder: "grams", text: $fatGoal)
+                        }
+
+                        NutritionGoalSection(title: "Micronutrient Supplementation") {
+                            NutritionGoalField(title: "Calcium", placeholder: "mg", text: $calciumGoal)
+                            NutritionGoalField(title: "Vitamin D", placeholder: "IU", text: $vitaminDGoal)
+                            NutritionGoalField(title: "Iron", placeholder: "mg", text: $ironGoal)
+
+                            TextField("Other supplements or vitamins", text: $otherSupplements, axis: .vertical)
+                                .lineLimit(2...4)
+                                .padding(12)
+                                .background(AppTheme.fieldBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+
+                        NutritionGoalSection(title: "Water Hydration") {
+                            NutritionGoalField(title: "Daily water goal", placeholder: "cups or oz", text: $waterGoal)
+                        }
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Notes")
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            TextField("Diet restrictions, feeding notes, texture needs, or parent reminders", text: $notes, axis: .vertical)
+                                .lineLimit(3...6)
+                                .padding(12)
+                                .background(AppTheme.fieldBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+                    }
+                    .authPanel()
+                }
+                .padding(18)
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle("Nutrition")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Save") {
+                        save()
+                    }
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(AppTheme.accent)
+                }
+            }
+        }
+        .presentationDetents([.large])
+    }
+
+    private func save() {
+        let summaryLines = nutritionSummaryLines()
+        let entry = HealthLogEntry(
+            id: UUID(),
+            type: .snapshot,
+            categoryID: option.id,
+            title: option.title,
+            timestamp: Date(),
+            severity: 1,
+            value: summaryLines.isEmpty ? "Nutrition goals saved" : summaryLines.joined(separator: "\n"),
+            comments: notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        onSave(entry)
+        dismiss()
+    }
+
+    private func nutritionSummaryLines() -> [String] {
+        var lines: [String] = []
+        appendLine("Calories", calorieGoal, "kcal", to: &lines)
+        appendLine("Protein", proteinGoal, "g", to: &lines)
+        appendLine("Carbs", carbsGoal, "g", to: &lines)
+        appendLine("Fats", fatGoal, "g", to: &lines)
+        appendLine("Calcium", calciumGoal, "mg", to: &lines)
+        appendLine("Vitamin D", vitaminDGoal, "IU", to: &lines)
+        appendLine("Iron", ironGoal, "mg", to: &lines)
+        appendLine("Water", waterGoal, "", to: &lines)
+
+        let trimmedSupplements = otherSupplements.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedSupplements.isEmpty {
+            lines.append("Other supplements: \(trimmedSupplements)")
+        }
+
+        return lines
+    }
+
+    private func appendLine(_ label: String, _ value: String, _ unit: String, to lines: inout [String]) {
+        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedValue.isEmpty else { return }
+        lines.append(unit.isEmpty ? "\(label): \(trimmedValue)" : "\(label): \(trimmedValue) \(unit)")
+    }
+}
+
+struct NutritionGoalSection<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(AppTheme.text)
+
+            VStack(spacing: 10) {
+                content
+            }
+        }
+    }
+}
+
+struct NutritionGoalField: View {
+    let title: String
+    let placeholder: String
+    @Binding var text: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppTheme.text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            TextField(placeholder, text: $text)
+                .keyboardType(.decimalPad)
+                .multilineTextAlignment(.trailing)
+                .font(.subheadline.weight(.bold))
+                .padding(10)
+                .frame(width: 118)
+                .background(AppTheme.fieldBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+    }
+}
+
+enum MoodLogStep {
+    case kind
+    case valence
+    case words
+    case cause
+}
+
+enum MoodLogKind: String, CaseIterable, Identifiable {
+    case currentEmotion = "Current Emotion"
+    case todaysMood = "Today's Mood"
+
+    var id: String { rawValue }
+}
+
+struct MoodValence: Identifiable {
+    let id: Int
+    let title: String
+
+    static let all: [MoodValence] = [
+        MoodValence(id: 1, title: "Very unpleasant"),
+        MoodValence(id: 2, title: "Unpleasant"),
+        MoodValence(id: 3, title: "Slightly unpleasant"),
+        MoodValence(id: 4, title: "Neutral"),
+        MoodValence(id: 5, title: "Slightly pleasant"),
+        MoodValence(id: 6, title: "Pleasant"),
+        MoodValence(id: 7, title: "Very pleasant")
+    ]
+
+    static func title(for value: Int) -> String {
+        all.first { $0.id == value }?.title ?? "Neutral"
+    }
+}
+
+struct MoodWordGroup {
+    let title: String
+    let words: [String]
+
+    static let positive = MoodWordGroup(
+        title: "Calm / Positive states",
+        words: ["Happy", "Calm", "Content", "Relaxed", "Playful", "Engaged", "Curious", "Focused", "Proud", "Safe"]
+    )
+
+    static let neutral = MoodWordGroup(
+        title: "Mild / Neutral states",
+        words: ["Okay", "Quiet", "Observant", "Tired", "Resting", "Neutral", "Thinking", "Daydreaming", "Slow-paced"]
+    )
+
+    static let difficult = MoodWordGroup(
+        title: "Low / Difficult states",
+        words: ["Sad", "Frustrated", "Overwhelmed", "Anxious", "Restless", "Upset", "Confused", "Withdrawn", "Sensitive", "Unsettled"]
+    )
+
+    static func group(for valence: Int) -> MoodWordGroup {
+        if valence <= 3 {
+            return .difficult
+        }
+
+        if valence == 4 {
+            return .neutral
+        }
+
+        return .positive
+    }
+}
+
+struct MoodLogSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let option: QuickLogOption
+    let onSave: (HealthLogEntry) -> Void
+
+    @State private var step: MoodLogStep = .kind
+    @State private var selectedKind: MoodLogKind?
+    @State private var valence = 4
+    @State private var selectedWords: Set<String> = []
+    @State private var cause = ""
+
+    private var wordGroup: MoodWordGroup {
+        MoodWordGroup.group(for: valence)
+    }
+
+    private var nextTitle: String {
+        step == .cause ? "Done" : "Next"
+    }
+
+    private var canContinue: Bool {
+        switch step {
+        case .kind:
+            return selectedKind != nil
+        case .valence:
+            return true
+        case .words:
+            return !selectedWords.isEmpty
+        case .cause:
+            return true
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        header
+
+                        switch step {
+                        case .kind:
+                            kindStep
+                        case .valence:
+                            valenceStep
+                        case .words:
+                            wordsStep
+                        case .cause:
+                            causeStep
+                        }
+                    }
+                    .padding(18)
+                }
+
+                Button {
+                    advance()
+                } label: {
+                    Text(nextTitle)
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(canContinue ? option.tint : Color.secondary.opacity(0.45))
+                        .clipShape(Capsule())
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 12)
+                }
+                .disabled(!canContinue)
+                .buttonStyle(.plain)
+                .background(AppTheme.background)
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(step == .kind ? "Cancel" : "Back") {
+                        goBack()
+                    }
+                    .foregroundStyle(AppTheme.accent)
+                }
+            }
+        }
+        .presentationDetents([.large])
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Image(systemName: option.icon)
+                .font(.title2.weight(.bold))
+                .foregroundStyle(option.tint)
+                .frame(width: 44, height: 44)
+                .background(option.tint.opacity(0.16))
+                .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Track Emotion or Mood")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(AppTheme.text)
+
+                Text(MoodValence.title(for: valence))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var kindStep: some View {
+        VStack(spacing: 12) {
+            ForEach(MoodLogKind.allCases) { kind in
+                Button {
+                    selectedKind = kind
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(kind.rawValue)
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            Text(kind == .currentEmotion ? currentTimeText : "For the whole day")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer()
+
+                        Image(systemName: selectedKind == kind ? "checkmark.circle.fill" : "circle")
+                            .font(.title3.weight(.bold))
+                            .foregroundStyle(selectedKind == kind ? option.tint : .secondary)
+                    }
+                    .padding(16)
+                    .background(selectedKind == kind ? option.tint.opacity(0.18) : AppTheme.panel)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(selectedKind == kind ? option.tint.opacity(0.5) : Color.clear, lineWidth: 2)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var valenceStep: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(MoodValence.title(for: valence))
+                .font(.title2.weight(.black))
+                .foregroundStyle(AppTheme.text)
+
+            MoodValenceSlider(value: $valence, tint: option.tint)
+        }
+        .authPanel()
+    }
+
+    private var wordsStep: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(wordGroup.title)
+                .font(.headline.weight(.bold))
+                .foregroundStyle(AppTheme.text)
+
+            FlowLayout(spacing: 9, rowSpacing: 9) {
+                ForEach(wordGroup.words, id: \.self) { word in
+                    Button {
+                        toggleWord(word)
+                    } label: {
+                        Text(word)
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(selectedWords.contains(word) ? .white : AppTheme.text)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 9)
+                            .background(selectedWords.contains(word) ? option.tint : AppTheme.fieldBackground)
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .authPanel()
+    }
+
+    private var causeStep: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("What may have caused this feeling?")
+                .font(.headline.weight(.bold))
+                .foregroundStyle(AppTheme.text)
+
+            TextField("Add context, trigger, activity, place, person, or change in routine", text: $cause, axis: .vertical)
+                .lineLimit(6...9)
+                .padding(12)
+                .background(AppTheme.fieldBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .authPanel()
+    }
+
+    private var currentTimeText: String {
+        Date().formatted(date: .omitted, time: .shortened)
+    }
+
+    private func toggleWord(_ word: String) {
+        if selectedWords.contains(word) {
+            selectedWords.remove(word)
+        } else {
+            selectedWords.insert(word)
+        }
+    }
+
+    private func advance() {
+        switch step {
+        case .kind:
+            step = .valence
+        case .valence:
+            selectedWords.removeAll()
+            step = .words
+        case .words:
+            step = .cause
+        case .cause:
+            save()
+        }
+    }
+
+    private func goBack() {
+        switch step {
+        case .kind:
+            dismiss()
+        case .valence:
+            step = .kind
+        case .words:
+            step = .valence
+        case .cause:
+            step = .words
+        }
+    }
+
+    private func save() {
+        let sortedWords = wordGroup.words.filter { selectedWords.contains($0) }
+        let kindTitle = selectedKind?.rawValue ?? "Mood"
+        let valenceTitle = MoodValence.title(for: valence)
+        let wordText = sortedWords.joined(separator: ", ")
+        let value = "\(kindTitle): \(valenceTitle)"
+        let detailLines = [
+            wordText.isEmpty ? nil : "States: \(wordText)",
+            cause.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : "Cause: \(cause.trimmingCharacters(in: .whitespacesAndNewlines))"
+        ].compactMap { $0 }
+
+        let entry = HealthLogEntry(
+            id: UUID(),
+            type: .quickLog,
+            categoryID: option.id,
+            title: option.title,
+            timestamp: Date(),
+            severity: valence,
+            value: value,
+            comments: detailLines.joined(separator: "\n")
+        )
+        onSave(entry)
+        dismiss()
+    }
+}
+
+struct MoodValenceSlider: View {
+    @Binding var value: Int
+    let tint: Color
+
+    private let barWidth: CGFloat = 46
+    private let barHeight: CGFloat = 360
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .trailing, spacing: 0) {
+                ForEach(MoodValence.all.reversed()) { mood in
+                    Text(mood.title)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(value == mood.id ? AppTheme.text : .secondary)
+                        .frame(height: barHeight / 7, alignment: .center)
+                }
+            }
+
+            ZStack(alignment: .bottom) {
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.84, green: 0.42, blue: 0.56),
+                                Color(red: 0.96, green: 0.74, blue: 0.48),
+                                Color(red: 0.91, green: 0.91, blue: 0.78),
+                                Color(red: 0.52, green: 0.78, blue: 0.63)
+                            ],
+                            startPoint: .bottom,
+                            endPoint: .top
+                        )
+                    )
+                    .frame(width: barWidth, height: barHeight)
+
+                Circle()
+                    .fill(.white)
+                    .frame(width: 54, height: 54)
+                    .shadow(color: Color.black.opacity(0.16), radius: 10, x: 0, y: 5)
+                    .overlay {
+                        Circle()
+                            .stroke(tint, lineWidth: 4)
+                    }
+                    .offset(y: thumbOffset)
+            }
+            .frame(width: 74, height: barHeight)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { gesture in
+                        updateValue(from: gesture.location.y)
+                    }
+            )
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var thumbOffset: CGFloat {
+        let segment = barHeight / 6
+        let bottomOffset = CGFloat(value - 1) * segment
+        return -bottomOffset
+    }
+
+    private func updateValue(from yLocation: CGFloat) {
+        let clampedY = min(max(yLocation, 0), barHeight)
+        let relativeFromBottom = 1 - (clampedY / barHeight)
+        let newValue = Int((relativeFromBottom * 6).rounded()) + 1
+        value = min(max(newValue, 1), 7)
+    }
+}
+
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+    var rowSpacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = rows(for: subviews, proposalWidth: proposal.width ?? 320)
+        return CGSize(
+            width: proposal.width ?? rows.map(\.width).max() ?? 0,
+            height: rows.map(\.height).reduce(0, +) + CGFloat(max(rows.count - 1, 0)) * rowSpacing
+        )
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let rows = rows(for: subviews, proposalWidth: bounds.width)
+        var y = bounds.minY
+
+        for row in rows {
+            var x = bounds.minX
+
+            for item in row.items {
+                item.subview.place(
+                    at: CGPoint(x: x, y: y),
+                    proposal: ProposedViewSize(item.size)
+                )
+                x += item.size.width + spacing
+            }
+
+            y += row.height + rowSpacing
+        }
+    }
+
+    private func rows(for subviews: Subviews, proposalWidth: CGFloat) -> [FlowLayoutRow] {
+        var rows: [FlowLayoutRow] = []
+        var currentItems: [FlowLayoutItem] = []
+        var currentWidth: CGFloat = 0
+        var currentHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            let itemWidth = currentItems.isEmpty ? size.width : size.width + spacing
+
+            if currentWidth + itemWidth > proposalWidth, !currentItems.isEmpty {
+                rows.append(FlowLayoutRow(items: currentItems, width: currentWidth, height: currentHeight))
+                currentItems = []
+                currentWidth = 0
+                currentHeight = 0
+            }
+
+            currentItems.append(FlowLayoutItem(subview: subview, size: size))
+            currentWidth += currentItems.count == 1 ? size.width : size.width + spacing
+            currentHeight = max(currentHeight, size.height)
+        }
+
+        if !currentItems.isEmpty {
+            rows.append(FlowLayoutRow(items: currentItems, width: currentWidth, height: currentHeight))
+        }
+
+        return rows
+    }
+}
+
+struct FlowLayoutRow {
+    let items: [FlowLayoutItem]
+    let width: CGFloat
+    let height: CGFloat
+}
+
+struct FlowLayoutItem {
+    let subview: LayoutSubview
+    let size: CGSize
+}
+
 struct MedicineLogSheet: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -1621,6 +2643,7 @@ struct MedicineLogSheet: View {
 
     @State private var checkedMedicationIDs: Set<String> = []
     @State private var editingMedication: MedicationSchedule?
+    @State private var isMedicineManagerPresented = false
 
     private var today: MedicationWeekday {
         MedicationWeekday.today()
@@ -1630,33 +2653,21 @@ struct MedicineLogSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    HStack(spacing: 12) {
-                        Image(systemName: option.icon)
-                            .font(.title2.weight(.bold))
-                            .foregroundStyle(option.tint)
-                            .frame(width: 44, height: 44)
-                            .background(option.tint.opacity(0.16))
-                            .clipShape(Circle())
+                    Text(todayDateTitle)
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(AppTheme.text)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(14)
+                        .background(AppTheme.panel)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Medicine")
-                                .font(.title3.weight(.bold))
-                                .foregroundStyle(AppTheme.text)
-
-                            Text(today.shortTitle)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    ForEach(MedicationDayTime.allCases) { time in
-                        medicationChecklistSection(for: time)
-                    }
+                    medicationChecklistSection
                 }
                 .padding(18)
             }
             .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle("Medicine")
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") {
@@ -1665,24 +2676,8 @@ struct MedicineLogSheet: View {
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button {
-                            editingMedication = MedicationSchedule.empty()
-                        } label: {
-                            Label("Add New", systemImage: "plus")
-                        }
-
-                        if medications.isEmpty {
-                            Text("No medicines saved")
-                        } else {
-                            Section("Edit Existing") {
-                                ForEach(medications) { medication in
-                                    Button(medication.displayName.isEmpty ? "Unnamed Medicine" : medication.displayName) {
-                                        editingMedication = medication
-                                    }
-                                }
-                            }
-                        }
+                    Button {
+                        isMedicineManagerPresented = true
                     } label: {
                         Text("Edit")
                             .font(.headline.weight(.semibold))
@@ -1694,14 +2689,19 @@ struct MedicineLogSheet: View {
                     Button {
                         save()
                     } label: {
-                        Text("Save Checked Medicine")
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.circle.fill")
+                            Text("Save")
+                        }
                             .font(.headline.weight(.bold))
                             .foregroundStyle(.white)
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
+                            .padding(.vertical, 13)
                             .background(AppTheme.accent)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .clipShape(Capsule())
+                            .shadow(color: AppTheme.accent.opacity(0.18), radius: 10, x: 0, y: 5)
                     }
+                    .buttonStyle(.plain)
                 }
             }
         }
@@ -1714,13 +2714,32 @@ struct MedicineLogSheet: View {
                 upsertMedication(savedMedication)
             }
         }
+        .sheet(isPresented: $isMedicineManagerPresented) {
+            MedicineManagerSheet(
+                medications: $medications,
+                tint: option.tint,
+                onAdd: {
+                    openMedicationEditor(MedicationSchedule.empty())
+                },
+                onEdit: { medication in
+                    openMedicationEditor(medication)
+                },
+                onDelete: { medication in
+                    deleteMedication(medication)
+                }
+            )
+        }
     }
 
-    private func medicationChecklistSection(for time: MedicationDayTime) -> some View {
-        let rows = checklistRows(for: time)
+    private var todayDateTitle: String {
+        Date().formatted(.dateTime.weekday(.wide).month(.wide).day().year())
+    }
+
+    private var medicationChecklistSection: some View {
+        let rows = checklistRows
 
         return VStack(alignment: .leading, spacing: 12) {
-            Text(time.title)
+            Text("Today's Medicines")
                 .font(.headline.weight(.bold))
                 .foregroundStyle(AppTheme.text)
 
@@ -1749,27 +2768,64 @@ struct MedicineLogSheet: View {
         .authPanel()
     }
 
-    private func checklistRows(for time: MedicationDayTime) -> [MedicationChecklistItem] {
-        medications.compactMap { medication in
+    private var checklistRows: [MedicationChecklistItem] {
+        medications.flatMap { medication -> [MedicationChecklistItem] in
             switch medication.mode {
             case .daily:
-                guard medication.dailyTimes.contains(time) else { return nil }
-                return MedicationChecklistItem(
-                    id: "\(medication.id.uuidString).\(time.rawValue)",
-                    medication: medication,
-                    time: time,
-                    dose: medication.dose(for: nil, time: time)
-                )
+                return medication.dailyTimes.map { time in
+                    MedicationChecklistItem(
+                        id: "\(medication.id.uuidString).\(time.rawValue)",
+                        medication: medication,
+                        time: time,
+                        dose: medication.dose(for: nil, time: time),
+                        timeText: medication.clockTimeText(for: nil, time: time),
+                        sortMinutes: medication.clockTimeMinutes(for: nil, time: time)
+                    )
+                }
+            case .intervalDays:
+                guard isMedicationDueToday(medication) else { return [] }
+                return medication.dailyTimes.map { time in
+                    MedicationChecklistItem(
+                        id: "\(medication.id.uuidString).interval.\(time.rawValue)",
+                        medication: medication,
+                        time: time,
+                        dose: medication.dose(for: nil, time: time),
+                        timeText: medication.clockTimeText(for: nil, time: time),
+                        sortMinutes: medication.clockTimeMinutes(for: nil, time: time)
+                    )
+                }
             case .weekly:
-                guard medication.weeklyDays.contains(today), medication.weeklyTimes.contains(time) else { return nil }
-                return MedicationChecklistItem(
-                    id: "\(medication.id.uuidString).\(today.rawValue).\(time.rawValue)",
-                    medication: medication,
-                    time: time,
-                    dose: medication.dose(for: today, time: time)
-                )
+                guard medication.weeklyDays.contains(today) else { return [] }
+                return medication.weeklyTimes.map { time in
+                    MedicationChecklistItem(
+                        id: "\(medication.id.uuidString).\(today.rawValue).\(time.rawValue)",
+                        medication: medication,
+                        time: time,
+                        dose: medication.dose(for: today, time: time),
+                        timeText: medication.clockTimeText(for: today, time: time),
+                        sortMinutes: medication.clockTimeMinutes(for: today, time: time)
+                    )
+                }
             }
         }
+        .sorted { first, second in
+            if first.sortMinutes == second.sortMinutes {
+                return first.medication.displayName.localizedCaseInsensitiveCompare(second.medication.displayName) == .orderedAscending
+            }
+
+            return first.sortMinutes < second.sortMinutes
+        }
+    }
+
+    private func isMedicationDueToday(_ medication: MedicationSchedule, calendar: Calendar = .current) -> Bool {
+        let interval = max(1, medication.intervalDays)
+        let start = calendar.startOfDay(for: medication.startDate)
+        let todayDate = calendar.startOfDay(for: Date())
+        guard let days = calendar.dateComponents([.day], from: start, to: todayDate).day, days >= 0 else {
+            return false
+        }
+
+        return days % interval == 0
     }
 
     private func toggleChecked(_ id: String) {
@@ -1790,27 +2846,32 @@ struct MedicineLogSheet: View {
         checkedMedicationIDs.formIntersection(currentChecklistRowIDs)
     }
 
+    private func deleteMedication(_ medication: MedicationSchedule) {
+        medications.removeAll { $0.id == medication.id }
+        checkedMedicationIDs.formIntersection(currentChecklistRowIDs)
+        persistCheckedMedicationIDs()
+    }
+
+    private func openMedicationEditor(_ medication: MedicationSchedule) {
+        isMedicineManagerPresented = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            editingMedication = medication
+        }
+    }
+
     private func save() {
         persistCheckedMedicationIDs()
 
-        let allRows = MedicationDayTime.allCases.flatMap { checklistRows(for: $0) }
+        let allRows = checklistRows
         let checkedRows = allRows.filter { checkedMedicationIDs.contains($0.id) }
         let checkedSummary = checkedRows.isEmpty
             ? "No medicine checked"
-            : checkedRows.map { "\($0.time.title): \($0.medication.displayName)\($0.dose.isEmpty ? "" : " \($0.dose)")" }.joined(separator: "\n")
+            : checkedRows.map { "\($0.timeText): \($0.medication.displayName)\($0.dose.isEmpty ? "" : " \($0.dose)")" }.joined(separator: "\n")
 
-        let sectionSummary = MedicationDayTime.allCases.map { time in
-            let rows = checklistRows(for: time)
-            guard !rows.isEmpty else { return "\(time.title): None" }
-
-            let names = rows.map { row in
-                let checkedMark = checkedMedicationIDs.contains(row.id) ? "Checked" : "Not checked"
-                let doseText = row.dose.isEmpty ? "" : " \(row.dose)"
-                return "\(checkedMark) - \(row.medication.displayName)\(doseText)"
-            }
-            .joined(separator: "; ")
-
-            return "\(time.title): \(names)"
+        let sectionSummary = allRows.map { row in
+            let checkedMark = checkedMedicationIDs.contains(row.id) ? "Checked" : "Not checked"
+            let doseText = row.dose.isEmpty ? "" : " \(row.dose)"
+            return "\(row.timeText): \(checkedMark) - \(row.medication.displayName)\(doseText)"
         }
         .joined(separator: "\n")
 
@@ -1829,9 +2890,7 @@ struct MedicineLogSheet: View {
     }
 
     private var currentChecklistRowIDs: Set<String> {
-        Set(MedicationDayTime.allCases.flatMap { time in
-            checklistRows(for: time).map(\.id)
-        })
+        Set(checklistRows.map(\.id))
     }
 
     private func loadSavedCheckedMedicationIDs() {
@@ -1861,6 +2920,8 @@ struct MedicationChecklistItem: Identifiable {
     let medication: MedicationSchedule
     let time: MedicationDayTime
     let dose: String
+    let timeText: String
+    let sortMinutes: Int
 }
 
 struct MedicineChecklistRow: View {
@@ -1877,6 +2938,11 @@ struct MedicineChecklistRow: View {
                 Image(systemName: isChecked ? "checkmark.square.fill" : "square")
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(isChecked ? tint : .secondary)
+
+                Text(row.timeText)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(tint)
+                    .frame(width: 72, alignment: .leading)
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(row.medication.displayName.isEmpty ? "Unnamed Medicine" : row.medication.displayName)
@@ -1900,6 +2966,98 @@ struct MedicineChecklistRow: View {
     }
 }
 
+struct MedicineManagerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    @Binding var medications: [MedicationSchedule]
+    let tint: Color
+    let onAdd: () -> Void
+    let onEdit: (MedicationSchedule) -> Void
+    let onDelete: (MedicationSchedule) -> Void
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 10) {
+                    Button {
+                        onAdd()
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "plus")
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(tint)
+                                .frame(width: 30)
+
+                            Text("Add New")
+                                .font(.headline.weight(.semibold))
+                                .foregroundStyle(AppTheme.text)
+
+                            Spacer()
+                        }
+                        .padding(14)
+                        .background(AppTheme.panel)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+
+                    if medications.isEmpty {
+                        Text("None")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(14)
+                            .background(AppTheme.panel)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    } else {
+                        ForEach(medications) { medication in
+                            HStack(spacing: 12) {
+                                Button {
+                                    onEdit(medication)
+                                } label: {
+                                    Text(medication.displayName.isEmpty ? "Unnamed Medicine" : medication.displayName)
+                                        .font(.headline.weight(.semibold))
+                                        .foregroundStyle(AppTheme.text)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                .buttonStyle(.plain)
+
+                                Button(role: .destructive) {
+                                    onDelete(medication)
+                                } label: {
+                                    Image(systemName: "trash")
+                                        .font(.headline.weight(.bold))
+                                        .foregroundStyle(Color(red: 0.86, green: 0.22, blue: 0.24))
+                                        .frame(width: 38, height: 38)
+                                        .background(Color(red: 0.86, green: 0.22, blue: 0.24).opacity(0.1))
+                                        .clipShape(Circle())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            .padding(14)
+                            .background(AppTheme.panel)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+                    }
+                }
+                .padding(18)
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(AppTheme.accent)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+}
+
 struct MedicationEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -1909,14 +3067,20 @@ struct MedicationEditorSheet: View {
 
     init(medication: MedicationSchedule, onSave: @escaping (MedicationSchedule) -> Void) {
         self.onSave = onSave
-        self._draft = State(initialValue: medication)
+        var initialMedication = medication
+        if initialMedication.amount.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let existingDose = initialMedication.doses.values.first?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !existingDose.isEmpty {
+            initialMedication.amount = existingDose
+        }
+        self._draft = State(initialValue: initialMedication)
     }
 
     private var canSave: Bool {
         let hasName = !draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
         switch draft.mode {
-        case .daily:
+        case .daily, .intervalDays:
             return hasName && !draft.dailyTimes.isEmpty
         case .weekly:
             return hasName && !draft.weeklyDays.isEmpty && !draft.weeklyTimes.isEmpty
@@ -1925,11 +3089,12 @@ struct MedicationEditorSheet: View {
 
     private var doseInputs: [MedicationDoseInput] {
         switch draft.mode {
-        case .daily:
+        case .daily, .intervalDays:
             return sortedTimes(draft.dailyTimes).map { time in
                 MedicationDoseInput(
                     id: draft.doseKey(day: nil, time: time),
-                    label: "\(time.title) dose"
+                    label: time.title,
+                    time: time
                 )
             }
         case .weekly:
@@ -1937,7 +3102,8 @@ struct MedicationEditorSheet: View {
                 sortedTimes(draft.weeklyTimes).map { time in
                     MedicationDoseInput(
                         id: draft.doseKey(day: day, time: time),
-                        label: "\(day.shortTitle) \(time.title) dose"
+                        label: "\(day.shortTitle) \(time.title)",
+                        time: time
                     )
                 }
             }
@@ -1957,148 +3123,371 @@ struct MedicationEditorSheet: View {
         doseInputs.count > 1 && firstEnteredDose != nil
     }
 
+    private let medicineTypes = [
+        "Round Tablet",
+        "Capsule",
+        "Liquid",
+        "Injection",
+        "Drops",
+        "Other"
+    ]
+
+    private let medicineUnits = [
+        "Tablet(s)",
+        "Capsule(s)",
+        "mL",
+        "mg",
+        "g",
+        "Drop(s)",
+        "Dose"
+    ]
+
+    private let durationOptions = [
+        "Until stopped",
+        "7 days",
+        "14 days",
+        "30 days",
+        "90 days",
+        "As needed"
+    ]
+
+    private let doseFrequencyOptions = [
+        "Once a day",
+        "Twice a day",
+        "Three times a day",
+        "Multiple times a day"
+    ]
+
+    private let intervalDayOptions = [2, 3, 4, 5, 6, 7, 14, 30]
+
+    private var selectedDoseSlots: [MedicationDayTime] {
+        switch draft.mode {
+        case .daily, .intervalDays:
+            return draft.dailyTimes
+        case .weekly:
+            return draft.weeklyTimes
+        }
+    }
+
+    private var medicationTypeSelector: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 24) {
+                Button {
+                    cycleMedicineType(by: -1)
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(AppTheme.text)
+                        .frame(width: 42, height: 42)
+                        .background(AppTheme.fieldBackground)
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                VStack(spacing: 8) {
+                    Image(systemName: medicineTypeIcon)
+                        .font(.system(size: 34, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 82, height: 82)
+                        .background(AppTheme.accent)
+                        .clipShape(Circle())
+
+                    Text(draft.medicineType)
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(AppTheme.accent)
+                }
+
+                Spacer()
+
+                Button {
+                    cycleMedicineType(by: 1)
+                } label: {
+                    Image(systemName: "chevron.right")
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(AppTheme.text)
+                        .frame(width: 42, height: 42)
+                        .background(AppTheme.fieldBackground)
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.vertical, 4)
+            .padding(.horizontal, 12)
+        }
+    }
+
+    private var weeklyDayPicker: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
+                ForEach(MedicationWeekday.allCases) { day in
+                    MedicationChoicePill(
+                        title: day.shortTitle,
+                        isSelected: draft.weeklyDays.contains(day)
+                    ) {
+                        toggleWeeklyDay(day)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(MedicationFormStyle.background)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private var whatTimeSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            MedicationFormMenu(
+                title: "What Time?",
+                value: doseFrequencyTitle,
+                options: doseFrequencyOptions
+            ) { frequency in
+                applyDoseFrequency(frequency)
+            }
+
+            if doseInputs.isEmpty {
+                EmptyView()
+            } else {
+                ForEach(doseInputs) { input in
+                    HStack {
+                        Text(input.label)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(AppTheme.text)
+
+                        Spacer()
+
+                        DatePicker(
+                            input.label,
+                            selection: timeBinding(for: input.id, fallback: input.time),
+                            displayedComponents: .hourAndMinute
+                        )
+                        .labelsHidden()
+                    }
+                    .padding(12)
+                    .background(MedicationFormStyle.background)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+            }
+        }
+    }
+
+    private var medicineTypeIcon: String {
+        switch draft.medicineType {
+        case "Liquid":
+            return "drop.fill"
+        case "Injection":
+            return "cross.case.fill"
+        case "Drops":
+            return "drop.fill"
+        default:
+            return "pills.fill"
+        }
+    }
+
+    private var formattedDoseText: String {
+        let amount = draft.amount.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !amount.isEmpty else { return "" }
+        return "\(amount) \(draft.unit)"
+    }
+
+    private var howOftenTitle: String {
+        switch draft.mode {
+        case .intervalDays:
+            return "Every \(draft.intervalDays) days"
+        default:
+            return draft.mode.title
+        }
+    }
+
+    private var doseFrequencyTitle: String {
+        switch selectedDoseSlots.count {
+        case 1:
+            return "Once a day"
+        case 2:
+            return "Twice a day"
+        case 3:
+            return "Three times a day"
+        default:
+            return "What Time?"
+        }
+    }
+
+    private func applyDoseFrequency(_ frequency: String) {
+        switch frequency {
+        case "Once a day":
+            setDoseSlots([.morning])
+        case "Twice a day":
+            setDoseSlots([.morning, .evening])
+        case "Three times a day", "Multiple times a day":
+            setDoseSlots([.morning, .noon, .evening])
+        default:
+            break
+        }
+    }
+
+    private func setDoseSlots(_ times: [MedicationDayTime]) {
+        switch draft.mode {
+        case .daily, .intervalDays:
+            let removedTimes = draft.dailyTimes.filter { !times.contains($0) }
+            draft.dailyTimes = times
+
+            for time in times {
+                let key = draft.doseKey(day: nil, time: time)
+                draft.clockTimes[key] = draft.clockTimes[key, default: time.defaultClockTime]
+            }
+
+            for time in removedTimes {
+                let key = draft.doseKey(day: nil, time: time)
+                draft.doses.removeValue(forKey: key)
+                draft.clockTimes.removeValue(forKey: key)
+            }
+        case .weekly:
+            let removedTimes = draft.weeklyTimes.filter { !times.contains($0) }
+            draft.weeklyTimes = times
+
+            for day in draft.weeklyDays {
+                for time in times {
+                    let key = draft.doseKey(day: day, time: time)
+                    draft.clockTimes[key] = draft.clockTimes[key, default: time.defaultClockTime]
+                }
+            }
+
+            for day in MedicationWeekday.allCases {
+                for time in removedTimes {
+                    let key = draft.doseKey(day: day, time: time)
+                    draft.doses.removeValue(forKey: key)
+                    draft.clockTimes.removeValue(forKey: key)
+                }
+            }
+        }
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        TextField("Name of medicine", text: $draft.name)
-                            .textInputAutocapitalization(.words)
-                            .padding(12)
-                            .background(AppTheme.fieldBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                VStack(alignment: .leading, spacing: 14) {
+                    MedicationFormTextField(
+                        title: "Medicine Name",
+                        placeholder: "Medicine Name",
+                        text: $draft.name,
+                        showsClearButton: true
+                    )
 
-                        TextField("Preferred nickname", text: $draft.nickname)
-                            .textInputAutocapitalization(.words)
-                            .padding(12)
-                            .background(AppTheme.fieldBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    }
-                    .authPanel()
+                    medicationTypeSelector
 
-                    VStack(alignment: .leading, spacing: 14) {
-                        Picker("Schedule", selection: modeBinding) {
-                            ForEach(MedicationScheduleMode.allCases) { mode in
-                                Text(mode.title).tag(mode)
-                            }
+                    HStack(spacing: 10) {
+                        MedicationFormTextField(
+                            title: "Amount",
+                            placeholder: "Amount",
+                            text: $draft.amount,
+                            keyboardType: .decimalPad,
+                            showsClearButton: false
+                        )
+
+                        MedicationFormMenu(
+                            title: "Unit",
+                            value: draft.unit.isEmpty ? "Unit" : draft.unit,
+                            options: medicineUnits
+                        ) { unit in
+                            draft.unit = unit
                         }
-                        .pickerStyle(.segmented)
+                    }
 
-                        if draft.mode == .daily {
-                            Text("Times per day")
-                                .font(.subheadline.weight(.bold))
-                                .foregroundStyle(AppTheme.text)
+                    MedicationFormMenu(
+                        title: "How often?",
+                        value: howOftenTitle,
+                        options: MedicationScheduleMode.allCases.map(\.title)
+                    ) { title in
+                        if let mode = MedicationScheduleMode.allCases.first(where: { $0.title == title }) {
+                            setScheduleMode(mode)
+                        }
+                    }
 
-                            HStack(spacing: 8) {
-                                ForEach(MedicationDayTime.allCases) { time in
-                                    MedicationChoicePill(
-                                        title: time.title,
-                                        isSelected: draft.dailyTimes.contains(time)
-                                    ) {
-                                        toggleDailyTime(time)
-                                    }
-                                }
-                            }
-                        } else {
-                            Text("Days of the week")
-                                .font(.subheadline.weight(.bold))
-                                .foregroundStyle(AppTheme.text)
-
-                            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
-                                ForEach(MedicationWeekday.allCases) { day in
-                                    MedicationChoicePill(
-                                        title: day.shortTitle,
-                                        isSelected: draft.weeklyDays.contains(day)
-                                    ) {
-                                        toggleWeeklyDay(day)
-                                    }
-                                }
-                            }
-
-                            Text("Times per day")
-                                .font(.subheadline.weight(.bold))
-                                .foregroundStyle(AppTheme.text)
-
-                            HStack(spacing: 8) {
-                                ForEach(MedicationDayTime.allCases) { time in
-                                    MedicationChoicePill(
-                                        title: time.title,
-                                        isSelected: draft.weeklyTimes.contains(time)
-                                    ) {
-                                        toggleWeeklyTime(time)
-                                    }
-                                }
+                    if draft.mode == .intervalDays {
+                        MedicationFormMenu(
+                            title: "Every how many days?",
+                            value: "Every \(draft.intervalDays) days",
+                            options: intervalDayOptions.map { "Every \($0) days" }
+                        ) { title in
+                            if let days = intervalDayOptions.first(where: { title == "Every \($0) days" }) {
+                                draft.intervalDays = days
                             }
                         }
                     }
-                    .authPanel()
 
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Text("Dose")
-                                .font(.headline.weight(.bold))
-                                .foregroundStyle(AppTheme.text)
+                    if draft.mode == .weekly {
+                        weeklyDayPicker
+                    }
 
-                            Spacer()
+                    whatTimeSection
 
-                            Button {
-                                copyFirstDoseToAll()
-                            } label: {
-                                HStack(spacing: 5) {
-                                    Image(systemName: "doc.on.doc")
-                                        .font(.caption.weight(.bold))
+                    MedicationFormMenu(
+                        title: "Duration",
+                        value: draft.duration.isEmpty ? "Duration" : draft.duration,
+                        options: durationOptions
+                    ) { duration in
+                        draft.duration = duration
+                    }
 
-                                    Text("Same dose")
-                                        .font(.caption.weight(.bold))
-                                }
-                                .foregroundStyle(canCopyDoseToAll ? AppTheme.accent : .secondary)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 8)
-                                .background(AppTheme.fieldBackground)
-                                .clipShape(Capsule())
-                            }
-                            .disabled(!canCopyDoseToAll)
-                            .buttonStyle(.plain)
-                        }
+                    DatePicker("Start Date", selection: $draft.startDate, displayedComponents: .date)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AppTheme.text)
+                        .padding(12)
+                        .background(MedicationFormStyle.background)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-                        if doseInputs.isEmpty {
-                            Text("Choose a time to add doses.")
-                                .font(.subheadline.weight(.semibold))
+                    ZStack(alignment: .topLeading) {
+                        if draft.instructions.isEmpty {
+                            Text("Medication Instruction (Optional)")
+                                .font(.headline.weight(.semibold))
                                 .foregroundStyle(.secondary)
-                        } else {
-                            ForEach(doseInputs) { input in
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text(input.label)
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundStyle(.secondary)
-
-                                    TextField("Example: 5 mg, 1 tablet, 2 mL", text: doseBinding(for: input.id))
-                                        .padding(12)
-                                        .background(AppTheme.fieldBackground)
-                                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                }
-                            }
+                                .padding(.horizontal, 13)
+                                .padding(.vertical, 16)
                         }
+
+                        TextEditor(text: $draft.instructions)
+                            .frame(minHeight: 88)
+                            .scrollContentBackground(.hidden)
+                            .padding(8)
                     }
-                    .authPanel()
+                    .background(MedicationFormStyle.background)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
                 .padding(18)
             }
             .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle("Medicine")
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
+                    Button {
                         dismiss()
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
                     }
                 }
 
+                ToolbarItem(placement: .principal) {
+                    Text(draft.legalName.isEmpty ? "Add Medication" : "Edit Medication")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(AppTheme.text)
+                }
+
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") {
+                    Button {
                         save()
+                    } label: {
+                        Text("Save")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 9)
+                            .background(canSave ? AppTheme.accent : Color.secondary.opacity(0.45))
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(canSave ? AppTheme.accent : .secondary)
                     .disabled(!canSave)
                 }
             }
@@ -2122,19 +3511,45 @@ struct MedicationEditorSheet: View {
         }
     }
 
+    private func timeBinding(for key: String, fallback: MedicationDayTime) -> Binding<Date> {
+        Binding {
+            MedicationTimeFormatting.date(from: draft.clockTimes[key, default: fallback.defaultClockTime])
+        } set: { newValue in
+            draft.clockTimes[key] = MedicationTimeFormatting.storedTime(from: newValue)
+        }
+    }
+
+    private func cycleMedicineType(by offset: Int) {
+        guard let currentIndex = medicineTypes.firstIndex(of: draft.medicineType) else {
+            draft.medicineType = medicineTypes.first ?? "Round Tablet"
+            return
+        }
+
+        let newIndex = (currentIndex + offset + medicineTypes.count) % medicineTypes.count
+        draft.medicineType = medicineTypes[newIndex]
+    }
+
     private func setScheduleMode(_ mode: MedicationScheduleMode) {
         guard draft.mode != mode else { return }
 
         draft.mode = mode
 
         switch mode {
-        case .daily:
+        case .daily, .intervalDays:
+            if draft.dailyTimes.isEmpty {
+                draft.dailyTimes = draft.weeklyTimes.isEmpty ? [.morning] : draft.weeklyTimes
+            }
             draft.weeklyDays.removeAll()
             draft.weeklyTimes.removeAll()
             draft.doses = draft.doses.filter { !$0.key.contains(".") }
+            draft.clockTimes = draft.clockTimes.filter { !$0.key.contains(".") }
         case .weekly:
+            if draft.weeklyTimes.isEmpty {
+                draft.weeklyTimes = draft.dailyTimes.isEmpty ? [.morning] : draft.dailyTimes
+            }
             draft.dailyTimes.removeAll()
             draft.doses = draft.doses.filter { $0.key.contains(".") }
+            draft.clockTimes = draft.clockTimes.filter { $0.key.contains(".") }
         }
     }
 
@@ -2147,36 +3562,80 @@ struct MedicationEditorSheet: View {
     }
 
     private func toggleDailyTime(_ time: MedicationDayTime) {
-        toggle(time, in: &draft.dailyTimes)
+        let key = draft.doseKey(day: nil, time: time)
+
+        if let index = draft.dailyTimes.firstIndex(of: time) {
+            draft.dailyTimes.remove(at: index)
+            draft.doses.removeValue(forKey: key)
+            draft.clockTimes.removeValue(forKey: key)
+        } else {
+            draft.dailyTimes.append(time)
+            draft.clockTimes[key] = draft.clockTimes[key, default: time.defaultClockTime]
+        }
     }
 
     private func toggleWeeklyTime(_ time: MedicationDayTime) {
-        toggle(time, in: &draft.weeklyTimes)
+        if let index = draft.weeklyTimes.firstIndex(of: time) {
+            draft.weeklyTimes.remove(at: index)
+
+            for day in MedicationWeekday.allCases {
+                let key = draft.doseKey(day: day, time: time)
+                draft.doses.removeValue(forKey: key)
+                draft.clockTimes.removeValue(forKey: key)
+            }
+        } else {
+            draft.weeklyTimes.append(time)
+
+            for day in draft.weeklyDays {
+                let key = draft.doseKey(day: day, time: time)
+                draft.clockTimes[key] = draft.clockTimes[key, default: time.defaultClockTime]
+            }
+        }
     }
 
     private func toggleWeeklyDay(_ day: MedicationWeekday) {
-        toggle(day, in: &draft.weeklyDays)
-    }
+        if let index = draft.weeklyDays.firstIndex(of: day) {
+            draft.weeklyDays.remove(at: index)
 
-    private func toggle<T: Equatable>(_ value: T, in values: inout [T]) {
-        if let index = values.firstIndex(of: value) {
-            values.remove(at: index)
+            for time in MedicationDayTime.allCases {
+                let key = draft.doseKey(day: day, time: time)
+                draft.doses.removeValue(forKey: key)
+                draft.clockTimes.removeValue(forKey: key)
+            }
         } else {
-            values.append(value)
+            draft.weeklyDays.append(day)
+
+            for time in draft.weeklyTimes {
+                let key = draft.doseKey(day: day, time: time)
+                draft.clockTimes[key] = draft.clockTimes[key, default: time.defaultClockTime]
+            }
         }
     }
 
     private func save() {
         var saved = draft
         saved.name = saved.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        saved.nickname = saved.nickname.trimmingCharacters(in: .whitespacesAndNewlines)
+        saved.nickname = ""
+        saved.amount = saved.amount.trimmingCharacters(in: .whitespacesAndNewlines)
+        saved.unit = saved.unit.trimmingCharacters(in: .whitespacesAndNewlines)
+        saved.duration = saved.duration.trimmingCharacters(in: .whitespacesAndNewlines)
+        saved.prescribingDoctor = ""
+        saved.instructions = saved.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let activeDoseKeys = Set(doseInputs.map(\.id))
-        saved.doses = saved.doses.reduce(into: [:]) { result, item in
-            let value = item.value.trimmingCharacters(in: .whitespacesAndNewlines)
-            if activeDoseKeys.contains(item.key), !value.isEmpty {
-                result[item.key] = value
+        let commonDose = formattedDoseText
+        saved.doses = activeDoseKeys.reduce(into: [:]) { result, key in
+            if !commonDose.isEmpty {
+                result[key] = commonDose
+            } else {
+                let value = saved.doses[key, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
+                if !value.isEmpty {
+                    result[key] = value
+                }
             }
+        }
+        saved.clockTimes = doseInputs.reduce(into: [:]) { result, input in
+            result[input.id] = saved.clockTimes[input.id, default: input.time.defaultClockTime]
         }
 
         onSave(saved)
@@ -2195,6 +3654,78 @@ struct MedicationEditorSheet: View {
 struct MedicationDoseInput: Identifiable {
     let id: String
     let label: String
+    let time: MedicationDayTime
+}
+
+enum MedicationFormStyle {
+    static let background = Color(red: 0.88, green: 0.94, blue: 0.93)
+}
+
+struct MedicationFormTextField: View {
+    let title: String
+    let placeholder: String
+    @Binding var text: String
+    var keyboardType: UIKeyboardType = .default
+    var showsClearButton: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            TextField(placeholder, text: $text)
+                .keyboardType(keyboardType)
+                .textInputAutocapitalization(.words)
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(AppTheme.text)
+
+            if showsClearButton && !text.isEmpty {
+                Button {
+                    text = ""
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(12)
+        .background(MedicationFormStyle.background)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+struct MedicationFormMenu: View {
+    let title: String
+    let value: String
+    let options: [String]
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        Menu {
+            ForEach(options, id: \.self) { option in
+                Button(option) {
+                    onSelect(option)
+                }
+            }
+        } label: {
+            HStack {
+                Text(value.isEmpty ? title : value)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(AppTheme.text)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+
+                Spacer()
+
+                Image(systemName: "chevron.down")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(12)
+            .background(MedicationFormStyle.background)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
 }
 
 struct MedicationChoicePill: View {
@@ -2219,7 +3750,7 @@ struct MedicationChoicePill: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
             .padding(.horizontal, 8)
-            .background(isSelected ? AppTheme.accent : AppTheme.fieldBackground)
+            .background(isSelected ? AppTheme.accent : MedicationFormStyle.background)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .buttonStyle(.plain)
@@ -2232,8 +3763,6 @@ struct PainLogEntrySheet: View {
     let option: QuickLogOption
     let onSave: (HealthLogEntry) -> Void
 
-    @State private var useCurrentTime = true
-    @State private var timestamp = Date()
     @State private var severity = 3.0
     @State private var painPoints: [PainPoint] = []
     @State private var shortComment = ""
@@ -2247,36 +3776,7 @@ struct PainLogEntrySheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    HStack(spacing: 12) {
-                        Image(systemName: option.icon)
-                            .font(.title2.weight(.bold))
-                            .foregroundStyle(option.tint)
-                            .frame(width: 42, height: 42)
-                            .background(option.tint.opacity(0.16))
-                            .clipShape(Circle())
-
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Pain")
-                                .font(.title3.weight(.bold))
-                            Text(displayLocation)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
                     VStack(alignment: .leading, spacing: 16) {
-                        Toggle("Use current time", isOn: $useCurrentTime)
-                            .font(.subheadline.weight(.semibold))
-                            .tint(AppTheme.accent)
-
-                        DatePicker(
-                            "Time",
-                            selection: $timestamp,
-                            displayedComponents: [.date, .hourAndMinute]
-                        )
-                        .disabled(useCurrentTime)
-                        .opacity(useCurrentTime ? 0.55 : 1)
-
                         PainBodySelector(
                             painPoints: $painPoints,
                             tint: option.tint
@@ -2320,7 +3820,8 @@ struct PainLogEntrySheet: View {
                 .padding(18)
             }
             .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle("Pain Log")
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") {
@@ -2358,7 +3859,7 @@ struct PainLogEntrySheet: View {
             type: .quickLog,
             categoryID: option.id,
             title: option.title,
-            timestamp: useCurrentTime ? Date() : timestamp,
+            timestamp: Date(),
             severity: Int(severity),
             value: savedLocation,
             comments: notes
@@ -2424,7 +3925,7 @@ struct PainBodySelector: View {
             .background(AppTheme.fieldBackground)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
-            Text(painPoints.isEmpty ? "Tap directly on the body to mark pain." : "\(painPoints.count) pain dot\(painPoints.count == 1 ? "" : "s") marked")
+            Text(painPoints.isEmpty ? "Tap directly on the body to mark pain. Maximum 5 dots." : "\(painPoints.count)/5 pain dot\(painPoints.count == 1 ? "" : "s") marked")
                 .font(.caption.weight(.bold))
                 .foregroundStyle(painPoints.isEmpty ? .secondary : tint)
         }
@@ -2448,7 +3949,7 @@ struct TappablePainBodyMap: View {
 
             GeometryReader { proxy in
                 ZStack {
-                    ImprovedPainBodySilhouette(side: side, tint: tint)
+                    PainLocationBodyImage(side: side)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                     ForEach(visiblePoints) { point in
@@ -2473,7 +3974,17 @@ struct TappablePainBodyMap: View {
                             let normalizedX = min(max(value.location.x / proxy.size.width, 0), 1)
                             let normalizedY = min(max(value.location.y / proxy.size.height, 0), 1)
 
-                            guard isInsideBody(x: normalizedX, y: normalizedY) else { return }
+                            if let tappedPoint = visiblePoints.first(where: { point in
+                                abs(point.x - normalizedX) <= 0.045 && abs(point.y - normalizedY) <= 0.045
+                            }) {
+                                withAnimation(.spring(response: 0.24, dampingFraction: 0.74)) {
+                                    painPoints.removeAll { $0.id == tappedPoint.id }
+                                }
+                                return
+                            }
+
+                            guard isBodyPixel(at: value.location, in: proxy.size) else { return }
+                            guard painPoints.count < 5 else { return }
 
                             withAnimation(.spring(response: 0.24, dampingFraction: 0.74)) {
                                 painPoints.append(PainPoint(side: side, x: normalizedX, y: normalizedY))
@@ -2486,40 +3997,215 @@ struct TappablePainBodyMap: View {
         .accessibilityLabel("\(side.rawValue) body pain map")
     }
 
-    private func isInsideBody(x: CGFloat, y: CGFloat) -> Bool {
-        func ellipse(centerX: CGFloat, centerY: CGFloat, radiusX: CGFloat, radiusY: CGFloat) -> Bool {
-            let dx = (x - centerX) / radiusX
-            let dy = (y - centerY) / radiusY
-            return (dx * dx) + (dy * dy) <= 1
+    private func imageFrame(in size: CGSize) -> CGRect {
+        let aspectRatio = PainLocationBodyImageStore.aspectRatio(for: side)
+        let width = min(size.width, size.height * aspectRatio)
+        let height = width / aspectRatio
+        return CGRect(
+            x: (size.width - width) / 2,
+            y: (size.height - height) / 2,
+            width: width,
+            height: height
+        )
+    }
+
+    private func isBodyPixel(at location: CGPoint, in size: CGSize) -> Bool {
+        let frame = imageFrame(in: size)
+        guard frame.contains(location), frame.width > 0, frame.height > 0 else {
+            return false
         }
 
-        func segment(startX: CGFloat, startY: CGFloat, endX: CGFloat, endY: CGFloat, radius: CGFloat) -> Bool {
-            let vx = endX - startX
-            let vy = endY - startY
-            let wx = x - startX
-            let wy = y - startY
-            let lengthSquared = (vx * vx) + (vy * vy)
-            let projection = max(0, min(1, ((wx * vx) + (wy * vy)) / lengthSquared))
-            let nearestX = startX + projection * vx
-            let nearestY = startY + projection * vy
-            let dx = x - nearestX
-            let dy = y - nearestY
-            return sqrt((dx * dx) + (dy * dy)) <= radius
+        let imageX = (location.x - frame.minX) / frame.width
+        let imageY = (location.y - frame.minY) / frame.height
+        return PainLocationBodyImageStore.containsBodyPixel(side: side, x: imageX, y: imageY)
+    }
+}
+
+struct PainLocationBodyImage: View {
+    let side: PainBodySide
+
+    var body: some View {
+        if let image = PainLocationBodyImageStore.image(for: side) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .accessibilityHidden(true)
+        } else {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(red: 1.00, green: 0.92, blue: 0.94))
+                .overlay {
+                    Text("Pain body image missing")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+                }
+        }
+    }
+}
+
+enum PainLocationBodyImageStore {
+    private static let fallbackAspectRatio: CGFloat = 0.5
+
+    static func image(for side: PainBodySide) -> UIImage? {
+        guard let source = UIImage(named: "PainLocationBody") ?? UIImage(named: "PainLocationBody.jpg"),
+              let cgImage = source.cgImage else {
+            return nil
         }
 
-        let head = ellipse(centerX: 0.50, centerY: 0.12, radiusX: 0.13, radiusY: 0.09)
-        let neck = x >= 0.44 && x <= 0.56 && y >= 0.19 && y <= 0.27
-        let torso = x >= 0.31 && x <= 0.69 && y >= 0.25 && y <= 0.58
-        let leftArm = segment(startX: 0.33, startY: 0.30, endX: 0.18, endY: 0.67, radius: 0.065)
-        let rightArm = segment(startX: 0.67, startY: 0.30, endX: 0.82, endY: 0.67, radius: 0.065)
-        let leftHand = ellipse(centerX: 0.18, centerY: 0.69, radiusX: 0.07, radiusY: 0.045)
-        let rightHand = ellipse(centerX: 0.82, centerY: 0.69, radiusX: 0.07, radiusY: 0.045)
-        let leftLeg = segment(startX: 0.43, startY: 0.56, endX: 0.39, endY: 0.92, radius: 0.07)
-        let rightLeg = segment(startX: 0.57, startY: 0.56, endX: 0.61, endY: 0.92, radius: 0.07)
-        let feet = ellipse(centerX: 0.41, centerY: 0.95, radiusX: 0.07, radiusY: 0.035)
-            || ellipse(centerX: 0.59, centerY: 0.95, radiusX: 0.07, radiusY: 0.035)
+        let halfWidth = cgImage.width / 2
+        let cropRect = CGRect(
+            x: side == .front ? 0 : halfWidth,
+            y: 0,
+            width: halfWidth,
+            height: cgImage.height
+        )
 
-        return head || neck || torso || leftArm || rightArm || leftHand || rightHand || leftLeg || rightLeg || feet
+        guard let cropped = cgImage.cropping(to: cropRect) else {
+            return source
+        }
+
+        return imageByRemovingWhiteBackground(from: cropped, scale: source.scale, orientation: source.imageOrientation)
+    }
+
+    static func aspectRatio(for side: PainBodySide) -> CGFloat {
+        guard let image = image(for: side), image.size.height > 0 else {
+            return fallbackAspectRatio
+        }
+
+        return image.size.width / image.size.height
+    }
+
+    static func containsBodyPixel(side: PainBodySide, x: CGFloat, y: CGFloat) -> Bool {
+        guard let cgImage = image(for: side)?.cgImage else {
+            return false
+        }
+
+        let width = cgImage.width
+        let height = cgImage.height
+        let clampedX = min(max(Int(round(x * CGFloat(width - 1))), 0), width - 1)
+        let clampedY = min(max(Int(round(y * CGFloat(height - 1))), 0), height - 1)
+        let bytesPerPixel = 4
+        let bytesPerRow = width * bytesPerPixel
+        var pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
+
+        guard let context = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return false
+        }
+
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        let sampleRadius = 2
+        for sampleY in max(0, clampedY - sampleRadius)...min(height - 1, clampedY + sampleRadius) {
+            for sampleX in max(0, clampedX - sampleRadius)...min(width - 1, clampedX + sampleRadius) {
+                let index = (sampleY * bytesPerRow) + (sampleX * bytesPerPixel)
+                let red = pixels[index]
+                let green = pixels[index + 1]
+                let blue = pixels[index + 2]
+                let alpha = pixels[index + 3]
+
+                if alpha > 20 && (red < 248 || green < 248 || blue < 248) {
+                    return true
+                }
+            }
+        }
+
+        return false
+    }
+
+    private static func imageByRemovingWhiteBackground(from cgImage: CGImage, scale: CGFloat, orientation: UIImage.Orientation) -> UIImage {
+        let width = cgImage.width
+        let height = cgImage.height
+        let bytesPerPixel = 4
+        let bytesPerRow = width * bytesPerPixel
+        var pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
+
+        guard let context = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return UIImage(cgImage: cgImage, scale: scale, orientation: orientation)
+        }
+
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        var visited = [Bool](repeating: false, count: width * height)
+        var queue: [(x: Int, y: Int)] = []
+
+        func pixelOffset(x: Int, y: Int) -> Int {
+            (y * bytesPerRow) + (x * bytesPerPixel)
+        }
+
+        func pixelKey(x: Int, y: Int) -> Int {
+            (y * width) + x
+        }
+
+        func isBackgroundPixel(x: Int, y: Int) -> Bool {
+            let index = pixelOffset(x: x, y: y)
+            let red = Int(pixels[index])
+            let green = Int(pixels[index + 1])
+            let blue = Int(pixels[index + 2])
+            let brightness = max(red, green, blue)
+            let darkness = min(red, green, blue)
+
+            return brightness >= 228 && brightness - darkness <= 18
+        }
+
+        func enqueueIfBackground(x: Int, y: Int) {
+            guard x >= 0, x < width, y >= 0, y < height else { return }
+            let key = pixelKey(x: x, y: y)
+            guard !visited[key], isBackgroundPixel(x: x, y: y) else { return }
+            visited[key] = true
+            queue.append((x, y))
+        }
+
+        for x in 0..<width {
+            enqueueIfBackground(x: x, y: 0)
+            enqueueIfBackground(x: x, y: height - 1)
+        }
+
+        for y in 0..<height {
+            enqueueIfBackground(x: 0, y: y)
+            enqueueIfBackground(x: width - 1, y: y)
+        }
+
+        var head = 0
+        while head < queue.count {
+            let point = queue[head]
+            head += 1
+
+            pixels[pixelOffset(x: point.x, y: point.y) + 3] = 0
+
+            enqueueIfBackground(x: point.x + 1, y: point.y)
+            enqueueIfBackground(x: point.x - 1, y: point.y)
+            enqueueIfBackground(x: point.x, y: point.y + 1)
+            enqueueIfBackground(x: point.x, y: point.y - 1)
+        }
+
+        guard let transparentContext = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ), let transparentImage = transparentContext.makeImage() else {
+            return UIImage(cgImage: cgImage, scale: scale, orientation: orientation)
+        }
+
+        return UIImage(cgImage: transparentImage, scale: scale, orientation: orientation)
     }
 }
 
@@ -3247,6 +4933,12 @@ struct QuickLogTrendsView: View {
         .background(AppTheme.background.ignoresSafeArea())
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            OrientationController.shared.lock(to: .portrait)
+        }
+        .onDisappear {
+            OrientationController.shared.unlock()
+        }
     }
 
     private func entriesFor(_ option: QuickLogOption) -> [HealthLogEntry] {
@@ -3278,6 +4970,20 @@ struct QuickLogTrendPreviewCard: View {
                 seizureHistoryCard
             }
             .buttonStyle(.plain)
+        } else if option.id == "medsFood" {
+            NavigationLink {
+                MedicineHistoryDetailView(option: option, entries: entries)
+            } label: {
+                medicineHistoryCard
+            }
+            .buttonStyle(.plain)
+        } else if option.id == "mood" || option.id == "pain" {
+            NavigationLink {
+                QuickLogHistoryDetailView(option: option, entries: entries)
+            } label: {
+                quickLogListCard
+            }
+            .buttonStyle(.plain)
         } else {
             Button {
             } label: {
@@ -3301,7 +5007,7 @@ struct QuickLogTrendPreviewCard: View {
                     .font(.title3.weight(.bold))
                     .foregroundStyle(AppTheme.text)
 
-                Text("\(entries.count) entries · Avg \(averageSeverityText)/5")
+                Text("\(entries.count) entries · Avg \(averageSeverityText)/\(scaleMax)")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
@@ -3323,6 +5029,61 @@ struct QuickLogTrendPreviewCard: View {
                 .padding(10)
                 .background(AppTheme.fieldBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.panel)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(color: Color.black.opacity(0.08), radius: 14, x: 0, y: 8)
+    }
+
+    private var quickLogListCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            cardHeader
+
+            if recentEntries.isEmpty {
+                HStack(spacing: 10) {
+                    Image(systemName: "list.bullet.rectangle")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(option.tint)
+                        .frame(width: 36, height: 36)
+                        .background(option.tint.opacity(0.14))
+                        .clipShape(Circle())
+
+                    Text("No saved logs yet")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+                }
+                .padding(12)
+                .background(AppTheme.fieldBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(recentEntries.reversed().prefix(3)) { entry in
+                        HStack(spacing: 10) {
+                            Text(entry.timestamp, format: .dateTime.month(.abbreviated).day())
+                                .font(.caption.weight(.black))
+                                .foregroundStyle(AppTheme.text)
+                                .frame(width: 54, alignment: .leading)
+
+                            Text(entry.value.isEmpty ? entry.title : entry.value)
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+                                .lineLimit(1)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+
+                            Text(entry.timestamp, format: .dateTime.hour().minute())
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .padding(12)
+                .background(AppTheme.fieldBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -3366,6 +5127,61 @@ struct QuickLogTrendPreviewCard: View {
         .shadow(color: Color.black.opacity(0.08), radius: 14, x: 0, y: 8)
     }
 
+    private var medicineHistoryCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            cardHeader
+
+            if recentMedicineDays.isEmpty {
+                HStack(spacing: 10) {
+                    Image(systemName: "checklist")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(option.tint)
+                        .frame(width: 36, height: 36)
+                        .background(option.tint.opacity(0.14))
+                        .clipShape(Circle())
+
+                    Text("No medicine checklist saved yet")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+                }
+                .padding(12)
+                .background(AppTheme.fieldBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(recentMedicineDays.prefix(3)) { day in
+                        HStack(spacing: 10) {
+                            Text(day.date, format: .dateTime.month(.abbreviated).day())
+                                .font(.caption.weight(.black))
+                                .foregroundStyle(AppTheme.text)
+                                .frame(width: 54, alignment: .leading)
+
+                            Text("Last saved \(day.savedTimeText)")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+
+                            Text("\(day.items.count)")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 28, alignment: .trailing)
+                        }
+                    }
+                }
+                .padding(12)
+                .background(AppTheme.fieldBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.panel)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(color: Color.black.opacity(0.08), radius: 14, x: 0, y: 8)
+    }
+
     @ViewBuilder
     private var chartPreview: some View {
         if recentEntries.isEmpty {
@@ -3394,9 +5210,9 @@ struct QuickLogTrendPreviewCard: View {
                 )
                 .foregroundStyle(option.tint)
             }
-            .chartYScale(domain: 0...5)
+            .chartYScale(domain: 0...scaleMax)
             .chartYAxis {
-                AxisMarks(values: [1, 3, 5])
+                AxisMarks(values: option.id == "mood" ? [1, 4, 7] : [1, 3, 5])
             }
             .chartXAxis(.hidden)
         }
@@ -3404,6 +5220,14 @@ struct QuickLogTrendPreviewCard: View {
 
     private var averageSeverityText: String {
         averageSeverity == 0 ? "0" : String(format: "%.1f", averageSeverity)
+    }
+
+    private var scaleMax: Int {
+        option.id == "mood" ? 7 : 5
+    }
+
+    private var recentMedicineDays: [MedicineHistoryDay] {
+        MedicineHistoryDay.days(from: entries)
     }
 }
 
@@ -3426,6 +5250,9 @@ struct SnapshotHistoryView: View {
         .background(AppTheme.background.ignoresSafeArea())
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            OrientationController.shared.lock(to: .portrait)
+        }
     }
 
     private func entriesFor(_ option: SnapshotOption) -> [HealthLogEntry] {
@@ -3638,6 +5465,12 @@ struct SleepTrackerHistoryView: View {
         .background(AppTheme.background.ignoresSafeArea())
         .navigationTitle("Sleep & Rest")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            OrientationController.shared.lock(to: .landscapeLeft)
+        }
+        .onDisappear {
+            OrientationController.shared.unlock()
+        }
     }
 
     private var timelineHeader: some View {
@@ -3783,9 +5616,16 @@ struct SleepTrackerRecord: Identifiable {
             .first { $0.localizedCaseInsensitiveContains("woke up at") }
             .flatMap { Self.minutesFromLine($0, prefix: "Woke up at") } ?? (7 * 60)
 
-        self.startMinutes = sleepMinutes < 18 * 60 ? sleepMinutes + 24 * 60 : sleepMinutes
-        let wakeMinutes = wakeMinutesRaw <= sleepMinutes ? wakeMinutesRaw + 24 * 60 : wakeMinutesRaw
+        self.startMinutes = Self.timelineMinutes(sleepMinutes)
+        let normalizedWakeMinutes = Self.timelineMinutes(wakeMinutesRaw)
+        let wakeMinutes = normalizedWakeMinutes <= self.startMinutes
+            ? normalizedWakeMinutes + 24 * 60
+            : normalizedWakeMinutes
         self.endMinutes = wakeMinutes
+    }
+
+    private static func timelineMinutes(_ minutes: Int) -> Int {
+        minutes < 18 * 60 ? minutes + 24 * 60 : minutes
     }
 
     private static func durationText(from value: String) -> String {
@@ -3839,6 +5679,347 @@ struct SeizureHistoryDetailView: View {
         .background(AppTheme.background.ignoresSafeArea())
         .navigationTitle("Seizure History")
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct MedicineHistoryDetailView: View {
+    let option: QuickLogOption
+    let entries: [HealthLogEntry]
+
+    private var days: [MedicineHistoryDay] {
+        MedicineHistoryDay.days(from: entries)
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                if days.isEmpty {
+                    Text("No medicine checklist saved yet.")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .authPanel()
+                } else {
+                    ForEach(days) { day in
+                        MedicineHistoryDayCard(day: day, tint: option.tint)
+                    }
+                }
+            }
+            .padding(18)
+        }
+        .background(AppTheme.background.ignoresSafeArea())
+        .navigationTitle("Medicine History")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct QuickLogHistoryDetailView: View {
+    let option: QuickLogOption
+    let entries: [HealthLogEntry]
+
+    private var sortedEntries: [HealthLogEntry] {
+        entries.sorted { $0.timestamp > $1.timestamp }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                if sortedEntries.isEmpty {
+                    Text("No \(option.title.lowercased()) logs saved yet.")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .authPanel()
+                } else {
+                    ForEach(sortedEntries) { entry in
+                        QuickLogHistoryLogCard(entry: entry, option: option)
+                    }
+                }
+            }
+            .padding(18)
+        }
+        .background(AppTheme.background.ignoresSafeArea())
+        .navigationTitle("\(option.title) History")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct MedicineHistoryDay: Identifiable {
+    let id: String
+    let date: Date
+    let items: [MedicineHistoryItem]
+
+    var dateTitle: String {
+        date.formatted(.dateTime.weekday(.wide).month(.wide).day().year())
+    }
+
+    var savedTimeText: String {
+        date.formatted(date: .omitted, time: .shortened)
+    }
+
+    static func days(from entries: [HealthLogEntry], calendar: Calendar = .current) -> [MedicineHistoryDay] {
+        let sortedEntries = entries.sorted { $0.timestamp > $1.timestamp }
+        var seenDateKeys = Set<String>()
+        var days: [MedicineHistoryDay] = []
+
+        for entry in sortedEntries {
+            let key = MedicationCheckState.dateKey(for: entry.timestamp, calendar: calendar)
+            guard !seenDateKeys.contains(key) else { continue }
+
+            let sortedItems = MedicineHistoryItem.items(from: entry).sorted { first, second in
+                if first.timeSortMinutes == second.timeSortMinutes {
+                    return first.name.localizedCaseInsensitiveCompare(second.name) == .orderedAscending
+                }
+
+                return first.timeSortMinutes < second.timeSortMinutes
+            }
+
+            guard !sortedItems.isEmpty else { continue }
+            seenDateKeys.insert(key)
+
+            days.append(
+                MedicineHistoryDay(
+                    id: key,
+                    date: entry.timestamp,
+                    items: sortedItems
+                )
+            )
+        }
+
+        return days
+    }
+}
+
+struct MedicineHistoryItem: Identifiable {
+    let id: String
+    let date: Date
+    let timeText: String
+    let timeSortMinutes: Int
+    let name: String
+
+    static func items(from entry: HealthLogEntry) -> [MedicineHistoryItem] {
+        let lines = entry.comments
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        let parsed = lines.compactMap { line -> MedicineHistoryItem? in
+            guard let parsedLine = Self.parseChecklistLine(line) else { return nil }
+
+            return MedicineHistoryItem(
+                id: "\(entry.id.uuidString)-\(line)",
+                date: entry.timestamp,
+                timeText: parsedLine.timeText,
+                timeSortMinutes: Self.minutes(from: parsedLine.timeText),
+                name: parsedLine.name
+            )
+        }
+
+        if !parsed.isEmpty {
+            return parsed
+        }
+
+        return entry.value
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && $0 != "No medicine checked" }
+            .enumerated()
+            .map { index, line in
+                MedicineHistoryItem(
+                    id: "\(entry.id.uuidString)-fallback-\(index)",
+                    date: entry.timestamp,
+                    timeText: entry.timestamp.formatted(date: .omitted, time: .shortened),
+                    timeSortMinutes: Self.minutes(from: entry.timestamp),
+                    name: Self.cleanMedicineName(line)
+                )
+            }
+    }
+
+    private static func parseChecklistLine(_ line: String) -> (timeText: String, name: String)? {
+        let separators = [": Checked - ", ": Not checked - "]
+
+        for separator in separators {
+            guard let range = line.range(of: separator, options: [.caseInsensitive]) else { continue }
+
+            let timeText = line[..<range.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+            let name = line[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard !timeText.isEmpty, !name.isEmpty else { return nil }
+            return (timeText, cleanMedicineName(name))
+        }
+
+        guard let range = line.range(of: ": ", options: [.backwards]) else { return nil }
+        let timeText = line[..<range.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = line[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !timeText.isEmpty, !name.isEmpty else { return nil }
+        return (timeText, cleanMedicineName(name))
+    }
+
+    private static func cleanMedicineName(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "Checked - ", with: "", options: [.caseInsensitive])
+            .replacingOccurrences(of: "Not checked - ", with: "", options: [.caseInsensitive])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func minutes(from date: Date, calendar: Calendar = .current) -> Int {
+        let components = calendar.dateComponents([.hour, .minute], from: date)
+        return (components.hour ?? 0) * 60 + (components.minute ?? 0)
+    }
+
+    private static func minutes(from text: String) -> Int {
+        let normalized = text
+            .replacingOccurrences(of: "\u{202F}", with: " ")
+            .replacingOccurrences(of: "\u{00A0}", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "h:mm a"
+
+        if let parsed = formatter.date(from: normalized.uppercased()) {
+            return minutes(from: parsed)
+        }
+
+        formatter.dateFormat = "HH:mm"
+        if let parsed = formatter.date(from: normalized) {
+            return minutes(from: parsed)
+        }
+
+        return 0
+    }
+}
+
+struct MedicineHistoryDayCard: View {
+    let day: MedicineHistoryDay
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                Image(systemName: "pills.fill")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(tint)
+                    .frame(width: 42, height: 42)
+                    .background(tint.opacity(0.15))
+                    .clipShape(Circle())
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(day.dateTitle)
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(AppTheme.text)
+
+                    Text("Last saved \(day.savedTimeText)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+            }
+
+            VStack(spacing: 8) {
+                ForEach(day.items) { item in
+                    HStack(spacing: 10) {
+                        Image(systemName: "pills.fill")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(tint)
+                            .frame(width: 24)
+
+                        Text(item.name)
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        Text(item.timeText)
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(11)
+                    .background(AppTheme.fieldBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.panel)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(color: Color.black.opacity(0.08), radius: 14, x: 0, y: 8)
+    }
+}
+
+struct QuickLogHistoryLogCard: View {
+    let entry: HealthLogEntry
+    let option: QuickLogOption
+
+    private var cleanedComments: [String] {
+        entry.comments
+            .components(separatedBy: .newlines)
+            .flatMap { $0.components(separatedBy: "\n\n") }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private var scaleMax: Int {
+        option.id == "mood" ? 7 : 5
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: option.icon)
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(option.tint)
+                    .frame(width: 42, height: 42)
+                    .background(option.tint.opacity(0.15))
+                    .clipShape(Circle())
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(entry.timestamp, format: .dateTime.month().day().year())
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(AppTheme.text)
+
+                    Text(entry.timestamp, format: .dateTime.hour().minute())
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Text("\(entry.severity)/\(scaleMax)")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(option.tint)
+                    .clipShape(Capsule())
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                if !entry.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    SeizureHistoryDetailRow(title: option.id == "pain" ? "Pain Location" : "Mood", value: entry.value)
+                }
+
+                ForEach(cleanedComments, id: \.self) { comment in
+                    let parts = splitComment(comment)
+                    SeizureHistoryDetailRow(title: parts.title, value: parts.value)
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.panel)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(color: Color.black.opacity(0.08), radius: 14, x: 0, y: 8)
+    }
+
+    private func splitComment(_ comment: String) -> (title: String, value: String) {
+        guard let colonIndex = comment.firstIndex(of: ":") else {
+            return ("Notes", comment)
+        }
+
+        let title = String(comment[..<colonIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = String(comment[comment.index(after: colonIndex)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return (title.isEmpty ? "Notes" : title, value.isEmpty ? comment : value)
     }
 }
 
@@ -4072,25 +6253,45 @@ struct NutrientView: View {
 
     @AppStorage private var mealPhotoData: Data
     @AppStorage private var mealEstimateData: Data
+    @AppStorage private var savedMealHistoryData: Data
     @State private var selectedMealPhoto: PhotosPickerItem?
     @State private var isEstimating = false
     @State private var estimateError = ""
+    @State private var saveMessage = ""
+    @State private var hasSavedCurrentMeal = false
+    @State private var activeMealPDF: MealPDFShareItem?
 
     init(user: CarePortalUser) {
         self.user = user
         self._mealPhotoData = AppStorage(wrappedValue: Data(), "nutrient.\(user.id).mealPhotoData")
         self._mealEstimateData = AppStorage(wrappedValue: Data(), "nutrient.\(user.id).mealEstimateData")
+        self._savedMealHistoryData = AppStorage(wrappedValue: Data(), "nutrient.\(user.id).savedMealHistoryData")
     }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    PageHeader(
-                        icon: "leaf",
-                        title: "Nutrient",
-                        subtitle: "Estimate meals, hydration, safe foods, and feeding patterns."
-                    )
+                    HStack(alignment: .top, spacing: 12) {
+                        PageHeader(
+                            icon: "leaf",
+                            title: "Nutrient",
+                            subtitle: "Estimate meals, hydration, safe foods, and feeding patterns."
+                        )
+
+                        NavigationLink {
+                            MealHistoryView(savedMeals: savedMealHistory)
+                        } label: {
+                            Image(systemName: "clock.arrow.circlepath")
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.accent)
+                                .frame(width: 44, height: 44)
+                                .background(AppTheme.accent.opacity(0.12))
+                                .clipShape(Circle())
+                        }
+                        .accessibilityLabel("Meal history")
+                        .padding(.top, 2)
+                    }
 
                     VStack(alignment: .leading, spacing: 16) {
                         PhotosPicker(selection: $selectedMealPhoto, matching: .images) {
@@ -4127,7 +6328,40 @@ struct NutrientView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
 
+                        if !saveMessage.isEmpty {
+                            Text(saveMessage)
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(AppTheme.accent)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
                         if let estimate = mealEstimate {
+                            Button {
+                                saveCurrentMeal(estimate)
+                            } label: {
+                                Label(hasSavedCurrentMeal ? "Saved" : "Save Meal", systemImage: hasSavedCurrentMeal ? "checkmark.circle.fill" : "tray.and.arrow.down.fill")
+                                    .font(.headline.weight(.bold))
+                                    .foregroundStyle(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(hasSavedCurrentMeal ? Color.gray.opacity(0.55) : AppTheme.accent)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            }
+                            .disabled(mealPhotoData.isEmpty || hasSavedCurrentMeal)
+
+                            Button {
+                                exportCurrentMealPDF(estimate)
+                            } label: {
+                                Label("Export as PDF", systemImage: "doc.richtext.fill")
+                                    .font(.headline.weight(.bold))
+                                    .foregroundStyle(AppTheme.accent)
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(AppTheme.accent.opacity(0.12))
+                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            }
+                            .disabled(mealPhotoData.isEmpty)
+
                             MealNutritionEstimateView(estimate: estimate)
                         } else {
                             VStack(alignment: .leading, spacing: 12) {
@@ -4143,15 +6377,47 @@ struct NutrientView: View {
             }
             .background(AppTheme.background.ignoresSafeArea())
             .navigationTitle("Nutrient")
+            .onAppear {
+                resetCurrentMealForNextImage()
+                syncSavedMealHistoryIfNeeded()
+            }
             .task(id: selectedMealPhoto) {
                 await loadSelectedMealPhoto()
             }
+            .sheet(item: $activeMealPDF) { item in
+                PDFShareSheet(url: item.url)
+            }
         }
+    }
+
+    private func resetCurrentMealForNextImage() {
+        mealPhotoData = Data()
+        mealEstimateData = Data()
+        selectedMealPhoto = nil
+        estimateError = ""
+        saveMessage = ""
+        hasSavedCurrentMeal = false
+        isEstimating = false
+    }
+
+    private func syncSavedMealHistoryIfNeeded() {
+        let meals = savedMealHistory
+        guard !meals.isEmpty else { return }
+        syncSavedMeals(meals, showFailure: true)
     }
 
     private var mealEstimate: MealNutritionEstimate? {
         guard !mealEstimateData.isEmpty else { return nil }
         return try? JSONDecoder().decode(MealNutritionEstimate.self, from: mealEstimateData)
+    }
+
+    private var savedMealHistory: [SavedMealEstimate] {
+        guard !savedMealHistoryData.isEmpty,
+              let savedMeals = try? JSONDecoder().decode([SavedMealEstimate].self, from: savedMealHistoryData) else {
+            return []
+        }
+
+        return savedMeals.sorted { $0.savedAt > $1.savedAt }
     }
 
     private func loadSelectedMealPhoto() async {
@@ -4162,6 +6428,8 @@ struct NutrientView: View {
                 mealPhotoData = data
                 mealEstimateData = Data()
                 estimateError = ""
+                saveMessage = ""
+                hasSavedCurrentMeal = false
             }
         } catch {
             // Photo selection is user-driven; keeping the existing photo avoids data loss.
@@ -4173,6 +6441,8 @@ struct NutrientView: View {
 
         isEstimating = true
         estimateError = ""
+        saveMessage = ""
+        hasSavedCurrentMeal = false
 
         Task {
             do {
@@ -4190,6 +6460,85 @@ struct NutrientView: View {
                 }
             }
         }
+    }
+
+    private func saveCurrentMeal(_ estimate: MealNutritionEstimate) {
+        guard !mealPhotoData.isEmpty else { return }
+        guard !hasSavedCurrentMeal else { return }
+
+        var savedMeals = savedMealHistory
+        let savedImageData = savedMealImageData()
+        savedMeals.insert(
+            SavedMealEstimate(
+                savedAt: Date(),
+                imageData: savedImageData,
+                estimate: estimate
+            ),
+            at: 0
+        )
+
+        if let data = try? JSONEncoder().encode(savedMeals) {
+            savedMealHistoryData = data
+            saveMessage = "Meal saved to history."
+            hasSavedCurrentMeal = true
+            syncSavedMeals(savedMeals, showFailure: true)
+            mealPhotoData = Data()
+            mealEstimateData = Data()
+            selectedMealPhoto = nil
+        } else {
+            saveMessage = "Unable to save this meal."
+        }
+    }
+
+    private func exportCurrentMealPDF(_ estimate: MealNutritionEstimate) {
+        guard !mealPhotoData.isEmpty,
+              let url = MealPDFExporter.export(imageData: mealPhotoData, estimate: estimate, savedAt: Date()) else {
+            saveMessage = "Unable to create PDF."
+            return
+        }
+
+        activeMealPDF = MealPDFShareItem(url: url)
+    }
+
+    private func syncSavedMeals(_ savedMeals: [SavedMealEstimate], showFailure: Bool = false) {
+        guard !savedMeals.isEmpty else { return }
+
+        let backendMeals = savedMeals.map { meal in
+            SavedMealEstimate(
+                id: meal.id,
+                savedAt: meal.savedAt,
+                imageData: Data(),
+                estimate: meal.estimate
+            )
+        }
+
+        Task {
+            do {
+                try await AuthAPI().syncAppData(
+                    userId: user.id,
+                    childProfile: nil,
+                    healthLogs: nil,
+                    savedMeals: backendMeals
+                )
+                print("Saved nutrient meals synced for user \(user.id). Meals: \(backendMeals.count)")
+            } catch {
+                if showFailure {
+                    await MainActor.run {
+                        saveMessage = "Meal saved on this phone, but backend sync failed. Make sure the server is running on port 3002."
+                    }
+                }
+                print("Saved nutrient meals sync failed for user \(user.id): \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func savedMealImageData() -> Data {
+        if let image = UIImage(data: mealPhotoData),
+           let jpegData = image.resizedForMealAnalysis(maxDimension: 900).jpegData(compressionQuality: 0.72) {
+            return jpegData
+        }
+
+        return mealPhotoData
     }
 
     private func mealImageDataURL() -> String {
@@ -4263,6 +6612,152 @@ struct MealNutritionEstimate: Codable {
         summary = try container.decodeIfPresent(String.self, forKey: .summary) ?? "This is a photo-based meal estimate."
         recommendations = try container.decodeIfPresent([String].self, forKey: .recommendations) ?? []
         notes = try container.decodeIfPresent([String].self, forKey: .notes) ?? []
+    }
+}
+
+struct SavedMealEstimate: Codable, Identifiable {
+    let id: UUID
+    let savedAt: Date
+    let imageData: Data
+    let estimate: MealNutritionEstimate
+
+    init(id: UUID = UUID(), savedAt: Date, imageData: Data, estimate: MealNutritionEstimate) {
+        self.id = id
+        self.savedAt = savedAt
+        self.imageData = imageData
+        self.estimate = estimate
+    }
+}
+
+struct MealPDFShareItem: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+struct PDFShareSheet: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {
+    }
+}
+
+enum MealPDFExporter {
+    static func export(imageData: Data, estimate: MealNutritionEstimate, savedAt: Date) -> URL? {
+        let fileName = "Meal-Nutrition-\(Int(savedAt.timeIntervalSince1970)).pdf"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+        let pageRect = CGRect(x: 0, y: 0, width: 612, height: 792)
+        let renderer = UIGraphicsPDFRenderer(bounds: pageRect)
+
+        do {
+            try renderer.writePDF(to: url) { context in
+                context.beginPage()
+
+                var y: CGFloat = 36
+                y += drawText(
+                    "Meal Nutrition Estimate",
+                    in: CGRect(x: 36, y: y, width: 540, height: 40),
+                    font: .boldSystemFont(ofSize: 24),
+                    color: UIColor(red: 0.12, green: 0.17, blue: 0.16, alpha: 1)
+                ) + 8
+
+                y += drawText(
+                    savedAt.formatted(date: .complete, time: .shortened),
+                    in: CGRect(x: 36, y: y, width: 540, height: 28),
+                    font: .systemFont(ofSize: 12, weight: .semibold),
+                    color: .secondaryLabel
+                ) + 16
+
+                if let image = UIImage(data: imageData) {
+                    let imageRect = aspectFitRect(for: image.size, in: CGRect(x: 36, y: y, width: 260, height: 210))
+                    image.draw(in: imageRect)
+                }
+
+                let metrics = [
+                    "Calories: \(estimate.calories) kcal",
+                    "Protein: \(estimate.protein) g",
+                    "Carbs: \(estimate.carbs) g",
+                    "Fat: \(estimate.fat) g",
+                    "Fiber: \(estimate.fiber) g",
+                    "Sugar: \(estimate.sugar) g",
+                    "Confidence: \(estimate.confidence)"
+                ].joined(separator: "\n")
+
+                _ = drawText(
+                    metrics,
+                    in: CGRect(x: 320, y: y, width: 256, height: 210),
+                    font: .systemFont(ofSize: 14, weight: .semibold),
+                    color: .label
+                )
+                y += 230
+
+                y += drawSection(title: "Summary", body: estimate.summary, y: y, pageWidth: pageRect.width) + 12
+                y += drawSection(title: "Recommendations", body: bulletList(estimate.recommendations), y: y, pageWidth: pageRect.width) + 12
+                _ = drawSection(title: "Notes", body: bulletList(estimate.notes), y: y, pageWidth: pageRect.width)
+            }
+
+            return url
+        } catch {
+            return nil
+        }
+    }
+
+    private static func drawSection(title: String, body: String, y: CGFloat, pageWidth: CGFloat) -> CGFloat {
+        var currentY = y
+        currentY += drawText(
+            title,
+            in: CGRect(x: 36, y: currentY, width: pageWidth - 72, height: 24),
+            font: .boldSystemFont(ofSize: 15),
+            color: UIColor(red: 0.12, green: 0.17, blue: 0.16, alpha: 1)
+        ) + 6
+
+        currentY += drawText(
+            body.isEmpty ? "No information available." : body,
+            in: CGRect(x: 36, y: currentY, width: pageWidth - 72, height: 140),
+            font: .systemFont(ofSize: 12, weight: .medium),
+            color: .label
+        )
+
+        return currentY - y
+    }
+
+    private static func drawText(_ text: String, in rect: CGRect, font: UIFont, color: UIColor) -> CGFloat {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 4
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: color,
+            .paragraphStyle: paragraph
+        ]
+        let attributedText = NSAttributedString(string: text, attributes: attributes)
+        let neededRect = attributedText.boundingRect(
+            with: CGSize(width: rect.width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            context: nil
+        )
+        attributedText.draw(in: CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: min(rect.height, ceil(neededRect.height))))
+        return min(rect.height, ceil(neededRect.height))
+    }
+
+    private static func bulletList(_ items: [String]) -> String {
+        guard !items.isEmpty else { return "" }
+        return items.map { "- \($0)" }.joined(separator: "\n")
+    }
+
+    private static func aspectFitRect(for imageSize: CGSize, in boundingRect: CGRect) -> CGRect {
+        guard imageSize.width > 0, imageSize.height > 0 else { return boundingRect }
+        let scale = min(boundingRect.width / imageSize.width, boundingRect.height / imageSize.height)
+        let width = imageSize.width * scale
+        let height = imageSize.height * scale
+        return CGRect(
+            x: boundingRect.midX - width / 2,
+            y: boundingRect.midY - height / 2,
+            width: width,
+            height: height
+        )
     }
 }
 
@@ -4399,6 +6894,145 @@ struct MealNutritionEstimateView: View {
     }
 }
 
+struct MealHistoryView: View {
+    let savedMeals: [SavedMealEstimate]
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 12),
+        GridItem(.flexible(), spacing: 12)
+    ]
+
+    var body: some View {
+        ScrollView {
+            if savedMeals.isEmpty {
+                VStack(spacing: 14) {
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.system(size: 42, weight: .semibold))
+                        .foregroundStyle(AppTheme.accent)
+
+                    Text("No saved meals yet")
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(AppTheme.text)
+
+                    Text("Saved nutrient estimates will appear here.")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 80)
+            } else {
+                LazyVGrid(columns: columns, spacing: 12) {
+                    ForEach(savedMeals) { meal in
+                        NavigationLink {
+                            MealHistoryDetailView(savedMeal: meal)
+                        } label: {
+                            MealHistoryThumbnail(savedMeal: meal)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(20)
+            }
+        }
+        .background(AppTheme.background.ignoresSafeArea())
+        .navigationTitle("Meal History")
+    }
+}
+
+struct MealHistoryThumbnail: View {
+    let savedMeal: SavedMealEstimate
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let image = UIImage(data: savedMeal.imageData) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(height: 150)
+                    .frame(maxWidth: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            } else {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(AppTheme.fieldBackground)
+                    .frame(height: 150)
+                    .overlay {
+                        Image(systemName: "fork.knife")
+                            .font(.title2.weight(.bold))
+                            .foregroundStyle(AppTheme.accent)
+                    }
+            }
+
+            Text(savedMeal.savedAt.formatted(date: .abbreviated, time: .shortened))
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+
+            Text("\(savedMeal.estimate.calories) kcal")
+                .font(.headline.weight(.bold))
+                .foregroundStyle(AppTheme.text)
+        }
+        .padding(10)
+        .background(.white)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(color: .black.opacity(0.05), radius: 10, x: 0, y: 6)
+    }
+}
+
+struct MealHistoryDetailView: View {
+    let savedMeal: SavedMealEstimate
+    @State private var activeMealPDF: MealPDFShareItem?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if let image = UIImage(data: savedMeal.imageData) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 250)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                }
+
+                Text(savedMeal.savedAt.formatted(date: .complete, time: .shortened))
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.secondary)
+
+                Button {
+                    exportSavedMealPDF()
+                } label: {
+                    Label("Export as PDF", systemImage: "doc.richtext.fill")
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(AppTheme.accent)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+
+                MealNutritionEstimateView(estimate: savedMeal.estimate)
+            }
+            .padding(20)
+        }
+        .background(AppTheme.background.ignoresSafeArea())
+        .navigationTitle("Meal Details")
+        .sheet(item: $activeMealPDF) { item in
+            PDFShareSheet(url: item.url)
+        }
+    }
+
+    private func exportSavedMealPDF() {
+        guard let url = MealPDFExporter.export(
+            imageData: savedMeal.imageData,
+            estimate: savedMeal.estimate,
+            savedAt: savedMeal.savedAt
+        ) else {
+            return
+        }
+
+        activeMealPDF = MealPDFShareItem(url: url)
+    }
+}
+
 struct MealReportTextSection: View {
     let title: String
     let icon: String
@@ -4452,32 +7086,6 @@ struct MealReportListSection: View {
         .padding(12)
         .background(AppTheme.fieldBackground)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-}
-
-struct CommunityView: View {
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    PageHeader(
-                        icon: "person.3",
-                        title: "Community",
-                        subtitle: "Keep family, providers, school, and support contacts together."
-                    )
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        TrackingRow(title: "Care team", detail: "No provider notes yet", color: AppTheme.accent)
-                        TrackingRow(title: "School support", detail: "No updates yet", color: .blue)
-                        TrackingRow(title: "Family updates", detail: "No updates yet", color: .pink)
-                    }
-                    .authPanel()
-                }
-                .padding(20)
-            }
-            .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle("Community")
-        }
     }
 }
 
@@ -4878,11 +7486,16 @@ struct BasicInfoView: View {
         )
 
         Task {
-            try? await AuthAPI().syncAppData(
-                userId: user.id,
-                childProfile: profile,
-                healthLogs: nil
-            )
+            do {
+                try await AuthAPI().syncAppData(
+                    userId: user.id,
+                    childProfile: profile,
+                    healthLogs: nil
+                )
+                print("Child profile synced for user \(user.id).")
+            } catch {
+                print("Child profile sync failed for user \(user.id): \(error.localizedDescription)")
+            }
         }
     }
 }

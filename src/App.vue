@@ -1,5 +1,5 @@
 <script setup>
-import { Flower, Palette, Pencil, Plus, Trash2 } from '@lucide/vue';
+import { Ban, ChevronLeft, ChevronRight, Flower, Palette, Pencil, Plus, ShieldCheck, Trash2 } from '@lucide/vue';
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 
 const currentPath = ref(window.location.pathname);
@@ -8,15 +8,13 @@ const signupForm = ref({
   nickname: '',
   email: '',
   password: '',
-  verifyPassword: '',
-  role: 'parent'
+  verifyPassword: ''
 });
 const createUserForm = ref({
   nickname: '',
   email: '',
   password: '',
-  verifyPassword: '',
-  role: 'patient'
+  verifyPassword: ''
 });
 const editUserForm = ref({
   id: null,
@@ -41,8 +39,7 @@ const editUserStatus = ref('');
 const profileMessage = ref('');
 const profileStatus = ref('');
 const deleteUserMessage = ref('');
-const rolesMessage = ref('');
-const rolesStatus = ref('');
+const blockUserMessage = ref('');
 const savedTheme = localStorage.getItem('carePortalTheme');
 const currentTheme = ref(savedTheme || 'green');
 const isThemeMenuOpen = ref(false);
@@ -53,6 +50,7 @@ const isLoadingUsers = ref(false);
 const isCreateUserOpen = ref(false);
 const isEditUserOpen = ref(false);
 const isDeleteUserOpen = ref(false);
+const isBlockUserOpen = ref(false);
 const isParentDetailOpen = ref(false);
 const isCropperOpen = ref(false);
 const isCropDragging = ref(false);
@@ -60,12 +58,17 @@ const isCreatingUser = ref(false);
 const isSavingUser = ref(false);
 const isSavingProfile = ref(false);
 const isDeletingUser = ref(false);
-const savingRoleUserId = ref(null);
+const isSavingBlockUser = ref(false);
 const userToDelete = ref(null);
+const userToBlock = ref(null);
+const blockMode = ref('indefinite');
+const blockUntilDate = ref(defaultBlockUntilDate());
 const selectedParentUser = ref(null);
 const parentDetail = ref(null);
 const parentDetailMessage = ref('');
 const isLoadingParentDetail = ref(false);
+const parentHistoryDateFilter = ref('');
+const parentHistorySectionFilter = ref('all');
 const isBusy = ref(false);
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || '';
 const maxProfileImageSize = 5 * 1024 * 1024;
@@ -83,6 +86,101 @@ const clockTime = ref({
   date: ''
 });
 const canManageUsers = computed(() => loggedInUser.value?.role === 'admin');
+const blockUntilDateLabel = computed(() => {
+  const date = inputDateToLocalDate(blockUntilDate.value);
+
+  if (!date) return 'Choose a date';
+
+  return date.toLocaleDateString(undefined, {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric'
+  });
+});
+const blockLengthText = computed(() => {
+  const date = inputDateToLocalDate(blockUntilDate.value);
+  if (!date) return 'Choose a valid date.';
+
+  const today = startOfDay(new Date());
+  const endDate = startOfDay(date);
+  const dayCount = Math.ceil((endDate.getTime() - today.getTime()) / (24 * 60 * 60 * 1000));
+
+  if (dayCount < 1) {
+    return 'Choose a future date.';
+  }
+
+  if (dayCount >= 14) {
+    const weekCount = Math.floor(dayCount / 7);
+    const remainingDays = dayCount % 7;
+    return `Blocked for ${weekCount} week${weekCount === 1 ? '' : 's'}${remainingDays ? ` and ${remainingDays} day${remainingDays === 1 ? '' : 's'}` : ''}.`;
+  }
+
+  return `Blocked for ${dayCount} day${dayCount === 1 ? '' : 's'}.`;
+});
+const filteredParentHistoryLogs = computed(() => {
+  const logs = parentDetail.value?.healthLogs || [];
+  const selectedDate = parentHistoryDateFilter.value;
+
+  return logs
+    .filter((log) => !selectedDate || logDateInputValue(log.timestamp) === selectedDate)
+    .slice()
+    .sort((left, right) => logTimestampMs(right.timestamp) - logTimestampMs(left.timestamp));
+});
+const filteredParentSavedMeals = computed(() => {
+  const savedMeals = parentDetail.value?.savedMeals || [];
+  const selectedDate = parentHistoryDateFilter.value;
+
+  return savedMeals
+    .filter((meal) => !selectedDate || logDateInputValue(meal.savedAt) === selectedDate)
+    .slice()
+    .sort((left, right) => logTimestampMs(right.savedAt) - logTimestampMs(left.savedAt));
+});
+const parentHistorySections = computed(() => {
+  const sectionMap = new Map();
+
+  filteredParentHistoryLogs.value.forEach((log) => {
+    const key = historySectionKey(log);
+    if (!sectionMap.has(key)) {
+      sectionMap.set(key, {
+        key,
+        title: historySectionTitle(log),
+        icon: historySectionIcon(key),
+        logs: []
+      });
+    }
+
+    sectionMap.get(key).logs.push(log);
+  });
+
+  if (filteredParentSavedMeals.value.length) {
+    sectionMap.set('nutrition', {
+      key: 'nutrition',
+      title: 'Nutrition',
+      icon: historySectionIcon('nutrition'),
+      logs: [],
+      meals: filteredParentSavedMeals.value
+    });
+  }
+
+  return Array.from(sectionMap.values()).sort((left, right) => {
+    const preferredOrder = ['nutrition', 'medicine', 'sleep', 'seizure'];
+    const leftIndex = preferredOrder.indexOf(left.key);
+    const rightIndex = preferredOrder.indexOf(right.key);
+
+    if (leftIndex !== -1 || rightIndex !== -1) {
+      return (leftIndex === -1 ? 99 : leftIndex) - (rightIndex === -1 ? 99 : rightIndex);
+    }
+
+    return left.title.localeCompare(right.title);
+  });
+});
+const visibleParentHistorySections = computed(() => {
+  if (parentHistorySectionFilter.value === 'all') {
+    return parentHistorySections.value;
+  }
+
+  return parentHistorySections.value.filter((section) => section.key === parentHistorySectionFilter.value);
+});
 let cropImageElement;
 let cropDragStart = {
   pointerX: 0,
@@ -96,36 +194,16 @@ const page = computed(() => {
     if (!loggedInUser.value) return 'login';
     return canManageUsers.value ? 'users' : 'welcome';
   }
-  if (currentPath.value === '/roles') {
-    if (!loggedInUser.value) return 'login';
-    return canManageUsers.value ? 'roles' : 'welcome';
-  }
   if (currentPath.value === '/profile') {
     return loggedInUser.value ? 'profile' : 'login';
   }
   if (currentPath.value === '/welcome' || currentPath.value === '/home') {
-    return loggedInUser.value ? 'users' : 'login';
+    return loggedInUser.value ? 'welcome' : 'login';
   }
   if (currentPath.value === '/login') return 'login';
   if (currentPath.value === '/signup') return 'login';
-  return loggedInUser.value ? 'users' : 'home';
+  return loggedInUser.value ? 'welcome' : 'home';
 });
-
-const roleOptions = [
-  { value: 'patient', label: 'Patient' },
-  { value: 'parent', label: 'Parent' },
-  { value: 'caregiver', label: 'Caregiver' },
-  { value: 'doctor', label: 'Doctor' },
-  { value: 'admin', label: 'Admin' }
-];
-
-const roleImportance = {
-  admin: 1,
-  doctor: 2,
-  caregiver: 3,
-  parent: 4,
-  patient: 5
-};
 
 const themeOptions = [
   { value: 'green', label: 'Green', color: '#27695d' },
@@ -176,19 +254,8 @@ function isValidPassword(password) {
 
 function sortUsersByImportance(userList) {
   return [...userList].sort((firstUser, secondUser) => {
-    const firstRank = roleImportance[firstUser.role] || 99;
-    const secondRank = roleImportance[secondUser.role] || 99;
-
-    if (firstRank !== secondRank) {
-      return firstRank - secondRank;
-    }
-
     return String(firstUser.nickname || '').localeCompare(String(secondUser.nickname || ''));
   });
-}
-
-function roleClass(role) {
-  return `role-${roleImportance[role] ? role : 'default'}`;
 }
 
 function clamp(value, min, max) {
@@ -200,8 +267,7 @@ function resetCreateUserForm() {
     nickname: '',
     email: '',
     password: '',
-    verifyPassword: '',
-    role: 'patient'
+    verifyPassword: ''
   };
 }
 
@@ -239,17 +305,238 @@ function hasChildInfo(childProfile = {}) {
   return childInfoRows(childProfile).some((row) => String(row.value || '').trim());
 }
 
-function formatLogTimestamp(timestamp) {
+function normalizedLogTimestamp(timestamp) {
   if (!timestamp) return '';
-  const normalizedTimestamp = typeof timestamp === 'number' && timestamp < 100000000000
-    ? timestamp * 1000
+
+  if (typeof timestamp !== 'number') {
+    return timestamp;
+  }
+
+  const swiftReferenceDateOffsetSeconds = 978307200;
+  const timestampSeconds = timestamp < 1000000000
+    ? timestamp + swiftReferenceDateOffsetSeconds
     : timestamp;
+
+  return timestampSeconds < 100000000000
+    ? timestampSeconds * 1000
+    : timestampSeconds;
+}
+
+function logDate(timestamp) {
+  const normalizedTimestamp = normalizedLogTimestamp(timestamp);
+  if (!normalizedTimestamp) return null;
+
   const date = new Date(normalizedTimestamp);
-  return Number.isNaN(date.getTime()) ? timestamp : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function logTimestampMs(timestamp) {
+  return logDate(timestamp)?.getTime() || 0;
+}
+
+function logDateInputValue(timestamp) {
+  const date = logDate(timestamp);
+  if (!date) return '';
+
+  return dateInputValue(date);
+}
+
+function dateInputValue(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function defaultBlockUntilDate() {
+  const date = new Date();
+  date.setDate(date.getDate() + 7);
+  return dateInputValue(date);
+}
+
+function inputDateToLocalDate(value) {
+  if (!value) return null;
+
+  const [year, month, day] = value.split('-').map(Number);
+  if (!year || !month || !day) return null;
+
+  return new Date(year, month - 1, day);
+}
+
+function startOfDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function shiftParentHistoryDate(dayOffset) {
+  const selectedDate = parentHistoryDateFilter.value || dateInputValue(new Date());
+  const [year, month, day] = selectedDate.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+
+  if (Number.isNaN(date.getTime())) {
+    parentHistoryDateFilter.value = dateInputValue(new Date());
+    return;
+  }
+
+  date.setDate(date.getDate() + dayOffset);
+  parentHistoryDateFilter.value = dateInputValue(date);
+}
+
+function formatDateInputLabel(dateValue) {
+  if (!dateValue) return '';
+  const [year, month, day] = dateValue.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+  return date.toLocaleDateString(undefined, {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric'
+  });
+}
+
+function formatLogTimestamp(timestamp) {
+  const date = logDate(timestamp);
+  return date ? date.toLocaleString() : timestamp;
+}
+
+function formatLogTime(timestamp) {
+  const date = logDate(timestamp);
+  return date
+    ? date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+    : '';
 }
 
 function logTypeLabel(log) {
   return log?.type === 'snapshot' ? 'Daily Snapshot' : 'Quick Log';
+}
+
+function historySectionKey(log) {
+  const category = String(log?.categoryID || '').toLowerCase();
+  const title = String(log?.title || '').toLowerCase();
+
+  if (category === 'medsfood' || category === 'medicine' || title.includes('medicine')) return 'medicine';
+  if (category === 'sleep' || title.includes('sleep')) return 'sleep';
+  if (category === 'seizure' || title.includes('seizure')) return 'seizure';
+  return category || title.replace(/\s+/g, '-') || 'other';
+}
+
+function historySectionTitle(log) {
+  const key = historySectionKey(log);
+
+  if (key === 'medicine') return 'Medicine';
+  if (key === 'sleep') return 'Sleep & Rest';
+  if (key === 'seizure') return 'Seizure';
+  return log?.title || 'Other';
+}
+
+function historySectionIcon(key) {
+  const icons = {
+    medicine: '💊',
+    sleep: '🌙',
+    seizure: '⏱️',
+    pain: '📍',
+    bowel: '🚽',
+    therapy: '🧩',
+    nutrition: '🍽️'
+  };
+
+  return icons[key] || '📌';
+}
+
+function historySectionCount(section) {
+  return (section?.logs?.length || 0) + (section?.meals?.length || 0);
+}
+
+function savedMealMetricText(meal) {
+  const estimate = meal?.estimate || {};
+  const pieces = [];
+
+  if (Number.isFinite(Number(estimate.calories))) pieces.push(`${estimate.calories} kcal`);
+  if (Number.isFinite(Number(estimate.protein))) pieces.push(`${estimate.protein}g protein`);
+  if (Number.isFinite(Number(estimate.carbs))) pieces.push(`${estimate.carbs}g carbs`);
+  if (Number.isFinite(Number(estimate.fat))) pieces.push(`${estimate.fat}g fat`);
+
+  return pieces.join(' · ') || 'No nutrient totals saved.';
+}
+
+function savedMealList(items) {
+  return Array.isArray(items) ? items.filter(Boolean) : [];
+}
+
+function medicineRows(log) {
+  const sourceText = String(log?.comments || log?.value || '').trim();
+  if (!sourceText) return [];
+
+  const rows = [];
+  let currentTime = formatLogTime(log.timestamp);
+
+  sourceText
+    .split(/\n/)
+    .flatMap((line) => line.split(';'))
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .forEach((part) => {
+      const checkedMatch = part.match(/^(.*?)(Checked|Not checked)\s*-\s*(.+)$/i);
+      if (!checkedMatch) return;
+
+      const timePrefix = checkedMatch[1].trim().replace(/:\s*$/, '');
+      if (timePrefix) {
+        currentTime = timePrefix;
+      }
+
+      rows.push({
+        time: currentTime,
+        checked: checkedMatch[2].toLowerCase() === 'checked',
+        name: checkedMatch[3].trim()
+      });
+    });
+
+  return rows;
+}
+
+function summarizedMedicineRows(logs) {
+  const rowsByMedication = new Map();
+
+  logs.forEach((log) => {
+    medicineRows(log).forEach((row) => {
+      const key = `${row.name.toLowerCase()}|${row.time.toLowerCase()}`;
+      const editTime = formatLogTime(log.timestamp);
+
+      if (!rowsByMedication.has(key)) {
+        rowsByMedication.set(key, {
+          name: row.name,
+          time: row.time,
+          checked: row.checked,
+          editTimes: []
+        });
+      }
+
+      const savedRow = rowsByMedication.get(key);
+      if (!savedRow.editTimes.includes(editTime)) {
+        savedRow.editTimes.push(editTime);
+      }
+    });
+  });
+
+  return Array.from(rowsByMedication.values()).sort((left, right) => {
+    const doseOrder = {
+      morning: 0,
+      noon: 1,
+      evening: 2
+    };
+    const leftOrder = doseOrder[left.time.toLowerCase()] ?? 99;
+    const rightOrder = doseOrder[right.time.toLowerCase()] ?? 99;
+
+    return leftOrder - rightOrder || left.name.localeCompare(right.name);
+  });
+}
+
+function logHasIntensityBar(log) {
+  const severity = Number(log?.severity);
+  const noIntensityCategories = new Set(['sleep', 'seizure', 'medsFood', 'medicine']);
+
+  return Number.isFinite(severity)
+    && severity >= 1
+    && severity <= 5
+    && !noIntensityCategories.has(log?.categoryID);
 }
 
 function syncProfileForm() {
@@ -281,10 +568,8 @@ function goTo(path) {
   profileMessage.value = '';
   profileStatus.value = '';
   deleteUserMessage.value = '';
-  rolesMessage.value = '';
-  rolesStatus.value = '';
 
-  if ((path === '/users' || path === '/roles') && canManageUsers.value) {
+  if ((path === '/welcome' || path === '/users') && canManageUsers.value) {
     loadUsers();
   }
 
@@ -297,7 +582,7 @@ function goTo(path) {
 window.addEventListener('popstate', () => {
   currentPath.value = window.location.pathname;
 
-  if ((currentPath.value === '/users' || currentPath.value === '/roles') && canManageUsers.value) {
+  if (currentPath.value === '/users' && canManageUsers.value) {
     loadUsers();
   }
 
@@ -334,7 +619,7 @@ async function submitLogin() {
     if (response.ok) {
       saveLoggedInUser(data.user);
       loginForm.value = { username: '', password: '' };
-      goTo('/users');
+      goTo('/welcome');
       return;
     }
 
@@ -363,8 +648,8 @@ async function loadAdminSession() {
     syncProfileForm();
 
     if (currentPath.value === '/' || currentPath.value === '/login' || currentPath.value === '/signup') {
-      goTo('/users');
-    } else if ((currentPath.value === '/users' || currentPath.value === '/roles') && canManageUsers.value) {
+      goTo('/welcome');
+    } else if (currentPath.value === '/users' && canManageUsers.value) {
       loadUsers();
     }
   } catch {
@@ -412,7 +697,6 @@ async function loadCurrentUser() {
 async function loadUsers() {
   isLoadingUsers.value = true;
   usersMessage.value = '';
-  rolesMessage.value = '';
 
   try {
     const response = await apiFetch('/api/admin/app-users');
@@ -420,61 +704,16 @@ async function loadUsers() {
 
     if (!response.ok) {
       usersMessage.value = data.message;
-      rolesStatus.value = 'error';
-      rolesMessage.value = data.message;
       users.value = [];
       return;
     }
 
-    users.value = sortUsersByImportance(data.users).map((user) => ({
-      ...user,
-      pendingRole: user.role
-    }));
+    users.value = sortUsersByImportance(data.users);
   } catch {
     usersMessage.value = 'Unable to load users from the server.';
-    rolesStatus.value = 'error';
-    rolesMessage.value = 'Unable to load users from the server.';
     users.value = [];
   } finally {
     isLoadingUsers.value = false;
-  }
-}
-
-async function saveUserRole(user) {
-  rolesMessage.value = '';
-  rolesStatus.value = '';
-  savingRoleUserId.value = user.id;
-
-  try {
-    const response = await apiFetch(`/api/users/${user.id}/role`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: user.pendingRole })
-    });
-    const data = await response.json();
-
-    if (!response.ok) {
-      rolesStatus.value = 'error';
-      rolesMessage.value = data.message;
-      return;
-    }
-
-    if (loggedInUser.value?.id === user.id) {
-      saveLoggedInUser({
-        ...loggedInUser.value,
-        role: user.pendingRole
-      });
-    }
-
-    user.role = user.pendingRole;
-    users.value = sortUsersByImportance(users.value);
-    rolesStatus.value = 'success';
-    rolesMessage.value = data.message;
-  } catch {
-    rolesStatus.value = 'error';
-    rolesMessage.value = 'Unable to reach the server.';
-  } finally {
-    savingRoleUserId.value = null;
   }
 }
 
@@ -522,15 +761,44 @@ function closeDeleteUserModal() {
   userToDelete.value = null;
 }
 
+function openBlockUserModal(user) {
+  userToBlock.value = user;
+  blockUserMessage.value = '';
+  blockMode.value = 'indefinite';
+  blockUntilDate.value = defaultBlockUntilDate();
+  isBlockUserOpen.value = true;
+}
+
+function closeBlockUserModal() {
+  isBlockUserOpen.value = false;
+  blockUserMessage.value = '';
+  userToBlock.value = null;
+  blockMode.value = 'indefinite';
+  blockUntilDate.value = defaultBlockUntilDate();
+}
+
 async function openParentDetail(user) {
   selectedParentUser.value = user;
   parentDetail.value = null;
   parentDetailMessage.value = '';
+  parentHistoryDateFilter.value = dateInputValue(new Date());
+  parentHistorySectionFilter.value = 'all';
   isParentDetailOpen.value = true;
   isLoadingParentDetail.value = true;
 
+  await loadParentDetail(user.id);
+}
+
+async function refreshParentDetail() {
+  if (!selectedParentUser.value?.id) return;
+  parentDetailMessage.value = '';
+  isLoadingParentDetail.value = true;
+  await loadParentDetail(selectedParentUser.value.id);
+}
+
+async function loadParentDetail(userId) {
   try {
-    const response = await apiFetch(`/api/admin/app-users/${user.id}/details`);
+    const response = await apiFetch(`/api/admin/app-users/${userId}/details`);
     const data = await response.json();
 
     if (!response.ok) {
@@ -551,6 +819,8 @@ function closeParentDetail() {
   selectedParentUser.value = null;
   parentDetail.value = null;
   parentDetailMessage.value = '';
+  parentHistoryDateFilter.value = '';
+  parentHistorySectionFilter.value = 'all';
 }
 
 async function submitEditUser() {
@@ -857,6 +1127,54 @@ async function confirmDeleteUser() {
   }
 }
 
+async function confirmBlockUser() {
+  if (!userToBlock.value) return;
+
+  isSavingBlockUser.value = true;
+  blockUserMessage.value = '';
+
+  if (!userToBlock.value.isBlocked && blockMode.value === 'duration') {
+    const untilDate = inputDateToLocalDate(blockUntilDate.value);
+
+    if (!untilDate || startOfDay(untilDate) <= startOfDay(new Date())) {
+      blockUserMessage.value = 'Please choose a future unblock date.';
+      isSavingBlockUser.value = false;
+      return;
+    }
+  }
+
+  try {
+    const userId = userToBlock.value.id;
+    const response = await apiFetch(`/api/admin/app-users/${userId}/block`, {
+      method: userToBlock.value.isBlocked ? 'DELETE' : 'PATCH',
+      headers: userToBlock.value.isBlocked ? undefined : { 'Content-Type': 'application/json' },
+      body: userToBlock.value.isBlocked
+        ? undefined
+        : JSON.stringify({
+            mode: blockMode.value,
+            untilDate: blockUntilDate.value
+          })
+    });
+    const data = await response.json();
+
+    if (!response.ok) {
+      blockUserMessage.value = data.message;
+      return;
+    }
+
+    closeBlockUserModal();
+    await loadUsers();
+
+    if (selectedParentUser.value?.id === userId) {
+      await refreshParentDetail();
+    }
+  } catch {
+    blockUserMessage.value = 'Unable to reach the server.';
+  } finally {
+    isSavingBlockUser.value = false;
+  }
+}
+
 async function submitCreateUser() {
   createUserMessage.value = '';
   createUserStatus.value = '';
@@ -955,8 +1273,7 @@ async function submitSignup() {
         nickname: '',
         email: '',
         password: '',
-        verifyPassword: '',
-        role: 'parent'
+        verifyPassword: ''
       };
       loginForm.value = {
         username: createdNickname,
@@ -1026,7 +1343,6 @@ async function submitSignup() {
         <button class="nav-button active" type="button" @click="goTo('/welcome')">Welcome</button>
         <button class="nav-button" type="button" @click="goTo('/profile')">Profile</button>
         <button v-if="canManageUsers" class="nav-button" type="button" @click="goTo('/users')">Users</button>
-        <button v-if="canManageUsers" class="nav-button" type="button" @click="goTo('/roles')">Roles</button>
       </aside>
 
       <section class="workspace">
@@ -1057,14 +1373,27 @@ async function submitSignup() {
         </header>
 
         <section class="table-panel welcome-panel">
-          <p class="eyebrow">Care Portal</p>
-          <h2>Welcome{{ loggedInUser ? `, ${loggedInUser.nickname}` : '' }}</h2>
-          <p class="welcome-copy">
-            You are signed in as a {{ loggedInUser?.role }}. Your account can use the portal welcome area.
-          </p>
-          <div class="welcome-summary">
-            <span class="role-pill">{{ loggedInUser?.role }}</span>
-            <span>Account ready</span>
+          <div class="welcome-hero">
+            <p class="eyebrow">Care Portal Admin</p>
+            <h2>Welcome{{ loggedInUser ? `, ${loggedInUser.nickname}` : '' }}</h2>
+          </div>
+          <div class="welcome-card-grid">
+            <article class="welcome-card">
+              <strong>{{ users.length }}</strong>
+              <span>Synced parent accounts</span>
+            </article>
+            <article class="welcome-card">
+              <strong>{{ clockTime.date }}</strong>
+              <span>Current portal date</span>
+            </article>
+            <article class="welcome-card">
+              <strong>Ready</strong>
+              <span>Admin portal status</span>
+            </article>
+          </div>
+          <div class="actions welcome-actions">
+            <button class="primary-button" type="button" @click="goTo('/users')">View Parent Users</button>
+            <button class="secondary-button" type="button" @click="goTo('/profile')">Edit Profile</button>
           </div>
         </section>
       </section>
@@ -1082,7 +1411,6 @@ async function submitSignup() {
         <button class="nav-button" type="button" @click="goTo('/welcome')">Welcome</button>
         <button class="nav-button active" type="button" @click="goTo('/profile')">Profile</button>
         <button v-if="canManageUsers" class="nav-button" type="button" @click="goTo('/users')">Users</button>
-        <button v-if="canManageUsers" class="nav-button" type="button" @click="goTo('/roles')">Roles</button>
       </aside>
 
       <section class="workspace">
@@ -1135,10 +1463,6 @@ async function submitSignup() {
                 <label>
                   Email
                   <input v-model="profileForm.email" type="email" autocomplete="email" required />
-                </label>
-                <label>
-                  Account Type
-                  <input :value="loggedInUser?.role" disabled />
                 </label>
                 <label>
                   New Password
@@ -1215,7 +1539,6 @@ async function submitSignup() {
         <button class="nav-button" type="button" @click="goTo('/welcome')">Welcome</button>
         <button class="nav-button" type="button" @click="goTo('/profile')">Profile</button>
         <button class="nav-button active" type="button" @click="goTo('/users')">Users</button>
-        <button class="nav-button" type="button" @click="goTo('/roles')">Roles</button>
       </aside>
 
       <section class="workspace">
@@ -1270,14 +1593,13 @@ async function submitSignup() {
                 <tr>
                   <th>Nickname</th>
                   <th>Email</th>
-                  <th>Role</th>
                   <th>Created Time</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-if="!isLoadingUsers && users.length === 0">
-                  <td colspan="5" class="empty-cell">No users found.</td>
+                  <td colspan="4" class="empty-cell">No users found.</td>
                 </tr>
                 <tr v-for="user in users" :key="user.id">
                   <td>
@@ -1289,10 +1611,10 @@ async function submitSignup() {
                       <button class="text-action parent-name-button" type="button" @click="openParentDetail(user)">
                         {{ user.nickname }}
                       </button>
+                      <span v-if="user.isBlocked" class="status-pill blocked">Blocked</span>
                     </div>
                   </td>
                   <td>{{ user.email }}</td>
-                  <td><span class="role-pill" :class="roleClass(user.role)">{{ user.role }}</span></td>
                   <td>{{ user.createdAt }}</td>
                   <td>
                     <div class="row-actions">
@@ -1303,6 +1625,16 @@ async function submitSignup() {
                       <button class="text-action danger" type="button" @click="openDeleteUserModal(user)">
                         <Trash2 :size="16" aria-hidden="true" />
                         <span>Delete</span>
+                      </button>
+                      <button
+                        class="text-action"
+                        :class="{ success: user.isBlocked }"
+                        type="button"
+                        @click="openBlockUserModal(user)"
+                      >
+                        <ShieldCheck v-if="user.isBlocked" :size="16" aria-hidden="true" />
+                        <Ban v-else :size="16" aria-hidden="true" />
+                        <span>{{ user.isBlocked ? 'Unblock' : 'Block' }}</span>
                       </button>
                     </div>
                   </td>
@@ -1317,7 +1649,7 @@ async function submitSignup() {
         </section>
       </section>
 
-      <div v-if="isParentDetailOpen" class="modal-backdrop" @click.self="closeParentDetail">
+      <div v-if="isParentDetailOpen" class="modal-backdrop parent-detail-backdrop" @click.self="closeParentDetail">
         <section class="modal-panel parent-detail-panel" role="dialog" aria-modal="true" aria-labelledby="parent-detail-title">
           <div class="modal-header">
             <div>
@@ -1333,52 +1665,156 @@ async function submitSignup() {
           <p v-if="isLoadingParentDetail" class="message">Loading parent details...</p>
 
           <div v-if="parentDetail && !isLoadingParentDetail" class="parent-detail-grid">
-            <section class="detail-section">
-              <h3>Parent Account</h3>
-              <dl class="detail-list">
-                <div>
-                  <dt>Username</dt>
-                  <dd>{{ parentDetail.user.nickname }}</dd>
-                </div>
-                <div>
-                  <dt>Email</dt>
-                  <dd>{{ parentDetail.user.email }}</dd>
-                </div>
-                <div>
-                  <dt>Created</dt>
-                  <dd>{{ parentDetail.user.createdAt }}</dd>
-                </div>
-                <div>
-                  <dt>Last App Sync</dt>
-                  <dd>{{ parentDetail.appDataUpdatedAt || 'Not synced yet' }}</dd>
-                </div>
-              </dl>
-            </section>
+            <div class="parent-detail-left">
+              <section class="detail-section">
+                <h3>Parent Account</h3>
+                <dl class="detail-list">
+                  <div>
+                    <dt>Username</dt>
+                    <dd>{{ parentDetail.user.nickname }}</dd>
+                  </div>
+                  <div>
+                    <dt>Email</dt>
+                    <dd>{{ parentDetail.user.email }}</dd>
+                  </div>
+                  <div>
+                    <dt>Created</dt>
+                    <dd>{{ parentDetail.user.createdAt }}</dd>
+                  </div>
+                  <div>
+                    <dt>Last App Sync</dt>
+                    <dd>{{ parentDetail.appDataUpdatedAt || 'Not synced yet' }}</dd>
+                  </div>
+                </dl>
+              </section>
 
-            <section class="detail-section">
-              <h3>Child Information</h3>
-              <div v-if="hasChildInfo(parentDetail.childProfile)" class="detail-list">
-                <div v-for="row in childInfoRows(parentDetail.childProfile)" :key="row.label">
-                  <dt>{{ row.label }}</dt>
-                  <dd>{{ row.value || '' }}</dd>
+              <section class="detail-section">
+                <h3>Child Information</h3>
+                <div v-if="hasChildInfo(parentDetail.childProfile)" class="detail-list">
+                  <div v-for="row in childInfoRows(parentDetail.childProfile)" :key="row.label">
+                    <dt>{{ row.label }}</dt>
+                    <dd>{{ row.value || '' }}</dd>
+                  </div>
+                </div>
+                <p v-else class="empty-note">No child information synced yet.</p>
+              </section>
+            </div>
+
+            <section class="detail-section parent-detail-history">
+              <div class="history-filter-header">
+                <div>
+                  <h3>History</h3>
+                  <p>{{ formatDateInputLabel(parentHistoryDateFilter) }}</p>
+                </div>
+
+                <div class="history-controls">
+                  <button class="refresh-detail-button" type="button" :disabled="isLoadingParentDetail" @click="refreshParentDetail">
+                    Refresh
+                  </button>
+
+                  <label class="date-filter-control">
+                    <span>Date</span>
+                    <div class="date-stepper">
+                      <button type="button" aria-label="Show previous day" @click="shiftParentHistoryDate(-1)">
+                        <ChevronLeft :size="18" />
+                      </button>
+                      <input v-model="parentHistoryDateFilter" type="date" />
+                      <button type="button" aria-label="Show next day" @click="shiftParentHistoryDate(1)">
+                        <ChevronRight :size="18" />
+                      </button>
+                    </div>
+                  </label>
                 </div>
               </div>
-              <p v-else class="empty-note">No child information synced yet.</p>
-            </section>
 
-            <section class="detail-section full-detail-section">
-              <h3>History</h3>
-              <div v-if="parentDetail.healthLogs?.length" class="history-list">
-                <article v-for="log in parentDetail.healthLogs.slice().reverse()" :key="log.id" class="history-item">
-                  <div>
-                    <strong>{{ log.title }}</strong>
-                    <span>{{ logTypeLabel(log) }} · {{ formatLogTimestamp(log.timestamp) }}</span>
+              <div v-if="parentHistorySections.length" class="history-section-tabs">
+                <button
+                  type="button"
+                  :class="{ active: parentHistorySectionFilter === 'all' }"
+                  @click="parentHistorySectionFilter = 'all'"
+                >
+                  All
+                  <span>{{ filteredParentHistoryLogs.length + filteredParentSavedMeals.length }}</span>
+                </button>
+                <button
+                  v-for="section in parentHistorySections"
+                  :key="section.key"
+                  type="button"
+                  :class="{ active: parentHistorySectionFilter === section.key }"
+                  @click="parentHistorySectionFilter = section.key"
+                >
+                  {{ section.icon }} {{ section.title }}
+                  <span>{{ historySectionCount(section) }}</span>
+                </button>
+              </div>
+
+              <div v-if="visibleParentHistorySections.length" class="history-section-list">
+                <article v-for="section in visibleParentHistorySections" :key="section.key" class="history-section-card">
+                  <header>
+                    <div>
+                      <span class="history-section-icon">{{ section.icon }}</span>
+                      <strong>{{ section.title }}</strong>
+                    </div>
+                    <span>{{ historySectionCount(section) }}</span>
+                  </header>
+
+                  <div v-if="section.key === 'medicine'" class="medicine-history-list">
+                    <div v-if="summarizedMedicineRows(section.logs).length" class="medicine-check-grid">
+                      <div v-for="row in summarizedMedicineRows(section.logs)" :key="`${row.time}-${row.name}`" class="medicine-check-row">
+                        <span class="medicine-check-emoji">{{ row.checked ? '✅' : '⬜' }}</span>
+                        <span class="medicine-check-name">
+                          {{ row.name }}
+                          <span class="medicine-edit-times">
+                            <span v-for="editTime in row.editTimes" :key="editTime">({{ editTime }})</span>
+                          </span>
+                        </span>
+                        <time>{{ row.time }}</time>
+                      </div>
+                    </div>
+                    <p v-else class="empty-note">No medicine checklist synced.</p>
                   </div>
-                  <span class="severity-pill">{{ log.severity }}/5</span>
-                  <p v-if="log.value">{{ log.value }}</p>
-                  <p v-if="log.comments">{{ log.comments }}</p>
+
+                  <div v-else-if="section.key === 'nutrition'" class="saved-meal-grid">
+                    <article v-for="meal in section.meals" :key="meal.id || meal.savedAt" class="saved-meal-card">
+                      <div class="saved-meal-body">
+                        <div>
+                          <strong>{{ formatLogTime(meal.savedAt) }}</strong>
+                          <span>AI meal estimate</span>
+                        </div>
+                        <p class="saved-meal-metrics">{{ savedMealMetricText(meal) }}</p>
+                        <p v-if="meal.estimate?.summary">{{ meal.estimate.summary }}</p>
+                        <div v-if="savedMealList(meal.estimate?.recommendations).length" class="saved-meal-list">
+                          <span>Recommendations</span>
+                          <ul>
+                            <li v-for="item in savedMealList(meal.estimate.recommendations)" :key="item">{{ item }}</li>
+                          </ul>
+                        </div>
+                        <div v-if="savedMealList(meal.estimate?.notes).length" class="saved-meal-list">
+                          <span>Notes</span>
+                          <ul>
+                            <li v-for="item in savedMealList(meal.estimate.notes)" :key="item">{{ item }}</li>
+                          </ul>
+                        </div>
+                      </div>
+                    </article>
+                  </div>
+
+                  <div v-else class="compact-history-list">
+                    <div v-for="log in section.logs" :key="log.id" class="compact-history-item">
+                      <div>
+                        <strong>{{ formatLogTime(log.timestamp) }}</strong>
+                        <span>{{ logTypeLabel(log) }}</span>
+                      </div>
+                      <span v-if="logHasIntensityBar(log)" class="severity-pill">{{ log.severity }}/5</span>
+                      <p v-if="log.value">{{ log.value }}</p>
+                      <p v-if="log.comments">{{ log.comments }}</p>
+                    </div>
+                  </div>
                 </article>
               </div>
+              <p v-else-if="parentDetail.healthLogs?.length || parentDetail.savedMeals?.length" class="empty-note">
+                No history for {{ formatDateInputLabel(parentHistoryDateFilter) }}.
+              </p>
               <p v-else class="empty-note">No history synced yet.</p>
             </section>
           </div>
@@ -1428,16 +1864,6 @@ async function submitSignup() {
                 />
               </label>
             </div>
-
-            <fieldset>
-              <legend>Account Type</legend>
-              <div class="role-options">
-                <label v-for="role in roleOptions" :key="role.value" class="role-choice">
-                  <input v-model="createUserForm.role" type="radio" name="create-user-role" :value="role.value" />
-                  <span>{{ role.label }}</span>
-                </label>
-              </div>
-            </fieldset>
 
             <button class="primary-button full" type="submit" :disabled="isCreatingUser">
               {{ isCreatingUser ? 'Creating user...' : 'Create User' }}
@@ -1524,119 +1950,83 @@ async function submitSignup() {
           <p v-if="deleteUserMessage" class="message error">{{ deleteUserMessage }}</p>
         </section>
       </div>
-    </section>
 
-    <section v-else-if="page === 'roles'" class="users-page">
-      <aside class="sidebar">
-        <div class="brand">
-          <div class="brand-mark">CP</div>
-          <div>
-            <strong>Care Portal</strong>
-            <span>Role Access</span>
-          </div>
-        </div>
-        <button class="nav-button" type="button" @click="goTo('/welcome')">Welcome</button>
-        <button class="nav-button" type="button" @click="goTo('/profile')">Profile</button>
-        <button class="nav-button" type="button" @click="goTo('/users')">Users</button>
-        <button class="nav-button active" type="button" @click="goTo('/roles')">Roles</button>
-      </aside>
-
-      <section class="workspace">
-        <header class="workspace-header">
-          <h1>Role Management</h1>
-          <div class="header-actions">
-            <section class="live-clock" aria-label="Live clock">
-              <div class="live-clock-main">
-                <strong>{{ clockTime.hours }}</strong>
-                <span>:</span>
-                <strong>{{ clockTime.minutes }}</strong>
-                <em>{{ clockTime.period }}</em>
-              </div>
-              <div class="live-clock-meta">
-                <span>{{ clockTime.seconds }} sec</span>
-                <span>{{ clockTime.date }}</span>
-              </div>
-            </section>
-            <button v-if="loggedInUser" class="profile-trigger" type="button" @click="goTo('/profile')">
-              <span class="avatar small">
-                <img v-if="loggedInUser.profileImage" :src="loggedInUser.profileImage" alt="" />
-                <span v-else>{{ userInitials(loggedInUser) }}</span>
-              </span>
-              <span>{{ loggedInUser.nickname }}</span>
-            </button>
-            <button class="link-button" type="button" @click="logOut">Log Out</button>
-          </div>
-        </header>
-
-        <section class="table-panel">
-          <div class="table-heading">
+      <div v-if="isBlockUserOpen" class="modal-backdrop" @click.self="closeBlockUserModal">
+        <section class="modal-panel confirm-panel" role="dialog" aria-modal="true" aria-labelledby="block-user-title">
+          <div class="modal-header">
             <div>
-              <p class="eyebrow">System</p>
-              <h2>Edit User Roles</h2>
+              <p class="eyebrow">{{ userToBlock?.isBlocked ? 'Unblock' : 'Block' }}</p>
+              <h2 id="block-user-title">{{ userToBlock?.nickname }}</h2>
             </div>
-            <button class="primary-button compact" type="button" @click="loadUsers" :disabled="isLoadingUsers">
-              {{ isLoadingUsers ? 'Loading...' : 'Refresh' }}
+            <button class="icon-button" type="button" aria-label="Close block popup" @click="closeBlockUserModal">
+              X
             </button>
           </div>
 
-          <p v-if="rolesMessage" class="message" :class="{ error: rolesStatus === 'error' }">
-            {{ rolesMessage }}
-          </p>
+          <template v-if="userToBlock?.isBlocked">
+            <p class="confirm-copy">
+              This parent will be able to log into the simulator app again.
+            </p>
+          </template>
 
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Nickname</th>
-                  <th>Email</th>
-                  <th>Current Role</th>
-                  <th>Change Role</th>
-                  <th>Save</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-if="!isLoadingUsers && users.length === 0">
-                  <td colspan="5" class="empty-cell">No users found.</td>
-                </tr>
-                <tr v-for="user in users" :key="user.id">
-                  <td>
-                    <div class="user-cell">
-                      <span class="avatar tiny">
-                        <img v-if="user.profileImage" :src="user.profileImage" alt="" />
-                        <span v-else>{{ userInitials(user) }}</span>
-                      </span>
-                      <span>{{ user.nickname }}</span>
-                    </div>
-                  </td>
-                  <td>{{ user.email }}</td>
-                  <td><span class="role-pill" :class="roleClass(user.role)">{{ user.role }}</span></td>
-                  <td>
-                    <select v-model="user.pendingRole" class="role-select" :class="roleClass(user.pendingRole)">
-                      <option v-for="role in roleOptions" :key="role.value" :value="role.value">
-                        {{ role.label }}
-                      </option>
-                    </select>
-                  </td>
-                  <td>
-                    <button
-                      class="primary-button compact"
-                      type="button"
-                      :disabled="savingRoleUserId === user.id || user.pendingRole === user.role"
-                      @click="saveUserRole(user)"
-                    >
-                      {{ savingRoleUserId === user.id ? 'Saving...' : 'Save Role' }}
-                    </button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+          <template v-else>
+            <p class="confirm-copy">
+              This keeps the account, but prevents the parent from logging into the simulator app.
+            </p>
+
+            <div class="block-options">
+              <button
+                class="choice-row"
+                :class="{ selected: blockMode === 'indefinite' }"
+                type="button"
+                @click="blockMode = 'indefinite'"
+              >
+                <span>Until unblocked</span>
+                <strong>Admin must unblock</strong>
+              </button>
+
+              <button
+                class="choice-row"
+                :class="{ selected: blockMode === 'duration' }"
+                type="button"
+                @click="blockMode = 'duration'"
+              >
+                <span>Until date</span>
+                <strong>{{ blockUntilDateLabel }}</strong>
+              </button>
+
+              <div v-if="blockMode === 'duration'" class="duration-controls">
+                <label class="date-field">
+                  <span>Unblock date</span>
+                  <input v-model="blockUntilDate" type="date" />
+                </label>
+                <p class="duration-note">{{ blockLengthText }}</p>
+              </div>
+            </div>
+          </template>
+
+          <div class="confirm-actions">
+            <button class="secondary-button compact" type="button" @click="closeBlockUserModal">Cancel</button>
+            <button
+              class="primary-button compact"
+              :class="{ dangerish: !userToBlock?.isBlocked }"
+              type="button"
+              :disabled="isSavingBlockUser"
+              @click="confirmBlockUser"
+            >
+              {{
+                isSavingBlockUser
+                  ? 'Saving...'
+                  : userToBlock?.isBlocked
+                    ? 'Unblock User'
+                    : 'Block User'
+              }}
+            </button>
           </div>
 
-          <div class="table-footer">
-            Total {{ users.length }}
-          </div>
+          <p v-if="blockUserMessage" class="message error">{{ blockUserMessage }}</p>
         </section>
-      </section>
+      </div>
     </section>
 
     <section v-else-if="page === 'login'" class="form-panel">
@@ -1689,16 +2079,6 @@ async function submitSignup() {
             <input v-model="signupForm.verifyPassword" type="password" autocomplete="new-password" required />
           </label>
         </div>
-
-        <fieldset>
-          <legend>Account Type</legend>
-          <div class="role-options">
-            <label v-for="role in roleOptions" :key="role.value" class="role-choice">
-              <input v-model="signupForm.role" type="radio" name="role" :value="role.value" />
-              <span>{{ role.label }}</span>
-            </label>
-          </div>
-        </fieldset>
 
         <button class="primary-button full" type="submit" :disabled="isBusy">
           {{ isBusy ? 'Creating account...' : 'Create Account' }}
