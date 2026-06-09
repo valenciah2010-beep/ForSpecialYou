@@ -47,7 +47,7 @@ final class AuthViewModel: ObservableObject {
 
         guard !loginNickname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !loginPassword.isEmpty else {
-            showError("Please enter your parent username and password.")
+            showError(localizedAppString("Please enter your parent username and password."))
             return
         }
 
@@ -71,22 +71,22 @@ final class AuthViewModel: ObservableObject {
         let email = signupEmail.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
         guard !nickname.isEmpty, !email.isEmpty, !signupPassword.isEmpty, !signupVerifyPassword.isEmpty else {
-            showError("Please fill out every field.")
+            showError(localizedAppString("Please fill out every field."))
             return
         }
 
         guard email.contains("@"), email.contains(".") else {
-            showError("Please enter a valid email address.")
+            showError(localizedAppString("Please enter a valid email address."))
             return
         }
 
         guard signupPassword.count >= 6, signupPassword.contains(where: { $0.isNumber }) else {
-            showError("Password must be at least 6 characters and include one number.")
+            showError(localizedAppString("Password must be at least 6 characters and include one number."))
             return
         }
 
         guard signupPassword == signupVerifyPassword else {
-            showError("Passwords do not match.")
+            showError(localizedAppString("Passwords do not match."))
             return
         }
 
@@ -109,6 +109,26 @@ final class AuthViewModel: ObservableObject {
             screen = .login
         } catch {
             showError(error.localizedDescription)
+        }
+    }
+
+    func validateSavedSession() async {
+        guard let savedUser = currentUser else { return }
+
+        do {
+            let user = try await api.validateSavedSession(userId: savedUser.id)
+            currentUser = user
+            saveUser(user)
+        } catch {
+            if case AuthAPIError.server(let message) = error,
+                message.localizedCaseInsensitiveContains("blocked")
+                    || message.localizedCaseInsensitiveContains("log in again") {
+                logout()
+                showError(localizedServerMessage(message))
+                screen = .login
+            } else {
+                print("Saved session validation failed: \(error.localizedDescription)")
+            }
         }
     }
 

@@ -5,10 +5,13 @@ import UserNotifications
 @main
 struct CarePortalSwiftUIApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @AppStorage(AppLanguage.storageKey) private var languageCode = AppLanguage.english.rawValue
 
     var body: some Scene {
         WindowGroup {
             AuthRootView()
+                .environment(\.locale, AppLanguage(code: languageCode).locale)
+                .id(languageCode)
         }
     }
 }

@@ -18,6 +18,8 @@
 		5C0000010000000000000009 /* AuthComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C0000010000000000000109 /* AuthComponents.swift */; };
 		5C000001000000000000000A /* CarePortalLogo.png in Resources */ = {isa = PBXBuildFile; fileRef = 5C0000010000000000000111 /* CarePortalLogo.png */; };
 		5C000001000000000000000B /* PainLocationBody.jpg in Resources */ = {isa = PBXBuildFile; fileRef = 5C0000010000000000000112 /* PainLocationBody.jpg */; };
+		5C000001000000000000000C /* AppLanguage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C000001000000000000010A /* AppLanguage.swift */; };
+		5C000001000000000000000D /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = 5C0000010000000000000115 /* Localizable.strings */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -31,9 +33,12 @@
 		5C0000010000000000000107 /* SignupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignupView.swift; sourceTree = "<group>"; };
 		5C0000010000000000000108 /* WelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeView.swift; sourceTree = "<group>"; };
 		5C0000010000000000000109 /* AuthComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthComponents.swift; sourceTree = "<group>"; };
+		5C000001000000000000010A /* AppLanguage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLanguage.swift; sourceTree = "<group>"; };
 		5C0000010000000000000110 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		5C0000010000000000000111 /* CarePortalLogo.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = CarePortalLogo.png; sourceTree = "<group>"; };
 		5C0000010000000000000112 /* PainLocationBody.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = PainLocationBody.jpg; sourceTree = "<group>"; };
+		5C0000010000000000000113 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
+		5C0000010000000000000114 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -67,9 +72,11 @@
 				5C0000010000000000000107 /* SignupView.swift */,
 				5C0000010000000000000108 /* WelcomeView.swift */,
 				5C0000010000000000000109 /* AuthComponents.swift */,
+				5C000001000000000000010A /* AppLanguage.swift */,
 				5C0000010000000000000110 /* Info.plist */,
 				5C0000010000000000000111 /* CarePortalLogo.png */,
 				5C0000010000000000000112 /* PainLocationBody.jpg */,
+				5C0000010000000000000115 /* Localizable.strings */,
 			);
 			path = CarePortalSwiftUI;
 			sourceTree = "<group>";
@@ -124,6 +131,7 @@
 			knownRegions = (
 				en,
 				Base,
+				"zh-Hans",
 			);
 			mainGroup = 5C0000010000000000000301;
 			productRefGroup = 5C0000010000000000000303 /* Products */;
@@ -142,6 +150,7 @@
 			files = (
 				5C000001000000000000000A /* CarePortalLogo.png in Resources */,
 				5C000001000000000000000B /* PainLocationBody.jpg in Resources */,
+				5C000001000000000000000D /* Localizable.strings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -161,10 +170,23 @@
 				5C0000010000000000000007 /* SignupView.swift in Sources */,
 				5C0000010000000000000008 /* WelcomeView.swift in Sources */,
 				5C0000010000000000000009 /* AuthComponents.swift in Sources */,
+				5C000001000000000000000C /* AppLanguage.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXVariantGroup section */
+		5C0000010000000000000115 /* Localizable.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				5C0000010000000000000113 /* en */,
+				5C0000010000000000000114 /* zh-Hans */,
+			);
+			name = Localizable.strings;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
 
 /* Begin XCBuildConfiguration section */
 		5C0000010000000000000601 /* Debug */ = {

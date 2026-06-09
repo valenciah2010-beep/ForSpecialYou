@@ -16,11 +16,11 @@ struct AuthTextField: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title)
+            Text(LocalizedStringKey(title))
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(AppTheme.text)
 
-            TextField(title, text: $text)
+            TextField(LocalizedStringKey(title), text: $text)
                 .keyboardType(keyboard)
                 .textContentType(contentType)
                 .textInputAutocapitalization(.never)
@@ -39,11 +39,11 @@ struct AuthSecureField: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title)
+            Text(LocalizedStringKey(title))
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(AppTheme.text)
 
-            SecureField(title, text: $text)
+            SecureField(LocalizedStringKey(title), text: $text)
                 .textContentType(contentType)
                 .padding(14)
                 .background(AppTheme.fieldBackground)
@@ -56,7 +56,7 @@ struct ButtonLabel: View {
     let title: String
 
     var body: some View {
-        Text(title)
+        Text(LocalizedStringKey(title))
             .font(.headline.weight(.bold))
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
@@ -92,4 +92,3 @@ extension View {
             .shadow(color: Color.black.opacity(0.08), radius: 20, x: 0, y: 10)
     }
 }
-

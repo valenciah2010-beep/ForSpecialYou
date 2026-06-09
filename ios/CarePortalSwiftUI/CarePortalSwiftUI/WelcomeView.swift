@@ -16,7 +16,7 @@ struct WelcomeView: View {
                     Label("Health", systemImage: "heart.text.square")
                 }
 
-            TherapyTrackingView()
+            TherapyTrackingView(user: user)
                 .tabItem {
                     Label("Therapy", systemImage: "figure.mind.and.body")
                 }
@@ -37,6 +37,7 @@ struct WelcomeView: View {
 
 struct BasicHealthView: View {
     let user: CarePortalUser
+    @AppStorage(AppLanguage.storageKey) private var languageCode = AppLanguage.english.rawValue
     @AppStorage private var childName: String
     @AppStorage private var birthDate: String
     @AppStorage private var supportNeeds: String
@@ -48,6 +49,7 @@ struct BasicHealthView: View {
     @AppStorage private var healthLogData: Data
     @AppStorage private var medicationData: Data
     @AppStorage private var medicationCheckData: Data
+    @AppStorage private var healthInsightCacheData: Data
     @State private var isQuickLogEditorPresented = false
     @State private var activeLogInput: HealthLogInputTarget?
     @State private var activeSeizureTimer: QuickLogOption?
@@ -58,6 +60,10 @@ struct BasicHealthView: View {
     @State private var activeNutritionSnapshot: SnapshotOption?
     @State private var draggingQuickLogID: String?
     @State private var isSyncingParentAppData = false
+    @State private var healthInsights: [HealthInsight] = []
+    @State private var isLoadingHealthInsights = false
+    @State private var areHealthInsightsUnavailable = false
+    @State private var lastHealthInsightRequestKey: String?
 
     init(user: CarePortalUser) {
         self.user = user
@@ -75,6 +81,7 @@ struct BasicHealthView: View {
         self._healthLogData = AppStorage(wrappedValue: Data(), "health.\(user.id).logData")
         self._medicationData = AppStorage(wrappedValue: Data(), "health.\(user.id).medicationData")
         self._medicationCheckData = AppStorage(wrappedValue: Data(), "health.\(user.id).medicationCheckData")
+        self._healthInsightCacheData = AppStorage(wrappedValue: Data(), "health.\(user.id).insightCacheData")
     }
 
     var body: some View {
@@ -208,20 +215,7 @@ struct BasicHealthView: View {
 
                     DashboardSectionTitle("Insights & Alerts")
 
-                    VStack(spacing: 10) {
-                        InsightCard(
-                            title: "Tip",
-                            message: "\(displayChildName)'s sleep was a little lower than goal. Watch energy and regulation today."
-                        )
-                        InsightCard(
-                            title: "Notice",
-                            message: "Log digestion and meals after school to keep the daily snapshot complete."
-                        )
-                        InsightCard(
-                            title: "Reminder",
-                            message: "Update care notes after therapy if any new support strategies helped."
-                        )
-                    }
+                    insightsAndAlertsSection
                 }
                 .padding(.horizontal, 18)
                 .padding(.top, 16)
@@ -274,6 +268,9 @@ struct BasicHealthView: View {
             .onAppear {
                 syncParentAppData()
                 MedicationReminderScheduler.reschedule(medications: medications)
+            }
+            .task(id: healthInsightRefreshKey) {
+                await refreshHealthInsightsIfNeeded()
             }
         }
     }
@@ -395,11 +392,25 @@ struct BasicHealthView: View {
             return SleepSnapshotSummary(durationText: "Saved", detailText: "Sleep logged")
         }
 
-        let detail = parts.dropFirst().joined(separator: " · ")
+        let detail = parts.dropFirst().map(localizedSleepDetailPart).joined(separator: " · ")
         return SleepSnapshotSummary(
             durationText: duration,
-            detailText: detail.isEmpty ? "Sleep logged" : detail
+            detailText: detail.isEmpty ? localizedAppString("Sleep logged") : detail
         )
+    }
+
+    private func localizedSleepDetailPart(_ part: String) -> String {
+        let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
+        if ["Restless", "Normal", "Deep"].contains(trimmed) {
+            return localizedAppString(trimmed)
+        }
+
+        if trimmed.localizedCaseInsensitiveContains("wake-up") {
+            let countText = trimmed.components(separatedBy: " ").first ?? ""
+            return "\(countText) \(localizedAppString(countText == "1" ? "wake-up" : "wake-ups"))"
+        }
+
+        return localizedAppString(trimmed)
     }
 
     private var todaysSleepEntry: HealthLogEntry? {
@@ -421,6 +432,69 @@ struct BasicHealthView: View {
             .first ?? "Seizure Type"
     }
 
+    private var todaysLogEntries: [HealthLogEntry] {
+        logEntries.filter { Calendar.current.isDateInToday($0.timestamp) }
+    }
+
+    private var completedQuickLogIDsToday: Set<String> {
+        Set(
+            todaysLogEntries
+                .filter { $0.type == .quickLog }
+                .map(\.categoryID)
+        )
+    }
+
+    private var completedSnapshotIDsToday: Set<String> {
+        Set(
+            todaysLogEntries
+                .filter { $0.type == .snapshot }
+                .map(\.categoryID)
+        )
+    }
+
+    private var isDailyHealthComplete: Bool {
+        selectedQuickLogs.allSatisfy { completedQuickLogIDsToday.contains($0.id) }
+            && SnapshotOption.all.allSatisfy { completedSnapshotIDsToday.contains($0.id) }
+    }
+
+    private var healthInsightRefreshKey: String {
+        "\(healthInsightDateKey)-\(isDailyHealthComplete)"
+    }
+
+    private var healthInsightDateKey: String {
+        let components = Calendar.current.dateComponents([.year, .month, .day], from: Date())
+        let dateKey = String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+        return "\(dateKey)-\(languageCode)"
+    }
+
+    @ViewBuilder
+    private var insightsAndAlertsSection: some View {
+        VStack(spacing: 10) {
+            if !isDailyHealthComplete {
+                InsightCard(
+                    title: "Notice",
+                    message: "Complete all quick-log and daily snapshot buttons to get AI insights and alerts."
+                )
+            } else if isLoadingHealthInsights {
+                InsightCard(
+                    title: "AI",
+                    message: "Reviewing today's completed logs for insights and alerts."
+                )
+            } else if areHealthInsightsUnavailable {
+                InsightUnavailableIndicator()
+            } else if healthInsights.isEmpty {
+                InsightCard(
+                    title: "AI",
+                    message: "AI insights and alerts will appear after today's completed logs are reviewed."
+                )
+            } else {
+                ForEach(healthInsights) { insight in
+                    InsightCard(title: insight.title, message: insight.message)
+                }
+            }
+        }
+    }
+
     private func seizureType(from entry: HealthLogEntry) -> String? {
         let parts = entry.value
             .components(separatedBy: "·")
@@ -431,6 +505,79 @@ struct BasicHealthView: View {
         let type = parts[1]
         guard !type.isEmpty, type != "Seizure Type" else { return nil }
         return type
+    }
+
+    @MainActor
+    private func refreshHealthInsightsIfNeeded() async {
+        guard isDailyHealthComplete else {
+            healthInsights = []
+            areHealthInsightsUnavailable = false
+            lastHealthInsightRequestKey = nil
+            return
+        }
+
+        if let cachedInsights = todaysHealthInsightCache {
+            healthInsights = cachedInsights.insights
+            areHealthInsightsUnavailable = cachedInsights.isUnavailable
+            lastHealthInsightRequestKey = healthInsightRefreshKey
+            return
+        }
+
+        let requestKey = healthInsightRefreshKey
+        guard lastHealthInsightRequestKey != requestKey else { return }
+
+        isLoadingHealthInsights = true
+        areHealthInsightsUnavailable = false
+
+        do {
+            let insights = try await AuthAPI().healthInsights(
+                childName: displayChildName,
+                quickLogTitles: selectedQuickLogs.map { localizedAppString($0.title, languageCode: languageCode) },
+                snapshotTitles: SnapshotOption.all.map { localizedAppString($0.title, languageCode: languageCode) },
+                logs: todaysLogEntries.sorted { $0.timestamp < $1.timestamp },
+                language: AppLanguage(code: languageCode).apiName
+            )
+            healthInsights = insights
+            lastHealthInsightRequestKey = requestKey
+            areHealthInsightsUnavailable = false
+            saveHealthInsightCache(
+                HealthInsightDailyCache(
+                    dateKey: healthInsightDateKey,
+                    insights: insights,
+                    isUnavailable: false
+                )
+            )
+        } catch {
+            healthInsights = []
+            areHealthInsightsUnavailable = true
+            lastHealthInsightRequestKey = requestKey
+            saveHealthInsightCache(
+                HealthInsightDailyCache(
+                    dateKey: healthInsightDateKey,
+                    insights: [],
+                    isUnavailable: true
+                )
+            )
+            print("Health insights failed: \(error.localizedDescription)")
+        }
+
+        isLoadingHealthInsights = false
+    }
+
+    private var todaysHealthInsightCache: HealthInsightDailyCache? {
+        guard !healthInsightCacheData.isEmpty,
+              let cache = try? JSONDecoder().decode(HealthInsightDailyCache.self, from: healthInsightCacheData),
+              cache.dateKey == healthInsightDateKey else {
+            return nil
+        }
+
+        return cache
+    }
+
+    private func saveHealthInsightCache(_ cache: HealthInsightDailyCache) {
+        if let data = try? JSONEncoder().encode(cache) {
+            healthInsightCacheData = data
+        }
     }
 
     private func saveLogEntry(_ entry: HealthLogEntry) {
@@ -567,12 +714,12 @@ struct HealthDashboardHeader: View {
             }
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("\(childName)'s Day")
+                Text(String(format: localizedAppString("%@'s Day"), childName))
                     .font(.title3.weight(.bold))
                     .foregroundStyle(AppTheme.text)
                     .lineLimit(1)
 
-                Text("Monitored by \(parentName)")
+                Text(String(format: localizedAppString("Monitored by %@"), parentName))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -612,7 +759,7 @@ struct DashboardSectionTitle: View {
     }
 
     var body: some View {
-        Text(title)
+        Text(LocalizedStringKey(title))
             .font(.headline.weight(.bold))
             .foregroundStyle(AppTheme.text)
             .padding(.top, 2)
@@ -784,6 +931,12 @@ struct HealthLogEntry: Identifiable, Codable {
 struct SleepSnapshotSummary {
     let durationText: String
     let detailText: String
+}
+
+struct HealthInsightDailyCache: Codable {
+    let dateKey: String
+    let insights: [HealthInsight]
+    let isUnavailable: Bool
 }
 
 struct SleepSnapshotEditorTarget: Identifiable {
@@ -1135,7 +1288,7 @@ enum MedicationReminderScheduler {
             .sorted { $0.fireDate < $1.fireDate }
             .map { dose in
                 let content = UNMutableNotificationContent()
-                content.title = "Medicine Reminder"
+                content.title = localizedAppString("Medicine Reminder")
                 content.body = dose.bodyText
                 content.sound = .default
 
@@ -1281,7 +1434,7 @@ struct QuickLogCard: View {
                     .foregroundStyle(.black.opacity(0.82))
                     .frame(height: 30)
 
-                Text(option.title)
+                Text(LocalizedStringKey(option.title))
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(AppTheme.text)
                     .multilineTextAlignment(.center)
@@ -1358,7 +1511,7 @@ struct QuickLogSelectionSheet: View {
                                     .foregroundStyle(option.tint)
                                     .frame(width: 28)
 
-                                Text(option.title)
+                                Text(LocalizedStringKey(option.title))
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(AppTheme.text)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1414,7 +1567,7 @@ struct SnapshotCard: View {
             action()
         } label: {
             VStack(alignment: .leading, spacing: 10) {
-                Text(option.title)
+                Text(LocalizedStringKey(option.title))
                     .font(.caption.weight(.bold))
                     .foregroundStyle(AppTheme.text)
                     .lineLimit(2)
@@ -1431,13 +1584,13 @@ struct SnapshotCard: View {
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(displayValue ?? option.value)
+                    Text(displayValue ?? localizedAppString(option.value))
                         .font(option.id == "sleep" ? .title3.weight(.black) : .caption.weight(.bold))
                         .foregroundStyle(AppTheme.text)
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
 
-                    Text(displayDetail ?? option.detail)
+                    Text(displayDetail ?? localizedAppString(option.detail))
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -1570,7 +1723,7 @@ struct SleepRestSnapshotSheet: View {
                                     VStack(spacing: 6) {
                                         Text(quality.emoji)
                                             .font(.title2)
-                                        Text(quality.title)
+                                        Text(LocalizedStringKey(quality.title))
                                             .font(.caption.weight(.bold))
                                             .foregroundStyle(AppTheme.text)
                                             .lineLimit(1)
@@ -1790,11 +1943,11 @@ struct TimeWheelPicker: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title)
+            Text(LocalizedStringKey(title))
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(AppTheme.text)
 
-            DatePicker(title, selection: $selection, displayedComponents: [.hourAndMinute])
+            DatePicker(LocalizedStringKey(title), selection: $selection, displayedComponents: [.hourAndMinute])
                 .datePickerStyle(.wheel)
                 .labelsHidden()
                 .frame(maxWidth: .infinity)
@@ -1881,9 +2034,9 @@ struct HealthLogEntrySheet: View {
                             .clipShape(Circle())
 
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(target.title)
+                            Text(LocalizedStringKey(target.title))
                                 .font(.title3.weight(.bold))
-                            Text(target.logType == .quickLog ? "Quick log entry" : "Daily snapshot entry")
+                            Text(LocalizedStringKey(target.logType == .quickLog ? "Quick log entry" : "Daily snapshot entry"))
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
                         }
@@ -1903,18 +2056,23 @@ struct HealthLogEntrySheet: View {
                         .opacity(useCurrentTime ? 0.55 : 1)
 
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(target.valuePrompt)
+                            Text(LocalizedStringKey(target.valuePrompt))
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(AppTheme.text)
 
-                            TextField(target.logType == .quickLog ? "Short note" : "Example: 7 hours, normal, 2/5", text: $value)
+                            TextField(
+                                target.logType == .quickLog
+                                    ? localizedAppString("Short note")
+                                    : localizedAppString("Example: 7 hours, normal, 2/5"),
+                                text: $value
+                            )
                                 .padding(12)
                                 .background(AppTheme.fieldBackground)
                                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         }
 
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Severity: \(Int(severity))/5")
+                            Text("\(localizedAppString("Severity")): \(Int(severity))/5")
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(AppTheme.text)
 
@@ -2131,7 +2289,7 @@ struct NutritionGoalSection<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(title)
+            Text(LocalizedStringKey(title))
                 .font(.subheadline.weight(.bold))
                 .foregroundStyle(AppTheme.text)
 
@@ -2149,12 +2307,12 @@ struct NutritionGoalField: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Text(title)
+            Text(LocalizedStringKey(title))
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(AppTheme.text)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            TextField(placeholder, text: $text)
+            TextField(LocalizedStringKey(placeholder), text: $text)
                 .keyboardType(.decimalPad)
                 .multilineTextAlignment(.trailing)
                 .font(.subheadline.weight(.bold))
@@ -2331,7 +2489,7 @@ struct MoodLogSheet: View {
                     .font(.title3.weight(.bold))
                     .foregroundStyle(AppTheme.text)
 
-                Text(MoodValence.title(for: valence))
+                Text(LocalizedStringKey(MoodValence.title(for: valence)))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
@@ -2346,11 +2504,11 @@ struct MoodLogSheet: View {
                 } label: {
                     HStack {
                         VStack(alignment: .leading, spacing: 5) {
-                            Text(kind.rawValue)
+                            Text(LocalizedStringKey(kind.rawValue))
                                 .font(.headline.weight(.bold))
                                 .foregroundStyle(AppTheme.text)
 
-                            Text(kind == .currentEmotion ? currentTimeText : "For the whole day")
+                            Text(kind == .currentEmotion ? currentTimeText : localizedAppString("For the whole day"))
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
                         }
@@ -2376,7 +2534,7 @@ struct MoodLogSheet: View {
 
     private var valenceStep: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(MoodValence.title(for: valence))
+            Text(LocalizedStringKey(MoodValence.title(for: valence)))
                 .font(.title2.weight(.black))
                 .foregroundStyle(AppTheme.text)
 
@@ -2387,7 +2545,7 @@ struct MoodLogSheet: View {
 
     private var wordsStep: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(wordGroup.title)
+            Text(LocalizedStringKey(wordGroup.title))
                 .font(.headline.weight(.bold))
                 .foregroundStyle(AppTheme.text)
 
@@ -2396,7 +2554,7 @@ struct MoodLogSheet: View {
                     Button {
                         toggleWord(word)
                     } label: {
-                        Text(word)
+                        Text(LocalizedStringKey(word))
                             .font(.subheadline.weight(.bold))
                             .foregroundStyle(selectedWords.contains(word) ? .white : AppTheme.text)
                             .padding(.horizontal, 12)
@@ -2502,7 +2660,7 @@ struct MoodValenceSlider: View {
         HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .trailing, spacing: 0) {
                 ForEach(MoodValence.all.reversed()) { mood in
-                    Text(mood.title)
+                    Text(LocalizedStringKey(mood.title))
                         .font(.caption.weight(.bold))
                         .foregroundStyle(value == mood.id ? AppTheme.text : .secondary)
                         .frame(height: barHeight / 7, alignment: .center)
@@ -2945,7 +3103,7 @@ struct MedicineChecklistRow: View {
                     .frame(width: 72, alignment: .leading)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(row.medication.displayName.isEmpty ? "Unnamed Medicine" : row.medication.displayName)
+                    Text(row.medication.displayName.isEmpty ? localizedAppString("Unnamed Medicine") : row.medication.displayName)
                         .font(.subheadline.weight(.bold))
                         .foregroundStyle(AppTheme.text)
 
@@ -3014,7 +3172,7 @@ struct MedicineManagerSheet: View {
                                 Button {
                                     onEdit(medication)
                                 } label: {
-                                    Text(medication.displayName.isEmpty ? "Unnamed Medicine" : medication.displayName)
+                                    Text(medication.displayName.isEmpty ? localizedAppString("Unnamed Medicine") : medication.displayName)
                                         .font(.headline.weight(.semibold))
                                         .foregroundStyle(AppTheme.text)
                                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -3194,7 +3352,7 @@ struct MedicationEditorSheet: View {
                         .background(AppTheme.accent)
                         .clipShape(Circle())
 
-                    Text(draft.medicineType)
+                    Text(LocalizedStringKey(draft.medicineType))
                         .font(.headline.weight(.bold))
                         .foregroundStyle(AppTheme.accent)
                 }
@@ -3251,7 +3409,7 @@ struct MedicationEditorSheet: View {
             } else {
                 ForEach(doseInputs) { input in
                     HStack {
-                        Text(input.label)
+                        Text(LocalizedStringKey(input.label))
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(AppTheme.text)
 
@@ -3471,7 +3629,7 @@ struct MedicationEditorSheet: View {
                 }
 
                 ToolbarItem(placement: .principal) {
-                    Text(draft.legalName.isEmpty ? "Add Medication" : "Edit Medication")
+                    Text(LocalizedStringKey(draft.legalName.isEmpty ? "Add Medication" : "Edit Medication"))
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(AppTheme.text)
                 }
@@ -3702,13 +3860,13 @@ struct MedicationFormMenu: View {
     var body: some View {
         Menu {
             ForEach(options, id: \.self) { option in
-                Button(option) {
+                Button(localizedAppString(option)) {
                     onSelect(option)
                 }
             }
         } label: {
             HStack {
-                Text(value.isEmpty ? title : value)
+                Text(value.isEmpty ? localizedAppString(title) : localizedAppString(value))
                     .font(.headline.weight(.semibold))
                     .foregroundStyle(AppTheme.text)
                     .lineLimit(1)
@@ -3741,7 +3899,7 @@ struct MedicationChoicePill: View {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                     .font(.caption.weight(.bold))
 
-                Text(title)
+                Text(LocalizedStringKey(title))
                     .font(.caption.weight(.bold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
@@ -3769,7 +3927,7 @@ struct PainLogEntrySheet: View {
     @State private var indicators = ""
 
     private var displayLocation: String {
-        painPoints.isEmpty ? "Tap the body to add a pain dot" : "\(painPoints.count) pain location\(painPoints.count == 1 ? "" : "s")"
+        painPoints.isEmpty ? localizedAppString("Tap the body to add a pain dot") : String(format: localizedAppString("%d pain location(s)"), painPoints.count)
     }
 
     var body: some View {
@@ -3783,7 +3941,7 @@ struct PainLogEntrySheet: View {
                         )
 
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Severity: \(Int(severity))/5")
+                            Text("\(localizedAppString("Severity")): \(Int(severity))/5")
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(AppTheme.text)
 
@@ -3898,7 +4056,7 @@ struct PainBodySelector: View {
             VStack(spacing: 10) {
                 Picker("Body side", selection: $selectedSide) {
                     ForEach(PainBodySide.allCases) { side in
-                        Text(side.rawValue).tag(side)
+                        Text(LocalizedStringKey(side.rawValue)).tag(side)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -3925,7 +4083,7 @@ struct PainBodySelector: View {
             .background(AppTheme.fieldBackground)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
-            Text(painPoints.isEmpty ? "Tap directly on the body to mark pain. Maximum 5 dots." : "\(painPoints.count)/5 pain dot\(painPoints.count == 1 ? "" : "s") marked")
+            Text(painPoints.isEmpty ? localizedAppString("Tap directly on the body to mark pain. Maximum 5 dots.") : String(format: localizedAppString("%d/5 pain dot(s) marked"), painPoints.count))
                 .font(.caption.weight(.bold))
                 .foregroundStyle(painPoints.isEmpty ? .secondary : tint)
         }
@@ -3943,7 +4101,7 @@ struct TappablePainBodyMap: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            Text(side.rawValue)
+            Text(LocalizedStringKey(side.rawValue))
                 .font(.caption.weight(.bold))
                 .foregroundStyle(.secondary)
 
@@ -4591,7 +4749,7 @@ struct SeizureTimerSheet: View {
                             .monospacedDigit()
                             .foregroundStyle(AppTheme.text)
 
-                        Text(isStopped ? "Timer stopped" : (isRunning ? "Timer running" : "Timer paused"))
+                        Text(LocalizedStringKey(isStopped ? "Timer stopped" : (isRunning ? "Timer running" : "Timer paused")))
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.secondary)
                     }
@@ -4604,7 +4762,7 @@ struct SeizureTimerSheet: View {
                         Button {
                             isRunning.toggle()
                         } label: {
-                            Text(isRunning ? "Pause" : "Resume")
+                            Text(LocalizedStringKey(isRunning ? "Pause" : "Resume"))
                                 .font(.headline.weight(.bold))
                                 .foregroundStyle(AppTheme.accent)
                                 .frame(maxWidth: .infinity)
@@ -4664,13 +4822,13 @@ struct SeizureTimerSheet: View {
 
                             Picker("Seizure Type", selection: $seizureType) {
                                 ForEach(seizureTypes, id: \.self) { type in
-                                    Text(type).tag(type)
+                                    Text(LocalizedStringKey(type)).tag(type)
                                 }
                             }
                             .pickerStyle(.menu)
 
                             VStack(alignment: .leading, spacing: 8) {
-                                Text("Severity: \(Int(severity))/5")
+                                Text("\(localizedAppString("Severity")): \(Int(severity))/5")
                                     .font(.subheadline.weight(.semibold))
                                 Slider(value: $severity, in: 1...5, step: 1)
                                     .tint(option.tint)
@@ -4838,7 +4996,7 @@ struct DurationNumberField: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title)
+            Text(LocalizedStringKey(title))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
 
@@ -5003,7 +5161,7 @@ struct QuickLogTrendPreviewCard: View {
                 .clipShape(Circle())
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(option.title)
+                Text(LocalizedStringKey(option.title))
                     .font(.title3.weight(.bold))
                     .foregroundStyle(AppTheme.text)
 
@@ -5308,7 +5466,7 @@ struct SnapshotHistoryPreviewCard: View {
                 .clipShape(Circle())
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(option.title)
+                Text(LocalizedStringKey(option.title))
                     .font(.title3.weight(.bold))
                     .foregroundStyle(AppTheme.text)
 
@@ -6145,7 +6303,7 @@ struct SeizureHistoryDetailRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(title)
+            Text(LocalizedStringKey(title))
                 .font(.caption.weight(.black))
                 .foregroundStyle(.secondary)
 
@@ -6174,7 +6332,7 @@ struct TrendEntryRow: View {
                 .clipShape(Capsule())
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(entry.title)
+                Text(LocalizedStringKey(entry.title))
                     .font(.caption.weight(.bold))
                     .foregroundStyle(AppTheme.text)
 
@@ -6204,7 +6362,7 @@ struct InsightCard: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Text(title)
+            Text(LocalizedStringKey(title))
                 .font(.caption.weight(.black))
                 .foregroundStyle(AppTheme.accent)
                 .frame(width: 58, alignment: .leading)
@@ -6222,7 +6380,45 @@ struct InsightCard: View {
     }
 }
 
+struct InsightUnavailableIndicator: View {
+    var body: some View {
+        HStack {
+            Spacer()
+
+            Image(systemName: "sparkles.slash")
+                .font(.headline.weight(.bold))
+                .foregroundStyle(.secondary)
+                .frame(width: 38, height: 38)
+                .background(AppTheme.panel)
+                .clipShape(Circle())
+                .shadow(color: Color.black.opacity(0.05), radius: 8, x: 0, y: 4)
+                .accessibilityLabel("AI insights unavailable")
+
+            Spacer()
+        }
+    }
+}
+
 struct TherapyTrackingView: View {
+    let user: CarePortalUser
+
+    @AppStorage private var milestoneData: Data
+    @State private var activeCategory: TherapyCategory?
+
+    init(user: CarePortalUser) {
+        self.user = user
+        self._milestoneData = AppStorage(wrappedValue: Data(), "therapy.\(user.id).milestoneData")
+    }
+
+    private var milestones: [TherapyMilestone] {
+        guard !milestoneData.isEmpty else { return [] }
+        return (try? JSONDecoder().decode([TherapyMilestone].self, from: milestoneData)) ?? []
+    }
+
+    private var recentMilestones: [TherapyMilestone] {
+        milestones.sorted { $0.date > $1.date }
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -6230,13 +6426,38 @@ struct TherapyTrackingView: View {
                     PageHeader(
                         icon: "figure.mind.and.body",
                         title: "Therapy Tracking",
-                        subtitle: "Track therapies, exercises, routines, and support goals."
+                        subtitle: "Log milestones and therapy wins to see your child's progress over time."
                     )
 
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                        ForEach(TherapyCategory.all) { category in
+                            TherapyCategoryCard(
+                                category: category,
+                                count: milestones.filter { $0.categoryID == category.id }.count
+                            ) {
+                                activeCategory = category
+                            }
+                        }
+                    }
+
                     VStack(alignment: .leading, spacing: 12) {
-                        TrackingRow(title: "Morning routine", detail: "Not started", color: .orange)
-                        TrackingRow(title: "Calming practice", detail: "Not started", color: AppTheme.accent)
-                        TrackingRow(title: "Therapy notes", detail: "No notes yet", color: .purple)
+                        Text("Recent Milestones")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+
+                        if recentMilestones.isEmpty {
+                            Text("No milestones logged yet.")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(14)
+                                .background(AppTheme.panel)
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        } else {
+                            ForEach(recentMilestones.prefix(8)) { milestone in
+                                TherapyMilestoneRow(milestone: milestone)
+                            }
+                        }
                     }
                     .authPanel()
                 }
@@ -6244,13 +6465,337 @@ struct TherapyTrackingView: View {
             }
             .background(AppTheme.background.ignoresSafeArea())
             .navigationTitle("Therapy")
+            .sheet(item: $activeCategory) { category in
+                TherapyMilestoneSheet(category: category) { milestone in
+                    saveMilestone(milestone)
+                }
+            }
         }
+    }
+
+    private func saveMilestone(_ milestone: TherapyMilestone) {
+        var updatedMilestones = milestones
+        updatedMilestones.append(milestone)
+        updatedMilestones.sort { $0.date < $1.date }
+
+        if let data = try? JSONEncoder().encode(updatedMilestones) {
+            milestoneData = data
+        }
+    }
+}
+
+struct TherapyCategory: Identifiable {
+    let id: String
+    let title: String
+    let icon: String
+    let tint: Color
+    let examples: String
+
+    static let all: [TherapyCategory] = [
+        TherapyCategory(
+            id: "occupational",
+            title: "Occupational",
+            icon: "hand.raised.fill",
+            tint: Color(red: 0.44, green: 0.72, blue: 0.62),
+            examples: "Fine motor, sensory, dressing, daily skills"
+        ),
+        TherapyCategory(
+            id: "speech",
+            title: "Speech",
+            icon: "bubble.left.and.bubble.right.fill",
+            tint: Color(red: 0.39, green: 0.62, blue: 0.88),
+            examples: "Words, AAC, requests, social communication"
+        ),
+        TherapyCategory(
+            id: "behavioral",
+            title: "Behavioral",
+            icon: "brain.head.profile",
+            tint: Color(red: 0.83, green: 0.48, blue: 0.66),
+            examples: "Transitions, regulation, coping, routines"
+        ),
+        TherapyCategory(
+            id: "physical",
+            title: "Physical",
+            icon: "figure.walk",
+            tint: Color(red: 0.89, green: 0.62, blue: 0.35),
+            examples: "Balance, strength, stairs, movement"
+        ),
+        TherapyCategory(
+            id: "feeding",
+            title: "Feeding",
+            icon: "fork.knife",
+            tint: Color(red: 0.50, green: 0.73, blue: 0.48),
+            examples: "Textures, chewing, new foods, hydration"
+        ),
+        TherapyCategory(
+            id: "social",
+            title: "Social",
+            icon: "person.2.fill",
+            tint: Color(red: 0.62, green: 0.57, blue: 0.86),
+            examples: "Play, turn-taking, peer interaction"
+        )
+    ]
+
+    static func category(id: String) -> TherapyCategory? {
+        all.first { $0.id == id }
+    }
+}
+
+struct TherapyMilestone: Identifiable, Codable {
+    let id: UUID
+    let categoryID: String
+    let categoryTitle: String
+    let date: Date
+    let milestone: String
+    let supportLevel: String
+    let notes: String
+
+    init(
+        id: UUID = UUID(),
+        categoryID: String,
+        categoryTitle: String,
+        date: Date,
+        milestone: String,
+        supportLevel: String,
+        notes: String
+    ) {
+        self.id = id
+        self.categoryID = categoryID
+        self.categoryTitle = categoryTitle
+        self.date = date
+        self.milestone = milestone
+        self.supportLevel = supportLevel
+        self.notes = notes
+    }
+}
+
+struct TherapyCategoryCard: View {
+    let category: TherapyCategory
+    let count: Int
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Image(systemName: category.icon)
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 36, height: 36)
+                        .background(category.tint)
+                        .clipShape(Circle())
+
+                    Spacer()
+
+                    Text("\(count)")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(category.tint)
+                        .frame(width: 30, height: 30)
+                        .background(category.tint.opacity(0.14))
+                        .clipShape(Circle())
+                }
+
+                Text(LocalizedStringKey(category.title))
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(AppTheme.text)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+
+                Text(LocalizedStringKey(category.examples))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, minHeight: 156, alignment: .topLeading)
+            .background(category.tint.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(category.tint.opacity(0.2), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct TherapyMilestoneRow: View {
+    let milestone: TherapyMilestone
+
+    private var category: TherapyCategory? {
+        TherapyCategory.category(id: milestone.categoryID)
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: category?.icon ?? "star.fill")
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(.white)
+                .frame(width: 34, height: 34)
+                .background(category?.tint ?? AppTheme.accent)
+                .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(LocalizedStringKey(milestone.categoryTitle))
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(category?.tint ?? AppTheme.accent)
+
+                    Spacer()
+
+                    Text(milestone.date, style: .date)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+
+                Text(milestone.milestone)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(AppTheme.text)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text(LocalizedStringKey(milestone.supportLevel))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                if !milestone.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(milestone.notes)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(12)
+        .background(AppTheme.fieldBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+struct TherapyMilestoneSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let category: TherapyCategory
+    let onSave: (TherapyMilestone) -> Void
+
+    @State private var date = Date()
+    @State private var milestone = ""
+    @State private var supportLevel = "With full support"
+    @State private var notes = ""
+
+    private let supportLevels = [
+        "With full support",
+        "With some support",
+        "With a prompt",
+        "Mostly independent",
+        "Independent"
+    ]
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(spacing: 12) {
+                        Image(systemName: category.icon)
+                            .font(.title3.weight(.bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .background(category.tint)
+                            .clipShape(Circle())
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(LocalizedStringKey(category.title))
+                                .font(.title3.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            Text("Log a new milestone")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    DatePicker("Date", selection: $date, displayedComponents: .date)
+                        .font(.subheadline.weight(.semibold))
+                        .padding(12)
+                        .background(AppTheme.fieldBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                    ProfileTextField(
+                        title: "Milestone",
+                        text: $milestone,
+                        placeholder: "Example: Used two-word request",
+                        axis: .vertical
+                    )
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Support level")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(AppTheme.text)
+
+                        Picker("Support level", selection: $supportLevel) {
+                            ForEach(supportLevels, id: \.self) { level in
+                                Text(LocalizedStringKey(level)).tag(level)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                        .background(AppTheme.fieldBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+
+                    ProfileTextField(
+                        title: "Notes",
+                        text: $notes,
+                        placeholder: "What helped, where it happened, or what to practice next",
+                        axis: .vertical
+                    )
+                }
+                .padding(20)
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle("Milestone")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Save") {
+                        save()
+                    }
+                    .fontWeight(.bold)
+                    .disabled(milestone.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+
+    private func save() {
+        let trimmedMilestone = milestone.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedMilestone.isEmpty else { return }
+
+        onSave(
+            TherapyMilestone(
+                categoryID: category.id,
+                categoryTitle: category.title,
+                date: date,
+                milestone: trimmedMilestone,
+                supportLevel: supportLevel,
+                notes: notes.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        )
+        dismiss()
     }
 }
 
 struct NutrientView: View {
     let user: CarePortalUser
 
+    @AppStorage(AppLanguage.storageKey) private var languageCode = AppLanguage.english.rawValue
     @AppStorage private var mealPhotoData: Data
     @AppStorage private var mealEstimateData: Data
     @AppStorage private var savedMealHistoryData: Data
@@ -6446,7 +6991,10 @@ struct NutrientView: View {
 
         Task {
             do {
-                let estimate = try await NutritionAPI().analyzeMeal(imageData: mealImageDataURL())
+                let estimate = try await NutritionAPI().analyzeMeal(
+                    imageData: mealImageDataURL(),
+                    language: AppLanguage(code: languageCode).apiName
+                )
                 await MainActor.run {
                     if let data = try? JSONEncoder().encode(estimate) {
                         mealEstimateData = data
@@ -6609,7 +7157,7 @@ struct MealNutritionEstimate: Codable {
         fiber = try container.decode(Int.self, forKey: .fiber)
         sugar = try container.decode(Int.self, forKey: .sugar)
         confidence = try container.decode(String.self, forKey: .confidence)
-        summary = try container.decodeIfPresent(String.self, forKey: .summary) ?? "This is a photo-based meal estimate."
+        summary = try container.decodeIfPresent(String.self, forKey: .summary) ?? localizedAppString("This is a photo-based meal estimate.")
         recommendations = try container.decodeIfPresent([String].self, forKey: .recommendations) ?? []
         notes = try container.decodeIfPresent([String].self, forKey: .notes) ?? []
     }
@@ -6658,14 +7206,14 @@ enum MealPDFExporter {
 
                 var y: CGFloat = 36
                 y += drawText(
-                    "Meal Nutrition Estimate",
+                    localizedAppString("Meal Nutrition Estimate"),
                     in: CGRect(x: 36, y: y, width: 540, height: 40),
                     font: .boldSystemFont(ofSize: 24),
                     color: UIColor(red: 0.12, green: 0.17, blue: 0.16, alpha: 1)
                 ) + 8
 
                 y += drawText(
-                    savedAt.formatted(date: .complete, time: .shortened),
+                    localizedDateString(savedAt, dateStyle: .full, timeStyle: .short),
                     in: CGRect(x: 36, y: y, width: 540, height: 28),
                     font: .systemFont(ofSize: 12, weight: .semibold),
                     color: .secondaryLabel
@@ -6677,13 +7225,13 @@ enum MealPDFExporter {
                 }
 
                 let metrics = [
-                    "Calories: \(estimate.calories) kcal",
-                    "Protein: \(estimate.protein) g",
-                    "Carbs: \(estimate.carbs) g",
-                    "Fat: \(estimate.fat) g",
-                    "Fiber: \(estimate.fiber) g",
-                    "Sugar: \(estimate.sugar) g",
-                    "Confidence: \(estimate.confidence)"
+                    "\(localizedAppString("Calories")): \(estimate.calories) \(localizedAppString("kcal"))",
+                    "\(localizedAppString("Protein")): \(estimate.protein) g",
+                    "\(localizedAppString("Carbs")): \(estimate.carbs) g",
+                    "\(localizedAppString("Fat")): \(estimate.fat) g",
+                    "\(localizedAppString("Fiber")): \(estimate.fiber) g",
+                    "\(localizedAppString("Sugar")): \(estimate.sugar) g",
+                    "\(localizedAppString("Confidence")): \(localizedAppString(estimate.confidence))"
                 ].joined(separator: "\n")
 
                 _ = drawText(
@@ -6694,9 +7242,9 @@ enum MealPDFExporter {
                 )
                 y += 230
 
-                y += drawSection(title: "Summary", body: estimate.summary, y: y, pageWidth: pageRect.width) + 12
-                y += drawSection(title: "Recommendations", body: bulletList(estimate.recommendations), y: y, pageWidth: pageRect.width) + 12
-                _ = drawSection(title: "Notes", body: bulletList(estimate.notes), y: y, pageWidth: pageRect.width)
+                y += drawSection(title: localizedAppString("Summary"), body: localizedSavedAIText(estimate.summary), y: y, pageWidth: pageRect.width) + 12
+                y += drawSection(title: localizedAppString("Recommendations"), body: bulletList(estimate.recommendations.map(localizedSavedAIText)), y: y, pageWidth: pageRect.width) + 12
+                _ = drawSection(title: localizedAppString("Notes"), body: bulletList(estimate.notes.map(localizedSavedAIText)), y: y, pageWidth: pageRect.width)
             }
 
             return url
@@ -6715,7 +7263,7 @@ enum MealPDFExporter {
         ) + 6
 
         currentY += drawText(
-            body.isEmpty ? "No information available." : body,
+            body.isEmpty ? localizedAppString("No information available.") : body,
             in: CGRect(x: 36, y: currentY, width: pageWidth - 72, height: 140),
             font: .systemFont(ofSize: 12, weight: .medium),
             color: .label
@@ -6842,7 +7390,7 @@ struct MealNutritionEstimateView: View {
                         .font(.headline.weight(.bold))
                         .foregroundStyle(AppTheme.text)
 
-                    Text(estimate.confidence)
+                    Text(LocalizedStringKey(estimate.confidence))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
@@ -6884,7 +7432,7 @@ struct MealNutritionEstimateView: View {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundStyle(AppTheme.accent)
 
-                        Text(note)
+                        Text(localizedSavedAIText(note))
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                     }
@@ -6962,7 +7510,7 @@ struct MealHistoryThumbnail: View {
                     }
             }
 
-            Text(savedMeal.savedAt.formatted(date: .abbreviated, time: .shortened))
+            Text(localizedDateString(savedMeal.savedAt, dateStyle: .medium, timeStyle: .short))
                 .font(.caption.weight(.bold))
                 .foregroundStyle(.secondary)
 
@@ -6993,7 +7541,7 @@ struct MealHistoryDetailView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 }
 
-                Text(savedMeal.savedAt.formatted(date: .complete, time: .shortened))
+                Text(localizedDateString(savedMeal.savedAt, dateStyle: .full, timeStyle: .short))
                     .font(.subheadline.weight(.bold))
                     .foregroundStyle(.secondary)
 
@@ -7040,14 +7588,21 @@ struct MealReportTextSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label(title, systemImage: icon)
+            Label(LocalizedStringKey(title), systemImage: icon)
                 .font(.subheadline.weight(.bold))
                 .foregroundStyle(AppTheme.text)
 
-            Text(text.isEmpty ? "No summary available." : text)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            if text.isEmpty {
+                Text("No summary available.")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(localizedSavedAIText(text))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(12)
         .background(AppTheme.fieldBackground)
@@ -7061,12 +7616,12 @@ struct MealReportListSection: View {
     let items: [String]
 
     private var displayItems: [String] {
-        items.isEmpty ? ["No recommendations available."] : items
+        items.isEmpty ? [localizedAppString("No recommendations available.")] : items
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label(title, systemImage: icon)
+            Label(LocalizedStringKey(title), systemImage: icon)
                 .font(.subheadline.weight(.bold))
                 .foregroundStyle(AppTheme.text)
 
@@ -7076,7 +7631,7 @@ struct MealReportListSection: View {
                         .font(.caption.weight(.bold))
                         .foregroundStyle(AppTheme.accent)
 
-                    Text(item)
+                    Text(localizedSavedAIText(item))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -7118,6 +7673,25 @@ struct ProfileView: View {
                     }
                     .authPanel()
 
+                    NavigationLink {
+                        SettingsMenuView()
+                    } label: {
+                        Text("Settings")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.accent)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(AppTheme.accent.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay(alignment: .trailing) {
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.black))
+                                    .foregroundStyle(AppTheme.accent)
+                                    .padding(.trailing, 16)
+                            }
+                    }
+                    .buttonStyle(.plain)
+
                     Button(role: .destructive, action: logout) {
                         Text("Log Out")
                             .font(.headline.weight(.bold))
@@ -7146,6 +7720,66 @@ struct ProfileView: View {
             }
         } catch {
             // The picker is user-driven; keeping the current image is the least surprising fallback.
+        }
+    }
+}
+
+struct SettingsMenuView: View {
+    @AppStorage(AppLanguage.storageKey) private var languageCode = AppLanguage.english.rawValue
+    @State private var isShowingLanguagePicker = false
+
+    private var selectedLanguage: AppLanguage {
+        AppLanguage(code: languageCode)
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 14) {
+                Button {
+                    isShowingLanguagePicker = true
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "globe")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.accent)
+                            .frame(width: 34, height: 34)
+                            .background(AppTheme.accent.opacity(0.12))
+                            .clipShape(Circle())
+
+                        Text("Language")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+
+                        Spacer()
+
+                        Text(selectedLanguage.displayName)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.black))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(14)
+                    .background(AppTheme.fieldBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(20)
+        }
+        .background(AppTheme.background.ignoresSafeArea())
+        .navigationTitle("Settings")
+        .confirmationDialog("Language", isPresented: $isShowingLanguagePicker, titleVisibility: .visible) {
+            Button("English") {
+                languageCode = AppLanguage.english.rawValue
+            }
+
+            Button("中文") {
+                languageCode = AppLanguage.chinese.rawValue
+            }
+
+            Button("Cancel", role: .cancel) {}
         }
     }
 }
@@ -7246,10 +7880,10 @@ struct PageHeader: View {
                 .foregroundStyle(AppTheme.accent)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(title)
+                Text(LocalizedStringKey(title))
                     .font(.largeTitle.weight(.bold))
 
-                Text(subtitle)
+                Text(LocalizedStringKey(subtitle))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -7269,7 +7903,7 @@ struct HealthMetricRow: View {
                 .foregroundStyle(AppTheme.accent)
                 .frame(width: 28)
 
-            Text(title)
+            Text(LocalizedStringKey(title))
                 .fontWeight(.semibold)
 
             Spacer()
@@ -7294,7 +7928,7 @@ struct MetricCard: View {
                 .font(.title3.weight(.semibold))
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
+                Text(LocalizedStringKey(title))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
 
@@ -7333,10 +7967,10 @@ struct TrackingRow: View {
                 }
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(title)
+                Text(LocalizedStringKey(title))
                     .fontWeight(.semibold)
 
-                Text(detail)
+                Text(LocalizedStringKey(detail))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -7354,11 +7988,11 @@ struct ProfileTextField: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title)
+            Text(LocalizedStringKey(title))
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(AppTheme.text)
 
-            TextField(placeholder, text: $text, axis: axis)
+            TextField(LocalizedStringKey(placeholder), text: $text, axis: axis)
                 .textInputAutocapitalization(.words)
                 .padding(12)
                 .background(AppTheme.fieldBackground)
@@ -7506,7 +8140,7 @@ struct InfoRow: View {
 
     var body: some View {
         HStack {
-            Text(title)
+            Text(LocalizedStringKey(title))
                 .foregroundStyle(.secondary)
             Spacer()
             Text(value)

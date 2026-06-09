@@ -209,7 +209,38 @@ function clampNumber(value, min, max, fallback) {
   return Math.min(Math.max(Math.round(number), min), max);
 }
 
-function normalizeMealEstimate(rawEstimate) {
+function normalizeResponseLanguage(language) {
+  const requested = String(language || '').trim().toLowerCase();
+  if (requested.includes('chinese') || requested.includes('zh') || requested.includes('中文')) {
+    return {
+      name: 'Simplified Chinese',
+      instruction: 'Simplified Chinese',
+      insightTitles: '提示, 注意, 警报, 提醒',
+      fallbackSummary: '这是基于照片的餐食估算。实际数值可能会因份量和食材而变化。',
+      fallbackRecommendations: ['尽量确认份量', '单独检查过敏原', '用于日常记录，不替代医疗建议'],
+      fallbackNotes: ['AI 照片估算', '份量会影响总量', '请单独确认过敏原'],
+      fallbackInsight: {
+        title: '注意',
+        message: '今天的记录已经完成。根据已保存的内容，暂时没有明显异常模式。'
+      }
+    };
+  }
+
+  return {
+    name: 'English',
+    instruction: 'English',
+    insightTitles: 'Tip, Notice, Alert, Reminder',
+    fallbackSummary: 'This is a photo-based meal estimate. Exact totals may vary with portion size and ingredients.',
+    fallbackRecommendations: ['Confirm portion size when possible', 'Check allergens separately', 'Use this estimate for tracking, not medical advice'],
+    fallbackNotes: ['AI photo estimate only', 'Portion size may change totals', 'Confirm allergens separately'],
+    fallbackInsight: {
+      title: 'Notice',
+      message: 'Today is fully logged. No major pattern stands out from the saved entries yet.'
+    }
+  };
+}
+
+function normalizeMealEstimate(rawEstimate, languageInfo = normalizeResponseLanguage('English')) {
   const notes = Array.isArray(rawEstimate?.notes)
     ? rawEstimate.notes.map((note) => String(note).trim()).filter(Boolean).slice(0, 5)
     : [];
@@ -226,13 +257,31 @@ function normalizeMealEstimate(rawEstimate) {
     fiber: clampNumber(rawEstimate?.fiber, 0, 100, 0),
     sugar: clampNumber(rawEstimate?.sugar, 0, 250, 0),
     confidence: String(rawEstimate?.confidence || 'low').trim(),
-    summary: summary || 'This is a photo-based meal estimate. Exact totals may vary with portion size and ingredients.',
+    summary: summary || languageInfo.fallbackSummary,
     recommendations: recommendations.length > 0
       ? recommendations
-      : ['Confirm portion size when possible', 'Check allergens separately', 'Use this estimate for tracking, not medical advice'],
+      : languageInfo.fallbackRecommendations,
     notes: notes.length > 0
       ? notes
-      : ['AI photo estimate only', 'Portion size may change totals', 'Confirm allergens separately']
+      : languageInfo.fallbackNotes
+  };
+}
+
+function normalizeHealthInsights(rawInsights, languageInfo = normalizeResponseLanguage('English')) {
+  const insights = Array.isArray(rawInsights?.insights)
+    ? rawInsights.insights
+      .map((item) => ({
+        title: String(item?.title || 'Insight').trim().slice(0, 24),
+        message: String(item?.message || '').trim()
+      }))
+      .filter((item) => item.title && item.message)
+      .slice(0, 4)
+    : [];
+
+  return {
+    insights: insights.length > 0
+      ? insights
+      : [languageInfo.fallbackInsight]
   };
 }
 
@@ -624,10 +673,107 @@ app.post('/api/app-data', async (req, res) => {
   }
 });
 
+app.post('/api/health-insights', async (req, res) => {
+  const apiKey = process.env.OPENAI_API_KEY;
+  const model = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
+  const languageInfo = normalizeResponseLanguage(req.body?.language);
+  const childName = String(req.body?.childName || 'the child').trim() || 'the child';
+  const quickLogTitles = Array.isArray(req.body?.quickLogTitles)
+    ? req.body.quickLogTitles.map((item) => String(item).trim()).filter(Boolean)
+    : [];
+  const snapshotTitles = Array.isArray(req.body?.snapshotTitles)
+    ? req.body.snapshotTitles.map((item) => String(item).trim()).filter(Boolean)
+    : [];
+  const logs = Array.isArray(req.body?.logs) ? req.body.logs.slice(-80) : [];
+
+  if (!apiKey) {
+    return res.status(503).json({
+      message: 'OpenAI is not configured. Add OPENAI_API_KEY to .env and restart the server.'
+    });
+  }
+
+  if (logs.length === 0) {
+    return res.status(400).json({ message: 'No health logs were provided.' });
+  }
+
+  const logSummary = logs.map((log) => ({
+    type: log.type,
+    category: log.title || log.categoryID,
+    timestamp: log.timestamp,
+    severity: log.severity,
+    value: log.value,
+    comments: log.comments
+  }));
+
+  try {
+    const openAIResponse = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model,
+        input: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'input_text',
+                text: [
+                  'You are helping a parent review a special-needs child health tracking dashboard.',
+                  'Use only the provided quick-log and daily snapshot data.',
+                  'Return JSON only with this exact shape:',
+                  '{"insights": [{"title": "Tip|Notice|Alert|Reminder", "message": string}]}',
+                  `Write every title and message in ${languageInfo.instruction}.`,
+                  `Use only these title words, translated for the requested language: ${languageInfo.insightTitles}.`,
+                  'Write 2 to 4 short parent-friendly cards.',
+                  'Use Alert only for an actual concern visible in the logs, such as high severity, repeated pain, seizure, allergic reaction, or concerning sleep/food pattern.',
+                  'Do not diagnose, do not give medical instructions, and do not replace professional care.',
+                  'If something seems urgent, tell the parent to contact their clinician or emergency services based on their usual care plan.',
+                  '',
+                  `Child name: ${childName}`,
+                  `Required quick-log buttons completed today: ${quickLogTitles.join(', ') || 'none listed'}`,
+                  `Required daily snapshot buttons completed today: ${snapshotTitles.join(', ') || 'none listed'}`,
+                  `Today logs JSON: ${JSON.stringify(logSummary)}`
+                ].join('\n')
+              }
+            ]
+          }
+        ],
+        max_output_tokens: 700
+      })
+    });
+
+    const payload = await openAIResponse.json().catch(() => ({}));
+
+    if (!openAIResponse.ok) {
+      console.error('OpenAI health insights failed:', payload);
+      return res.status(502).json({
+        message: payload?.error?.message || 'Could not create health insights right now.'
+      });
+    }
+
+    const outputText = extractOpenAIText(payload);
+    const rawInsights = parseJSONOutput(outputText);
+
+    if (!rawInsights) {
+      console.error('OpenAI health insights returned non-JSON:', outputText);
+      return res.status(502).json({ message: 'The AI returned unexpected health insights.' });
+    }
+
+    res.json(normalizeHealthInsights(rawInsights, languageInfo));
+  } catch (error) {
+    console.error('Health insights error:', error);
+    res.status(500).json({ message: 'Could not create health insights right now.' });
+  }
+});
+
 app.post('/api/analyze-meal', async (req, res) => {
   const imageUrl = normalizeMealImage(req.body?.imageData);
   const apiKey = process.env.OPENAI_API_KEY;
   const model = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
+  const languageInfo = normalizeResponseLanguage(req.body?.language);
 
   if (!imageUrl) {
     return res.status(400).json({ message: 'Please upload a valid meal photo.' });
@@ -658,6 +804,8 @@ app.post('/api/analyze-meal', async (req, res) => {
                   'Estimate nutrition from this meal photo for parent meal tracking.',
                   'Return JSON only with this exact shape:',
                   '{"calories": number, "protein": number, "carbs": number, "fat": number, "fiber": number, "sugar": number, "confidence": "low|medium|high", "summary": string, "recommendations": string[], "notes": string[]}',
+                  `Write summary, recommendations, and notes in ${languageInfo.instruction}.`,
+                  'Keep confidence as one of these exact English values: low, medium, high.',
                   'Use grams for protein, carbs, fat, fiber, and sugar.',
                   'Make summary one short parent-friendly sentence.',
                   'Make recommendations short practical suggestions for balance, hydration, portion checking, texture/sensory needs, or allergen caution.',
@@ -694,7 +842,7 @@ app.post('/api/analyze-meal', async (req, res) => {
       return res.status(502).json({ message: 'The AI returned an unexpected meal estimate.' });
     }
 
-    res.json(normalizeMealEstimate(rawEstimate));
+    res.json(normalizeMealEstimate(rawEstimate, languageInfo));
   } catch (error) {
     console.error('Meal analysis error:', error);
     res.status(500).json({ message: 'Could not analyze this meal photo right now.' });
@@ -967,6 +1115,51 @@ app.delete('/api/users/:id', requireAdmin, async (req, res) => {
   }
 });
 
+app.post('/api/app-session', async (req, res) => {
+  const userId = Number(req.body?.userId);
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ message: 'Please log in again.' });
+  }
+
+  try {
+    await ensureDatabaseShapeReady();
+
+    const [rows] = await pool.execute(
+      `SELECT
+        id,
+        username,
+        email,
+        role,
+        profile_image,
+        ${blockFieldsSQL()}
+        blocked_indefinitely,
+        DATE_FORMAT(blocked_until, '%Y-%m-%d %H:%i') AS blocked_until
+       FROM users
+       WHERE id = ?
+       LIMIT 1`,
+      [userId]
+    );
+
+    const user = rows[0];
+    if (!user) {
+      return res.status(404).json({ message: 'Please log in again.' });
+    }
+
+    if (Number(user.isBlocked) === 1) {
+      return res.status(403).json({ message: activeBlockMessage(user) });
+    }
+
+    res.json({
+      message: 'Session is active.',
+      user: serializeUser(user)
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Could not check this account right now.' });
+  }
+});
+
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
 
@@ -978,7 +1171,18 @@ app.post('/api/login', async (req, res) => {
     await ensureDatabaseShapeReady();
 
     const [rows] = await pool.execute(
-      'SELECT id, username, email, password_hash, role, profile_image FROM users WHERE username = ?',
+      `SELECT
+        id,
+        username,
+        email,
+        password_hash,
+        role,
+        profile_image,
+        ${blockFieldsSQL()}
+        blocked_indefinitely,
+        DATE_FORMAT(blocked_until, '%Y-%m-%d %H:%i') AS blocked_until
+       FROM users
+       WHERE username = ?`,
       [username.trim()]
     );
 

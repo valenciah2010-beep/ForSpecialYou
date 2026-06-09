@@ -8,11 +8,11 @@ enum AuthAPIError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidURL:
-            return "The server address is not valid."
+            return localizedAppString("The server address is not valid.")
         case .server(let message):
-            return message
+            return localizedServerMessage(message)
         case .invalidResponse:
-            return "The server sent an unexpected response."
+            return localizedAppString("The server sent an unexpected response.")
         }
     }
 }
@@ -23,6 +23,16 @@ struct AuthAPI {
     func login(username: String, password: String) async throws -> CarePortalUser {
         let body = LoginRequest(username: username, password: password)
         let response: AuthResponse = try await post("/api/login", body: body)
+
+        guard let user = response.user else {
+            throw AuthAPIError.invalidResponse
+        }
+
+        return user
+    }
+
+    func validateSavedSession(userId: Int) async throws -> CarePortalUser {
+        let response: AuthResponse = try await post("/api/app-session", body: AppSessionRequest(userId: userId))
 
         guard let user = response.user else {
             throw AuthAPIError.invalidResponse
@@ -59,6 +69,24 @@ struct AuthAPI {
         let _: MessageResponse = try await post("/api/app-data", body: body)
     }
 
+    func healthInsights(
+        childName: String,
+        quickLogTitles: [String],
+        snapshotTitles: [String],
+        logs: [HealthLogEntry],
+        language: String
+    ) async throws -> [HealthInsight] {
+        let body = HealthInsightsRequest(
+            childName: childName,
+            quickLogTitles: quickLogTitles,
+            snapshotTitles: snapshotTitles,
+            logs: logs,
+            language: language
+        )
+        let response: HealthInsightsResponse = try await post("/api/health-insights", body: body)
+        return response.insights
+    }
+
     private func post<Request: Encodable, Response: Decodable>(_ path: String, body: Request) async throws -> Response {
         guard let url = baseURL?.appending(path: path) else {
             throw AuthAPIError.invalidURL
@@ -85,14 +113,14 @@ struct AuthAPI {
             throw AuthAPIError.server(errorBody.message)
         }
 
-        throw AuthAPIError.server("Request failed with status \(httpResponse.statusCode).")
+        throw AuthAPIError.server(String(format: localizedAppString("Request failed with status %@"), "\(httpResponse.statusCode)"))
     }
 }
 
 struct NutritionAPI {
     var baseURL = URL(string: "http://127.0.0.1:3002")
 
-    func analyzeMeal(imageData: String) async throws -> MealNutritionEstimate {
+    func analyzeMeal(imageData: String, language: String) async throws -> MealNutritionEstimate {
         guard let url = baseURL?.appending(path: "/api/analyze-meal") else {
             throw AuthAPIError.invalidURL
         }
@@ -100,7 +128,7 @@ struct NutritionAPI {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(MealAnalysisRequest(imageData: imageData))
+        request.httpBody = try JSONEncoder().encode(MealAnalysisRequest(imageData: imageData, language: language))
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -115,12 +143,13 @@ struct NutritionAPI {
             throw AuthAPIError.server(errorBody.message)
         }
 
-        throw AuthAPIError.server("Meal analysis failed with status \(httpResponse.statusCode).")
+        throw AuthAPIError.server(String(format: localizedAppString("Meal analysis failed with status %@"), "\(httpResponse.statusCode)"))
     }
 }
 
 private struct MealAnalysisRequest: Encodable {
     let imageData: String
+    let language: String
 }
 
 struct ChildProfileSync: Encodable {
@@ -137,4 +166,50 @@ private struct ParentAppDataSyncRequest: Encodable {
     let childProfile: ChildProfileSync?
     let healthLogs: [HealthLogEntry]?
     let savedMeals: [SavedMealEstimate]?
+}
+
+private struct HealthInsightsRequest: Encodable {
+    let childName: String
+    let quickLogTitles: [String]
+    let snapshotTitles: [String]
+    let logs: [HealthLogEntry]
+    let language: String
+}
+
+private struct AppSessionRequest: Encodable {
+    let userId: Int
+}
+
+private struct HealthInsightsResponse: Decodable {
+    let insights: [HealthInsight]
+}
+
+struct HealthInsight: Codable, Identifiable, Equatable {
+    let id: UUID
+    let title: String
+    let message: String
+
+    init(id: UUID = UUID(), title: String, message: String) {
+        self.id = id
+        self.title = title
+        self.message = message
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case title
+        case message
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = UUID()
+        self.title = try container.decode(String.self, forKey: .title)
+        self.message = try container.decode(String.self, forKey: .message)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(title, forKey: .title)
+        try container.encode(message, forKey: .message)
+    }
 }

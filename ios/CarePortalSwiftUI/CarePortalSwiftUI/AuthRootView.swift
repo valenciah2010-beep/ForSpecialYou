@@ -33,6 +33,9 @@ struct AuthRootView: View {
             }
             .animation(.easeInOut(duration: 0.2), value: viewModel.screen)
             .animation(.easeInOut(duration: 0.2), value: viewModel.currentUser?.id)
+            .task(id: viewModel.currentUser?.id) {
+                await viewModel.validateSavedSession()
+            }
         }
     }
 }
