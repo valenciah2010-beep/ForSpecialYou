@@ -221,7 +221,7 @@ function normalizeResponseLanguage(language) {
       fallbackNotes: ['AI 照片估算', '份量会影响总量', '请单独确认过敏原'],
       fallbackInsight: {
         title: '注意',
-        message: '今天的记录已经完成。根据已保存的内容，暂时没有明显异常模式。'
+        message: '今天记录已完成，暂未看到明显异常。'
       }
     };
   }
@@ -235,7 +235,7 @@ function normalizeResponseLanguage(language) {
     fallbackNotes: ['AI photo estimate only', 'Portion size may change totals', 'Confirm allergens separately'],
     fallbackInsight: {
       title: 'Notice',
-      message: 'Today is fully logged. No major pattern stands out from the saved entries yet.'
+      message: 'Today is fully logged, with no major pattern standing out yet.'
     }
   };
 }
@@ -271,11 +271,11 @@ function normalizeHealthInsights(rawInsights, languageInfo = normalizeResponseLa
   const insights = Array.isArray(rawInsights?.insights)
     ? rawInsights.insights
       .map((item) => ({
-        title: String(item?.title || 'Insight').trim().slice(0, 24),
-        message: String(item?.message || '').trim()
+        title: String(item?.title || languageInfo.fallbackInsight.title).trim().slice(0, 24),
+        message: String(item?.message || '').trim().slice(0, 140)
       }))
       .filter((item) => item.title && item.message)
-      .slice(0, 4)
+      .slice(0, 1)
     : [];
 
   return {
@@ -727,7 +727,8 @@ app.post('/api/health-insights', async (req, res) => {
                   '{"insights": [{"title": "Tip|Notice|Alert|Reminder", "message": string}]}',
                   `Write every title and message in ${languageInfo.instruction}.`,
                   `Use only these title words, translated for the requested language: ${languageInfo.insightTitles}.`,
-                  'Write 2 to 4 short parent-friendly cards.',
+                  'Write exactly 1 parent-friendly card.',
+                  'Keep the message to one short sentence. Prefer under 18 English words or under 35 Chinese characters.',
                   'Use Alert only for an actual concern visible in the logs, such as high severity, repeated pain, seizure, allergic reaction, or concerning sleep/food pattern.',
                   'Do not diagnose, do not give medical instructions, and do not replace professional care.',
                   'If something seems urgent, tell the parent to contact their clinician or emergency services based on their usual care plan.',

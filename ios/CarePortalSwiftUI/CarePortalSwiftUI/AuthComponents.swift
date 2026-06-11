@@ -24,7 +24,6 @@ struct AuthTextField: View {
                 .keyboardType(keyboard)
                 .textContentType(contentType)
                 .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
                 .padding(14)
                 .background(AppTheme.fieldBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))

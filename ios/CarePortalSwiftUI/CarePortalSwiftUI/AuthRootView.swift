@@ -59,6 +59,8 @@ struct AuthHomeView: View {
 
     var body: some View {
         VStack(spacing: 24) {
+            Spacer(minLength: 12)
+
             HeaderView()
 
             VStack(spacing: 10) {
@@ -92,7 +94,11 @@ struct AuthHomeView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
             }
+
+            Spacer(minLength: 12)
         }
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: max(560, UIScreen.main.bounds.height - 170))
         .authPanel()
     }
 }

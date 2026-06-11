@@ -56,6 +56,7 @@ struct BasicHealthView: View {
     @State private var activePainLog: QuickLogOption?
     @State private var activeMedicineLog: QuickLogOption?
     @State private var activeMoodLog: QuickLogOption?
+    @State private var activeCyclicVomitingLog: QuickLogOption?
     @State private var activeSleepSnapshot: SleepSnapshotEditorTarget?
     @State private var activeNutritionSnapshot: SnapshotOption?
     @State private var draggingQuickLogID: String?
@@ -143,6 +144,8 @@ struct BasicHealthView: View {
                                     activeMedicineLog = option
                                 } else if option.id == "mood" {
                                     activeMoodLog = option
+                                } else if option.id == "cyclicVomiting" {
+                                    activeCyclicVomitingLog = option
                                 } else {
                                     activeLogInput = .quickLog(option)
                                 }
@@ -265,6 +268,11 @@ struct BasicHealthView: View {
                     saveLogEntry(entry)
                 }
             }
+            .sheet(item: $activeCyclicVomitingLog) { option in
+                CyclicVomitingLogSheet(option: option, userID: user.id) { entry in
+                    saveLogEntry(entry)
+                }
+            }
             .onAppear {
                 syncParentAppData()
                 MedicationReminderScheduler.reschedule(medications: medications)
@@ -311,7 +319,9 @@ struct BasicHealthView: View {
             return QuickLogOption.defaultSelectionIDs
         }
 
-        return orderedKnownIDs.contains("mood") ? orderedKnownIDs : orderedKnownIDs + ["mood"]
+        return ["mood", "cyclicVomiting"].reduce(orderedKnownIDs) { currentIDs, requiredID in
+            currentIDs.contains(requiredID) ? currentIDs : currentIDs + [requiredID]
+        }
     }
 
     private var selectedQuickLogIDsBinding: Binding<Set<String>> {
@@ -463,8 +473,7 @@ struct BasicHealthView: View {
 
     private var healthInsightDateKey: String {
         let components = Calendar.current.dateComponents([.year, .month, .day], from: Date())
-        let dateKey = String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
-        return "\(dateKey)-\(languageCode)"
+        return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
     }
 
     @ViewBuilder
@@ -517,9 +526,19 @@ struct BasicHealthView: View {
         }
 
         if let cachedInsights = todaysHealthInsightCache {
-            healthInsights = cachedInsights.insights
+            let dailyInsights = oneDailyHealthInsight(from: cachedInsights.insights)
+            healthInsights = dailyInsights
             areHealthInsightsUnavailable = cachedInsights.isUnavailable
             lastHealthInsightRequestKey = healthInsightRefreshKey
+            if cachedInsights.dateKey != healthInsightDateKey || cachedInsights.insights.count != dailyInsights.count {
+                saveHealthInsightCache(
+                    HealthInsightDailyCache(
+                        dateKey: healthInsightDateKey,
+                        insights: dailyInsights,
+                        isUnavailable: cachedInsights.isUnavailable
+                    )
+                )
+            }
             return
         }
 
@@ -530,12 +549,14 @@ struct BasicHealthView: View {
         areHealthInsightsUnavailable = false
 
         do {
-            let insights = try await AuthAPI().healthInsights(
-                childName: displayChildName,
-                quickLogTitles: selectedQuickLogs.map { localizedAppString($0.title, languageCode: languageCode) },
-                snapshotTitles: SnapshotOption.all.map { localizedAppString($0.title, languageCode: languageCode) },
-                logs: todaysLogEntries.sorted { $0.timestamp < $1.timestamp },
-                language: AppLanguage(code: languageCode).apiName
+            let insights = oneDailyHealthInsight(
+                from: try await AuthAPI().healthInsights(
+                    childName: displayChildName,
+                    quickLogTitles: selectedQuickLogs.map { localizedAppString($0.title, languageCode: languageCode) },
+                    snapshotTitles: SnapshotOption.all.map { localizedAppString($0.title, languageCode: languageCode) },
+                    logs: todaysLogEntries.sorted { $0.timestamp < $1.timestamp },
+                    language: AppLanguage(code: languageCode).apiName
+                )
             )
             healthInsights = insights
             lastHealthInsightRequestKey = requestKey
@@ -566,12 +587,34 @@ struct BasicHealthView: View {
 
     private var todaysHealthInsightCache: HealthInsightDailyCache? {
         guard !healthInsightCacheData.isEmpty,
-              let cache = try? JSONDecoder().decode(HealthInsightDailyCache.self, from: healthInsightCacheData),
-              cache.dateKey == healthInsightDateKey else {
+              let cache = try? JSONDecoder().decode(HealthInsightDailyCache.self, from: healthInsightCacheData) else {
             return nil
         }
 
-        return cache
+        let legacyLanguageKeys = AppLanguage.allCases.map { "\(healthInsightDateKey)-\($0.rawValue)" }
+        return cache.dateKey == healthInsightDateKey || legacyLanguageKeys.contains(cache.dateKey) ? cache : nil
+    }
+
+    private func oneDailyHealthInsight(from insights: [HealthInsight]) -> [HealthInsight] {
+        guard let firstInsight = insights.first else { return [] }
+        return [
+            HealthInsight(
+                id: firstInsight.id,
+                title: firstInsight.title,
+                message: shortenedHealthInsightMessage(firstInsight.message)
+            )
+        ]
+    }
+
+    private func shortenedHealthInsightMessage(_ message: String) -> String {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sentenceEnds = CharacterSet(charactersIn: ".!?。！？")
+        if let endIndex = trimmed.rangeOfCharacter(from: sentenceEnds)?.upperBound {
+            return String(trimmed[..<endIndex])
+        }
+
+        guard trimmed.count > 140 else { return trimmed }
+        return String(trimmed.prefix(137)).trimmingCharacters(in: .whitespacesAndNewlines) + "..."
     }
 
     private func saveHealthInsightCache(_ cache: HealthInsightDailyCache) {
@@ -783,11 +826,12 @@ struct QuickLogOption: Identifiable {
         QuickLogOption(id: "deescalation", title: "De-escalation", icon: "hand.raised.fill", tint: Color(red: 0.43, green: 0.77, blue: 0.62)),
         QuickLogOption(id: "allergy", title: "Allergic Reaction", icon: "allergens.fill", tint: Color(red: 0.96, green: 0.58, blue: 0.43)),
         QuickLogOption(id: "pain", title: "Pain", icon: "cross.case.fill", tint: Color(red: 0.92, green: 0.41, blue: 0.47)),
+        QuickLogOption(id: "cyclicVomiting", title: "Cyclic Vomiting", icon: "arrow.triangle.2.circlepath", tint: Color(red: 0.23, green: 0.66, blue: 0.68)),
         QuickLogOption(id: "discomfort", title: "Discomfort", icon: "thermometer.medium", tint: Color(red: 0.88, green: 0.72, blue: 0.45)),
         QuickLogOption(id: "medsFood", title: "Medicine", icon: "pills.fill", tint: Color(red: 0.38, green: 0.75, blue: 0.55))
     ]
 
-    static let defaultSelectionString = "seizure,meltdown,mood,medsFood"
+    static let defaultSelectionString = "seizure,meltdown,mood,cyclicVomiting,medsFood"
     static let defaultSelectionIDs = defaultSelectionString.split(separator: ",").map(String.init)
 
     static func option(id: String) -> QuickLogOption? {
@@ -926,6 +970,58 @@ struct HealthLogEntry: Identifiable, Codable {
     let severity: Int
     let value: String
     let comments: String
+}
+
+struct CyclicVomitingBackgroundData: Codable {
+    var familyHistory: [String] = []
+    var surgicalHistory: [String] = []
+    var otherSurgery: String = ""
+    var onsetYear: String = ""
+    var onsetMonth: String = ""
+    var comorbidities: [String] = []
+    var metabolismName: String = ""
+    var otherComorbidity: String = ""
+    var hospitalizedAtBeijingHospital: Bool?
+    var currentMedications: [String] = []
+    var otherCurrentMedication: String = ""
+    var hadAdverseDrugReaction: Bool?
+    var adverseDrugReactionDetails: String = ""
+    var pastMedications: [String] = []
+    var otherPastMedication: String = ""
+}
+
+struct CyclicVomitingProgressData: Codable {
+    var startTime = Date()
+    var endTime = Date()
+    var hospitalized: Bool?
+    var triggers: [String] = []
+    var otherTriggers = ""
+    var beforeSymptoms: [String] = []
+    var otherBeforeSymptoms = ""
+    var duringSymptoms: [String] = []
+    var otherDuringSymptoms = ""
+    var recoverySymptoms: [String] = []
+    var otherRecoverySymptoms = ""
+    var vomitingActsPerDay = 1
+    var medications: [String] = []
+    var otherMedication = ""
+}
+
+struct CyclicVomitingPatternsData: Codable {
+    var episodesPastYear = ""
+    var episodeInterval = ""
+    var episodeDuration = ""
+    var historicalTriggers: [String] = []
+    var otherHistoricalTriggers = ""
+    var prodromalSymptoms: [String] = []
+    var otherProdromalSymptoms = ""
+    var episodeSymptoms: [String] = []
+    var otherEpisodeSymptoms = ""
+    var postdromalSymptoms: [String] = []
+    var otherPostdromalSymptoms = ""
+    var heightCm = ""
+    var weightKg = ""
+    var qualityOfLifeAgeGroup = ""
 }
 
 struct SleepSnapshotSummary {
@@ -1790,6 +1886,7 @@ struct SleepRestSnapshotSheet: View {
                             .foregroundStyle(AppTheme.text)
 
                         TextField("Nap, bedtime routine, night waking, comfort item, etc.", text: $comments, axis: .vertical)
+                            .textInputAutocapitalization(.never)
                             .lineLimit(3...6)
                             .padding(12)
                             .background(AppTheme.fieldBackground)
@@ -2066,6 +2163,7 @@ struct HealthLogEntrySheet: View {
                                     : localizedAppString("Example: 7 hours, normal, 2/5"),
                                 text: $value
                             )
+                                .textInputAutocapitalization(.never)
                                 .padding(12)
                                 .background(AppTheme.fieldBackground)
                                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -2086,6 +2184,7 @@ struct HealthLogEntrySheet: View {
                                 .foregroundStyle(AppTheme.text)
 
                             TextField("Add details, context, triggers, or what helped", text: $comments, axis: .vertical)
+                                .textInputAutocapitalization(.never)
                                 .lineLimit(4...7)
                                 .padding(12)
                                 .background(AppTheme.fieldBackground)
@@ -2097,7 +2196,8 @@ struct HealthLogEntrySheet: View {
                 .padding(18)
             }
             .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle("Add Data")
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") {
@@ -2133,6 +2233,1429 @@ struct HealthLogEntrySheet: View {
         )
         onSave(entry)
         dismiss()
+    }
+}
+
+struct CyclicVomitingLogSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let option: QuickLogOption
+    let userID: Int
+    let onSave: (HealthLogEntry) -> Void
+    @AppStorage private var backgroundData: Data
+    @AppStorage private var progressData: Data
+    @AppStorage private var patternsData: Data
+
+    @State private var startTime = Date()
+    @State private var endTime = Date()
+    @State private var hospitalized: Bool?
+    @State private var selectedTriggers: Set<String> = []
+    @State private var otherTriggers = ""
+    @State private var selectedBeforeSymptoms: Set<String> = []
+    @State private var otherBeforeSymptoms = ""
+    @State private var selectedDuringSymptoms: Set<String> = []
+    @State private var otherDuringSymptoms = ""
+    @State private var selectedRecoverySymptoms: Set<String> = []
+    @State private var otherRecoverySymptoms = ""
+    @State private var vomitingActsPerDay = 1
+    @State private var selectedMedications: Set<String> = []
+    @State private var otherMedication = ""
+    @State private var collapsedFormSections: Set<String> = []
+    @State private var didLoadBackground = false
+    @State private var didLoadProgress = false
+    @State private var didLoadPatterns = false
+    @State private var progressMessage = ""
+    @State private var patternsMessage = ""
+    @State private var selectedFamilyHistory: Set<String> = []
+    @State private var selectedSurgicalHistory: Set<String> = []
+    @State private var otherSurgery = ""
+    @State private var onsetYear = ""
+    @State private var onsetMonth = ""
+    @State private var selectedComorbidities: Set<String> = []
+    @State private var metabolismName = ""
+    @State private var otherComorbidity = ""
+    @State private var hospitalizedAtBeijingHospital: Bool?
+    @State private var selectedCurrentBackgroundMedications: Set<String> = []
+    @State private var otherCurrentBackgroundMedication = ""
+    @State private var hadAdverseDrugReaction: Bool?
+    @State private var adverseDrugReactionDetails = ""
+    @State private var selectedPastMedications: Set<String> = []
+    @State private var otherPastMedication = ""
+    @State private var episodesPastYear = ""
+    @State private var episodeInterval = ""
+    @State private var episodeDuration = ""
+    @State private var selectedHistoricalTriggers: Set<String> = []
+    @State private var otherHistoricalTriggers = ""
+    @State private var selectedProdromalSymptoms: Set<String> = []
+    @State private var otherProdromalSymptoms = ""
+    @State private var selectedEpisodeSymptoms: Set<String> = []
+    @State private var otherEpisodeSymptoms = ""
+    @State private var selectedPostdromalSymptoms: Set<String> = []
+    @State private var otherPostdromalSymptoms = ""
+    @State private var childHeightCm = ""
+    @State private var childWeightKg = ""
+    @State private var qualityOfLifeAgeGroup = ""
+
+    init(option: QuickLogOption, userID: Int, onSave: @escaping (HealthLogEntry) -> Void) {
+        self.option = option
+        self.userID = userID
+        self.onSave = onSave
+        self._backgroundData = AppStorage(wrappedValue: Data(), "health.\(userID).cyclicVomitingBackground")
+        self._progressData = AppStorage(wrappedValue: Data(), "health.\(userID).cyclicVomitingProgress")
+        self._patternsData = AppStorage(wrappedValue: Data(), "health.\(userID).cyclicVomitingPatterns")
+    }
+
+    private let familyHistoryOptions = [
+        "Migraine",
+        "Abdominal migraine",
+        "Recurrent vomiting",
+        "Motion sickness (carsick, seasick, or airsick)",
+        "Functional abdominal pain or recurrent unexplained abdominal pain",
+        "None"
+    ]
+    private let surgicalHistoryOptions = [
+        "Post-tracheoesophageal fistula surgery",
+        "Post-esophageal hiatal hernia surgery",
+        "Post-congenital heart disease surgery",
+        "Post-tethered cord syndrome surgery",
+        "Post-fundoplication",
+        "Post-Hirschsprung's disease surgery",
+        "None"
+    ]
+    private let comorbidityOptions = [
+        "Epilepsy",
+        "Tourette syndrome",
+        "Coffin-Siris syndrome",
+        "Inborn errors of metabolism",
+        "Celiac disease",
+        "Inflammatory bowel disease",
+        "None of the above"
+    ]
+    private let triggerOptions = [
+        "Post-respiratory tract infection",
+        "Post-improper diet",
+        "After riding in a car or other vehicles",
+        "Post-emotional stress/stimulation",
+        "Menstrual period",
+        "None of the above triggers"
+    ]
+    private let beforeSymptomOptions = [
+        "Nausea",
+        "Pallor",
+        "Sweating",
+        "Lethargy/Somnolence",
+        "Hot flashes",
+        "Headache",
+        "Abdominal pain",
+        "None of the above symptoms"
+    ]
+    private let duringSymptomOptions = [
+        "Nausea",
+        "Abdominal pain",
+        "Diarrhea",
+        "Anorexia",
+        "Headache",
+        "Photophobia",
+        "Phonophobia",
+        "Vertigo",
+        "None of the above symptoms"
+    ]
+    private let recoverySymptomOptions = [
+        "Drowsiness",
+        "Deep sleep",
+        "Abdominal pain",
+        "Nausea",
+        "Headache",
+        "Dizziness",
+        "None of the above symptoms"
+    ]
+    private let medicationOptions = [
+        "Cyproheptadine",
+        "Amitriptyline",
+        "Propranolol",
+        "Aprepitant",
+        "Sodium valproate",
+        "Phenobarbital",
+        "Topiramate",
+        "Coenzyme Q10",
+        "L-carnitine",
+        "Omeprazole",
+        "None of the above medications have been used",
+        "None (medication has now been discontinued)"
+    ]
+    private let pastMedicationOptions = [
+        "Cyproheptadine",
+        "Amitriptyline",
+        "Propranolol",
+        "Aprepitant",
+        "Sodium valproate",
+        "Phenobarbital",
+        "Topiramate",
+        "Coenzyme Q10",
+        "L-carnitine",
+        "Omeprazole",
+        "None of the above medications have been used"
+    ]
+    private let episodeMedicationOptions = [
+        "Cyproheptadine",
+        "Amitriptyline",
+        "Propranolol",
+        "Aprepitant",
+        "Sodium valproate",
+        "Phenobarbital",
+        "Topiramate",
+        "Coenzyme Q10",
+        "L-carnitine",
+        "Omeprazole",
+        "None"
+    ]
+    private let episodesPastYearOptions = [
+        "< 4 times/year",
+        "≥ 4 times/year",
+        "No episodes"
+    ]
+    private let episodeIntervalOptions = [
+        "> 2 months",
+        "≤ 2 months"
+    ]
+    private let episodeDurationOptions = [
+        "≤ 2 days",
+        "> 2 days"
+    ]
+    private let baselineProdromalSymptomOptions = [
+        "Nausea",
+        "Pallor (pale face)",
+        "Sweating",
+        "Lethargy/Somnolence",
+        "Hot flashes",
+        "Headache",
+        "Abdominal pain",
+        "None of the above symptoms"
+    ]
+    private let baselineDuringSymptomOptions = [
+        "Nausea",
+        "Abdominal pain",
+        "Diarrhea",
+        "Anorexia (loss of appetite)",
+        "Headache",
+        "Photophobia",
+        "Phonophobia",
+        "Vertigo",
+        "None of the above symptoms"
+    ]
+    private let qualityOfLifeAgeOptions = [
+        "13–18 years old",
+        "8–12 years old",
+        "5–7 years old",
+        "2–4 years old",
+        "1–12 months"
+    ]
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 10) {
+                        NavigationLink {
+                            backgroundPage
+                        } label: {
+                            CyclicVomitingNavigationCard(
+                                title: "Background",
+                                icon: "person.text.rectangle.fill",
+                                tint: option.tint
+                            )
+                        }
+                        .buttonStyle(.plain)
+
+                        NavigationLink {
+                            vomitingPatternPage
+                        } label: {
+                            CyclicVomitingNavigationCard(
+                                title: "Vomiting Patterns",
+                                icon: "waveform.path.ecg.rectangle.fill",
+                                tint: option.tint
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    vomitingPatternForm
+                }
+                .padding(18)
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button("Save Progress") {
+                        saveProgress()
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.accent)
+
+                    Button("Save") {
+                        saveVomitingLog()
+                    }
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(AppTheme.accent)
+                }
+            }
+        }
+        .presentationDetents([.large])
+        .onAppear {
+            loadBackgroundIfNeeded()
+            loadProgressIfNeeded()
+            loadPatternsIfNeeded()
+        }
+    }
+
+    private var backgroundPage: some View {
+        ScrollView {
+            backgroundForm
+                .padding(18)
+        }
+        .background(AppTheme.background.ignoresSafeArea())
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Save") {
+                    saveBackground()
+                    dismiss()
+                }
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(AppTheme.accent)
+            }
+        }
+    }
+
+    private var vomitingPatternPage: some View {
+        ScrollView {
+            patternsForm
+                .padding(18)
+        }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Save") {
+                        savePatterns()
+                        dismiss()
+                    }
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(AppTheme.accent)
+                }
+            }
+    }
+
+    private var vomitingPatternForm: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(localizedAppString("Vomiting Log Page"))
+                .font(.title3.weight(.black))
+                .foregroundStyle(AppTheme.text)
+
+            if !progressMessage.isEmpty {
+                Text(localizedAppString(progressMessage))
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(AppTheme.accent)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(AppTheme.accent.opacity(0.10))
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+
+            CyclicVomitingFormSection(
+                id: "timeTracking",
+                title: "Time Tracking",
+                icon: "clock",
+                tint: option.tint,
+                isCollapsed: collapsedFormSections.contains("timeTracking"),
+                onToggle: { toggleFormSection("timeTracking") }
+            ) {
+                CyclicVomitingTimeField(
+                    title: "Vomiting Start Time:",
+                    selection: $startTime,
+                    tint: option.tint
+                )
+
+                CyclicVomitingTimeField(
+                    title: "Vomiting End Time:",
+                    selection: $endTime,
+                    tint: option.tint
+                )
+
+                CyclicVomitingYesNoPicker(
+                    title: "Hospitalization Status",
+                    isYes: $hospitalized,
+                    tint: option.tint
+                )
+            }
+
+            CyclicVomitingFormSection(
+                id: "prodrome",
+                title: "Pre-Episode (Prodrome)",
+                icon: "exclamationmark.triangle.fill",
+                tint: option.tint,
+                isCollapsed: collapsedFormSections.contains("prodrome"),
+                onToggle: { toggleFormSection("prodrome") }
+            ) {
+                CyclicVomitingOptionSection(
+                    title: "Vomiting Trigger?",
+                    options: triggerOptions,
+                    selection: $selectedTriggers,
+                    tint: option.tint,
+                    otherPlaceholder: "Other triggers",
+                    otherText: $otherTriggers
+                )
+
+                CyclicVomitingOptionSection(
+                    title: "Prodrome Symptoms",
+                    options: beforeSymptomOptions,
+                    selection: $selectedBeforeSymptoms,
+                    tint: option.tint,
+                    otherPlaceholder: "Other",
+                    otherText: $otherBeforeSymptoms
+                )
+            }
+
+            CyclicVomitingFormSection(
+                id: "during",
+                title: "During Episode",
+                icon: "waveform.path.ecg",
+                tint: option.tint,
+                isCollapsed: collapsedFormSections.contains("during"),
+                onToggle: { toggleFormSection("during") }
+            ) {
+                CyclicVomitingOptionSection(
+                    title: "Symptoms During Vomiting",
+                    options: duringSymptomOptions,
+                    selection: $selectedDuringSymptoms,
+                    tint: option.tint,
+                    otherPlaceholder: "Other",
+                    otherText: $otherDuringSymptoms
+                )
+
+                CyclicVomitingNumberPicker(
+                    title: "Vomiting Frequency",
+                    value: $vomitingActsPerDay,
+                    tint: option.tint
+                )
+            }
+
+            CyclicVomitingFormSection(
+                id: "recovery",
+                title: "Post-Episode (Recovery)",
+                icon: "moon.zzz.fill",
+                tint: option.tint,
+                isCollapsed: collapsedFormSections.contains("recovery"),
+                onToggle: { toggleFormSection("recovery") }
+            ) {
+                CyclicVomitingOptionSection(
+                    title: "Recovery Symptoms",
+                    options: recoverySymptomOptions,
+                    selection: $selectedRecoverySymptoms,
+                    tint: option.tint,
+                    otherPlaceholder: "Other",
+                    otherText: $otherRecoverySymptoms
+                )
+            }
+
+            CyclicVomitingFormSection(
+                id: "medication",
+                title: "Current Medication",
+                icon: "pills.fill",
+                tint: option.tint,
+                isCollapsed: collapsedFormSections.contains("medication"),
+                onToggle: { toggleFormSection("medication") }
+            ) {
+                CyclicVomitingOptionSection(
+                    title: "Current medications in use (Multi-select)",
+                    options: episodeMedicationOptions,
+                    selection: $selectedMedications,
+                    tint: option.tint,
+                    otherPlaceholder: "Other",
+                    otherText: $otherMedication
+                )
+            }
+        }
+    }
+
+    private var backgroundForm: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(localizedAppString("Background"))
+                .font(.title3.weight(.black))
+                .foregroundStyle(AppTheme.text)
+
+            CyclicVomitingFormSection(
+                id: "backgroundFamily",
+                title: "Family History",
+                icon: "person.3.fill",
+                tint: option.tint,
+                isCollapsed: collapsedFormSections.contains("backgroundFamily"),
+                onToggle: { toggleFormSection("backgroundFamily") }
+            ) {
+                CyclicVomitingOptionSection(
+                    title: "Parents, grandparents, siblings, etc. with following conditions",
+                    options: familyHistoryOptions,
+                    selection: $selectedFamilyHistory,
+                    tint: option.tint,
+                    otherPlaceholder: "",
+                    otherText: .constant("")
+                )
+            }
+
+            CyclicVomitingFormSection(
+                id: "backgroundSurgical",
+                title: "Surgical History",
+                icon: "cross.case.fill",
+                tint: option.tint,
+                isCollapsed: collapsedFormSections.contains("backgroundSurgical"),
+                onToggle: { toggleFormSection("backgroundSurgical") }
+            ) {
+                CyclicVomitingOptionSection(
+                    title: "",
+                    options: surgicalHistoryOptions,
+                    selection: $selectedSurgicalHistory,
+                    tint: option.tint,
+                    otherPlaceholder: "Other",
+                    otherText: $otherSurgery
+                )
+            }
+
+            CyclicVomitingFormSection(
+                id: "backgroundOnset",
+                title: "Onset Time of Recurrent Vomiting",
+                icon: "calendar.badge.clock",
+                tint: option.tint,
+                isCollapsed: collapsedFormSections.contains("backgroundOnset"),
+                onToggle: { toggleFormSection("backgroundOnset") }
+            ) {
+                CyclicVomitingYearMonthField(
+                    year: $onsetYear,
+                    month: $onsetMonth
+                )
+            }
+
+            CyclicVomitingFormSection(
+                id: "backgroundComorbidities",
+                title: "Comorbidities",
+                icon: "heart.text.square.fill",
+                tint: option.tint,
+                isCollapsed: collapsedFormSections.contains("backgroundComorbidities"),
+                onToggle: { toggleFormSection("backgroundComorbidities") }
+            ) {
+                CyclicVomitingOptionSection(
+                    title: "Other co-existing conditions",
+                    options: comorbidityOptions,
+                    selection: $selectedComorbidities,
+                    tint: option.tint,
+                    otherPlaceholder: "",
+                    otherText: .constant("")
+                )
+
+                if selectedComorbidities.contains("Inborn errors of metabolism") {
+                    CyclicVomitingTextField(
+                        title: "Inborn errors of metabolism name",
+                        placeholder: "Name required",
+                        text: $metabolismName
+                    )
+                }
+
+                CyclicVomitingTextField(
+                    title: "Other",
+                    placeholder: "Other condition",
+                    text: $otherComorbidity
+                )
+            }
+
+            CyclicVomitingFormSection(
+                id: "backgroundHospital",
+                title: "Hospitalization History",
+                icon: "building.2.fill",
+                tint: option.tint,
+                isCollapsed: collapsedFormSections.contains("backgroundHospital"),
+                onToggle: { toggleFormSection("backgroundHospital") }
+            ) {
+                CyclicVomitingYesNoPicker(
+                    title: "Have you ever been hospitalized at Beijing Tsinghua Changgung Hospital?",
+                    isYes: $hospitalizedAtBeijingHospital,
+                    tint: option.tint
+                )
+
+                if hospitalizedAtBeijingHospital == true {
+                    CyclicVomitingOptionSection(
+                        title: "Current medications in use (Multi-select)",
+                        options: medicationOptions,
+                        selection: $selectedCurrentBackgroundMedications,
+                        tint: option.tint,
+                        otherPlaceholder: "Other",
+                        otherText: $otherCurrentBackgroundMedication
+                    )
+
+                    if hasSelectedBackgroundMedication {
+                        CyclicVomitingYesNoPicker(
+                            title: "Adverse drug reactions",
+                            isYes: $hadAdverseDrugReaction,
+                            tint: option.tint
+                        )
+
+                        if hadAdverseDrugReaction == true {
+                            CyclicVomitingTextField(
+                                title: "Adverse drug reaction details",
+                                placeholder: "Please fill in the specific details",
+                                text: $adverseDrugReactionDetails,
+                                lineLimit: 2...5
+                            )
+                        }
+                    }
+                } else if hospitalizedAtBeijingHospital == false {
+                    CyclicVomitingOptionSection(
+                        title: "Which of the following medications have been used in the past? (Multi-select)",
+                        options: pastMedicationOptions,
+                        selection: $selectedPastMedications,
+                        tint: option.tint,
+                        otherPlaceholder: "Other",
+                        otherText: $otherPastMedication
+                    )
+                }
+            }
+        }
+    }
+
+    private var patternsForm: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(localizedAppString("Baseline Vomiting Patterns & Quality of Life"))
+                .font(.title3.weight(.black))
+                .foregroundStyle(AppTheme.text)
+
+            if !patternsMessage.isEmpty {
+                Text(localizedAppString(patternsMessage))
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(AppTheme.accent)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(AppTheme.accent.opacity(0.10))
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+
+            CyclicVomitingFormSection(
+                id: "patternsEpisode",
+                title: "Episode Pattern",
+                icon: "calendar.badge.clock",
+                tint: option.tint,
+                isCollapsed: collapsedFormSections.contains("patternsEpisode"),
+                onToggle: { toggleFormSection("patternsEpisode") }
+            ) {
+                CyclicVomitingSingleChoiceSection(
+                    title: "Number of vomiting episodes in the past year",
+                    options: episodesPastYearOptions,
+                    selection: $episodesPastYear,
+                    tint: option.tint
+                )
+
+                CyclicVomitingSingleChoiceSection(
+                    title: "Interval between vomiting episodes",
+                    options: episodeIntervalOptions,
+                    selection: $episodeInterval,
+                    tint: option.tint
+                )
+
+                CyclicVomitingSingleChoiceSection(
+                    title: "Duration of each vomiting episode",
+                    options: episodeDurationOptions,
+                    selection: $episodeDuration,
+                    tint: option.tint
+                )
+            }
+
+            CyclicVomitingFormSection(
+                id: "patternsTriggers",
+                title: "Historical Triggers",
+                icon: "bolt.heart.fill",
+                tint: option.tint,
+                isCollapsed: collapsedFormSections.contains("patternsTriggers"),
+                onToggle: { toggleFormSection("patternsTriggers") }
+            ) {
+                CyclicVomitingOptionSection(
+                    title: "Historical triggers before each vomiting episode",
+                    options: triggerOptions,
+                    selection: $selectedHistoricalTriggers,
+                    tint: option.tint,
+                    otherPlaceholder: "Other triggers",
+                    otherText: $otherHistoricalTriggers
+                )
+            }
+
+            CyclicVomitingFormSection(
+                id: "patternsProdrome",
+                title: "Prodromal Symptoms",
+                icon: "exclamationmark.triangle.fill",
+                tint: option.tint,
+                isCollapsed: collapsedFormSections.contains("patternsProdrome"),
+                onToggle: { toggleFormSection("patternsProdrome") }
+            ) {
+                CyclicVomitingOptionSection(
+                    title: "Symptoms before each vomiting episode starts (Multi-select)",
+                    options: baselineProdromalSymptomOptions,
+                    selection: $selectedProdromalSymptoms,
+                    tint: option.tint,
+                    otherPlaceholder: "Other",
+                    otherText: $otherProdromalSymptoms
+                )
+            }
+
+            CyclicVomitingFormSection(
+                id: "patternsDuring",
+                title: "Symptoms During Episodes",
+                icon: "waveform.path.ecg",
+                tint: option.tint,
+                isCollapsed: collapsedFormSections.contains("patternsDuring"),
+                onToggle: { toggleFormSection("patternsDuring") }
+            ) {
+                CyclicVomitingOptionSection(
+                    title: "Symptoms during each vomiting episode (Multi-select)",
+                    options: baselineDuringSymptomOptions,
+                    selection: $selectedEpisodeSymptoms,
+                    tint: option.tint,
+                    otherPlaceholder: "Other",
+                    otherText: $otherEpisodeSymptoms
+                )
+            }
+
+            CyclicVomitingFormSection(
+                id: "patternsPostdrome",
+                title: "Postdromal Symptoms",
+                icon: "moon.zzz.fill",
+                tint: option.tint,
+                isCollapsed: collapsedFormSections.contains("patternsPostdrome"),
+                onToggle: { toggleFormSection("patternsPostdrome") }
+            ) {
+                CyclicVomitingOptionSection(
+                    title: "Symptoms from the time vomiting stops until full recovery (Multi-select)",
+                    options: recoverySymptomOptions,
+                    selection: $selectedPostdromalSymptoms,
+                    tint: option.tint,
+                    otherPlaceholder: "Other",
+                    otherText: $otherPostdromalSymptoms
+                )
+            }
+
+            CyclicVomitingFormSection(
+                id: "patternsGrowth",
+                title: "Growth",
+                icon: "ruler.fill",
+                tint: option.tint,
+                isCollapsed: collapsedFormSections.contains("patternsGrowth"),
+                onToggle: { toggleFormSection("patternsGrowth") }
+            ) {
+                HStack(spacing: 10) {
+                    CyclicVomitingMeasurementField(
+                        title: "Current Height of the child",
+                        unit: "cm",
+                        text: $childHeightCm
+                    )
+
+                    CyclicVomitingMeasurementField(
+                        title: "Current Weight of the child",
+                        unit: "Kg",
+                        text: $childWeightKg
+                    )
+                }
+            }
+
+            CyclicVomitingFormSection(
+                id: "patternsQuality",
+                title: "Current Quality of Life Status",
+                icon: "heart.text.square.fill",
+                tint: option.tint,
+                isCollapsed: collapsedFormSections.contains("patternsQuality"),
+                onToggle: { toggleFormSection("patternsQuality") }
+            ) {
+                CyclicVomitingSingleChoiceSection(
+                    title: "Choose age range",
+                    options: qualityOfLifeAgeOptions,
+                    selection: $qualityOfLifeAgeGroup,
+                    tint: option.tint
+                )
+
+                Text(localizedAppString("Quality of life link placeholder"))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .background(AppTheme.fieldBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+        }
+    }
+
+    private func saveVomitingLog() {
+        let comments = [
+            line(title: "Vomiting Start Time:", value: localizedDateString(startTime, dateStyle: .medium, timeStyle: .short)),
+            line(title: "Vomiting End Time:", value: localizedDateString(endTime, dateStyle: .medium, timeStyle: .short)),
+            line(title: "Hospitalized for this episode?", value: yesNoText(hospitalized)),
+            line(title: "Triggers before this vomiting episode", value: selectedValues(selectedTriggers, otherText: otherTriggers)),
+            line(title: "Symptoms before this vomiting episode started", value: selectedValues(selectedBeforeSymptoms, otherText: otherBeforeSymptoms)),
+            line(title: "Symptoms during this vomiting episode", value: selectedValues(selectedDuringSymptoms, otherText: otherDuringSymptoms)),
+            line(title: "Symptoms from vomiting stopped until full recovery", value: selectedValues(selectedRecoverySymptoms, otherText: otherRecoverySymptoms)),
+            line(title: "Number of vomiting acts per day", value: "\(vomitingActsPerDay)"),
+            line(title: "Current medications in use", value: selectedValues(selectedMedications, otherText: otherMedication))
+        ]
+        .joined(separator: "\n")
+
+        let entry = HealthLogEntry(
+            id: UUID(),
+            type: .quickLog,
+            categoryID: option.id,
+            title: option.title,
+            timestamp: startTime,
+            severity: hospitalized == true ? 5 : min(max(vomitingActsPerDay, 1), 5),
+            value: "\(vomitingActsPerDay) \(localizedAppString(vomitingActsPerDay == 1 ? "vomiting act/day" : "vomiting acts/day"))",
+            comments: comments
+        )
+
+        onSave(entry)
+        clearProgress()
+        dismiss()
+    }
+
+    private func line(title: String, value: String) -> String {
+        "\(localizedAppString(title)): \(value)"
+    }
+
+    private func yesNoText(_ value: Bool?) -> String {
+        guard let value else { return localizedAppString("Not selected") }
+        return localizedAppString(value ? "Yes" : "No")
+    }
+
+    private var hasSelectedBackgroundMedication: Bool {
+        selectedCurrentBackgroundMedications.contains { !$0.hasPrefix("None") }
+            || !otherCurrentBackgroundMedication.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func saveProgress() {
+        let data = CyclicVomitingProgressData(
+            startTime: startTime,
+            endTime: endTime,
+            hospitalized: hospitalized,
+            triggers: selectedTriggers.sorted(),
+            otherTriggers: otherTriggers.trimmingCharacters(in: .whitespacesAndNewlines),
+            beforeSymptoms: selectedBeforeSymptoms.sorted(),
+            otherBeforeSymptoms: otherBeforeSymptoms.trimmingCharacters(in: .whitespacesAndNewlines),
+            duringSymptoms: selectedDuringSymptoms.sorted(),
+            otherDuringSymptoms: otherDuringSymptoms.trimmingCharacters(in: .whitespacesAndNewlines),
+            recoverySymptoms: selectedRecoverySymptoms.sorted(),
+            otherRecoverySymptoms: otherRecoverySymptoms.trimmingCharacters(in: .whitespacesAndNewlines),
+            vomitingActsPerDay: vomitingActsPerDay,
+            medications: selectedMedications.sorted(),
+            otherMedication: otherMedication.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+
+        if let encoded = try? JSONEncoder().encode(data) {
+            progressData = encoded
+            progressMessage = "Progress saved."
+        }
+    }
+
+    private func loadProgressIfNeeded() {
+        guard !didLoadProgress else { return }
+        didLoadProgress = true
+        guard !progressData.isEmpty,
+              let data = try? JSONDecoder().decode(CyclicVomitingProgressData.self, from: progressData) else {
+            return
+        }
+
+        startTime = data.startTime
+        endTime = data.endTime
+        hospitalized = data.hospitalized
+        selectedTriggers = Set(data.triggers)
+        otherTriggers = data.otherTriggers
+        selectedBeforeSymptoms = Set(data.beforeSymptoms)
+        otherBeforeSymptoms = data.otherBeforeSymptoms
+        selectedDuringSymptoms = Set(data.duringSymptoms)
+        otherDuringSymptoms = data.otherDuringSymptoms
+        selectedRecoverySymptoms = Set(data.recoverySymptoms)
+        otherRecoverySymptoms = data.otherRecoverySymptoms
+        vomitingActsPerDay = max(1, data.vomitingActsPerDay)
+        selectedMedications = Set(data.medications)
+        otherMedication = data.otherMedication
+    }
+
+    private func loadPatternsIfNeeded() {
+        guard !didLoadPatterns else { return }
+        didLoadPatterns = true
+        guard !patternsData.isEmpty,
+              let data = try? JSONDecoder().decode(CyclicVomitingPatternsData.self, from: patternsData) else {
+            return
+        }
+
+        episodesPastYear = data.episodesPastYear
+        episodeInterval = data.episodeInterval
+        episodeDuration = data.episodeDuration
+        selectedHistoricalTriggers = Set(data.historicalTriggers)
+        otherHistoricalTriggers = data.otherHistoricalTriggers
+        selectedProdromalSymptoms = Set(data.prodromalSymptoms)
+        otherProdromalSymptoms = data.otherProdromalSymptoms
+        selectedEpisodeSymptoms = Set(data.episodeSymptoms)
+        otherEpisodeSymptoms = data.otherEpisodeSymptoms
+        selectedPostdromalSymptoms = Set(data.postdromalSymptoms)
+        otherPostdromalSymptoms = data.otherPostdromalSymptoms
+        childHeightCm = data.heightCm
+        childWeightKg = data.weightKg
+        qualityOfLifeAgeGroup = data.qualityOfLifeAgeGroup
+    }
+
+    private func clearProgress() {
+        progressData = Data()
+        progressMessage = ""
+    }
+
+    private func loadBackgroundIfNeeded() {
+        guard !didLoadBackground else { return }
+        didLoadBackground = true
+        guard !backgroundData.isEmpty,
+              let data = try? JSONDecoder().decode(CyclicVomitingBackgroundData.self, from: backgroundData) else {
+            return
+        }
+
+        selectedFamilyHistory = Set(data.familyHistory)
+        selectedSurgicalHistory = Set(data.surgicalHistory)
+        otherSurgery = data.otherSurgery
+        onsetYear = data.onsetYear
+        onsetMonth = data.onsetMonth
+        selectedComorbidities = Set(data.comorbidities)
+        metabolismName = data.metabolismName
+        otherComorbidity = data.otherComorbidity
+        hospitalizedAtBeijingHospital = data.hospitalizedAtBeijingHospital
+        selectedCurrentBackgroundMedications = Set(data.currentMedications)
+        otherCurrentBackgroundMedication = data.otherCurrentMedication
+        hadAdverseDrugReaction = data.hadAdverseDrugReaction
+        adverseDrugReactionDetails = data.adverseDrugReactionDetails
+        selectedPastMedications = Set(data.pastMedications)
+        otherPastMedication = data.otherPastMedication
+    }
+
+    private func saveBackground() {
+        let savedCurrentMedications = hospitalizedAtBeijingHospital == true ? selectedCurrentBackgroundMedications.sorted() : []
+        let savedOtherCurrentMedication = hospitalizedAtBeijingHospital == true ? otherCurrentBackgroundMedication.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        let savedPastMedications = hospitalizedAtBeijingHospital == false ? selectedPastMedications.sorted() : []
+        let savedOtherPastMedication = hospitalizedAtBeijingHospital == false ? otherPastMedication.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        let savedHadAdverseReaction = hospitalizedAtBeijingHospital == true && hasSelectedBackgroundMedication && hadAdverseDrugReaction == true
+
+        let data = CyclicVomitingBackgroundData(
+            familyHistory: selectedFamilyHistory.sorted(),
+            surgicalHistory: selectedSurgicalHistory.sorted(),
+            otherSurgery: otherSurgery.trimmingCharacters(in: .whitespacesAndNewlines),
+            onsetYear: onsetYear.trimmingCharacters(in: .whitespacesAndNewlines),
+            onsetMonth: onsetMonth.trimmingCharacters(in: .whitespacesAndNewlines),
+            comorbidities: selectedComorbidities.sorted(),
+            metabolismName: metabolismName.trimmingCharacters(in: .whitespacesAndNewlines),
+            otherComorbidity: otherComorbidity.trimmingCharacters(in: .whitespacesAndNewlines),
+            hospitalizedAtBeijingHospital: hospitalizedAtBeijingHospital,
+            currentMedications: savedCurrentMedications,
+            otherCurrentMedication: savedOtherCurrentMedication,
+            hadAdverseDrugReaction: savedHadAdverseReaction,
+            adverseDrugReactionDetails: savedHadAdverseReaction ? adverseDrugReactionDetails.trimmingCharacters(in: .whitespacesAndNewlines) : "",
+            pastMedications: savedPastMedications,
+            otherPastMedication: savedOtherPastMedication
+        )
+
+        if let encoded = try? JSONEncoder().encode(data) {
+            backgroundData = encoded
+        }
+    }
+
+    private func savePatterns() {
+        let data = CyclicVomitingPatternsData(
+            episodesPastYear: episodesPastYear,
+            episodeInterval: episodeInterval,
+            episodeDuration: episodeDuration,
+            historicalTriggers: selectedHistoricalTriggers.sorted(),
+            otherHistoricalTriggers: otherHistoricalTriggers.trimmingCharacters(in: .whitespacesAndNewlines),
+            prodromalSymptoms: selectedProdromalSymptoms.sorted(),
+            otherProdromalSymptoms: otherProdromalSymptoms.trimmingCharacters(in: .whitespacesAndNewlines),
+            episodeSymptoms: selectedEpisodeSymptoms.sorted(),
+            otherEpisodeSymptoms: otherEpisodeSymptoms.trimmingCharacters(in: .whitespacesAndNewlines),
+            postdromalSymptoms: selectedPostdromalSymptoms.sorted(),
+            otherPostdromalSymptoms: otherPostdromalSymptoms.trimmingCharacters(in: .whitespacesAndNewlines),
+            heightCm: childHeightCm.trimmingCharacters(in: .whitespacesAndNewlines),
+            weightKg: childWeightKg.trimmingCharacters(in: .whitespacesAndNewlines),
+            qualityOfLifeAgeGroup: qualityOfLifeAgeGroup
+        )
+
+        if let encoded = try? JSONEncoder().encode(data) {
+            patternsData = encoded
+            patternsMessage = "Patterns saved."
+        }
+    }
+
+    private func toggleFormSection(_ id: String) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            if collapsedFormSections.contains(id) {
+                collapsedFormSections.remove(id)
+            } else {
+                collapsedFormSections.insert(id)
+            }
+        }
+    }
+
+    private func selectedValues(_ values: Set<String>, otherText: String) -> String {
+        var labels = values.sorted().map { localizedAppString($0) }
+        let trimmed = otherText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            labels.append(trimmed)
+        }
+        return labels.isEmpty ? localizedAppString("None") : labels.joined(separator: ", ")
+    }
+}
+
+struct CyclicVomitingNavigationCard: View {
+    let title: String
+    let icon: String
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.caption.weight(.black))
+                .foregroundStyle(tint)
+                .frame(width: 18)
+
+            Text(localizedAppString(title))
+                .font(.subheadline.weight(.black))
+                .foregroundStyle(tint)
+                .lineLimit(1)
+                .minimumScaleFactor(0.76)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 46)
+        .background(tint.opacity(0.16))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+struct CyclicVomitingTimeField: View {
+    let title: String
+    @Binding var selection: Date
+    let tint: Color
+    @State private var isDatePickerPresented = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(localizedAppString(title))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppTheme.text)
+
+            HStack(spacing: 10) {
+                Button {
+                    isDatePickerPresented = true
+                } label: {
+                    Image(systemName: "calendar")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(tint)
+                        .frame(width: 28, height: 28)
+                        .background(tint.opacity(0.14))
+                        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $isDatePickerPresented) {
+                    VStack(spacing: 12) {
+                        DatePicker(
+                            "",
+                            selection: $selection,
+                            displayedComponents: [.date]
+                        )
+                        .datePickerStyle(.graphical)
+                        .labelsHidden()
+
+                        Button(localizedAppString("Done")) {
+                            isDatePickerPresented = false
+                        }
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(tint)
+                    }
+                    .padding()
+                    .frame(minWidth: 320)
+                    .presentationCompactAdaptation(.popover)
+                }
+
+                DatePicker(
+                    "",
+                    selection: $selection,
+                    displayedComponents: [.date, .hourAndMinute]
+                )
+                .labelsHidden()
+                .datePickerStyle(.compact)
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(AppTheme.fieldBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .stroke(tint.opacity(0.18), lineWidth: 1)
+            )
+        }
+    }
+}
+
+struct CyclicVomitingYearMonthField: View {
+    @Binding var year: String
+    @Binding var month: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(localizedAppString("Onset Time of Recurrent Vomiting"))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppTheme.text)
+
+            HStack(spacing: 10) {
+                CyclicVomitingCompactTextField(
+                    placeholder: "Year",
+                    text: $year
+                )
+
+                CyclicVomitingCompactTextField(
+                    placeholder: "Month",
+                    text: $month
+                )
+            }
+        }
+    }
+}
+
+struct CyclicVomitingCompactTextField: View {
+    let placeholder: String
+    @Binding var text: String
+
+    var body: some View {
+        TextField(localizedAppString(placeholder), text: $text)
+            .keyboardType(.numberPad)
+            .padding(12)
+            .background(AppTheme.fieldBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+struct CyclicVomitingTextField: View {
+    let title: String
+    let placeholder: String
+    @Binding var text: String
+    var lineLimit: ClosedRange<Int> = 1...3
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(localizedAppString(title))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppTheme.text)
+
+            TextField(localizedAppString(placeholder), text: $text, axis: .vertical)
+                .textInputAutocapitalization(.never)
+                .lineLimit(lineLimit)
+                .padding(12)
+                .background(AppTheme.fieldBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+    }
+}
+
+struct CyclicVomitingFormSection<Content: View>: View {
+    let id: String
+    let title: String
+    let icon: String
+    let tint: Color
+    let isCollapsed: Bool
+    let onToggle: () -> Void
+    let content: Content
+
+    init(
+        id: String,
+        title: String,
+        icon: String,
+        tint: Color,
+        isCollapsed: Bool,
+        onToggle: @escaping () -> Void,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.id = id
+        self.title = title
+        self.icon = icon
+        self.tint = tint
+        self.isCollapsed = isCollapsed
+        self.onToggle = onToggle
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Button(action: onToggle) {
+                HStack(spacing: 10) {
+                    Image(systemName: icon)
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(tint)
+                        .frame(width: 30, height: 30)
+                        .background(tint.opacity(0.14))
+                        .clipShape(Circle())
+
+                    Text(localizedAppString(title))
+                        .font(.headline.weight(.black))
+                        .foregroundStyle(AppTheme.text)
+
+                    Spacer()
+
+                    Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28)
+                }
+            }
+            .buttonStyle(.plain)
+
+            if !isCollapsed {
+                content
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(16)
+        .background(.white.opacity(0.86))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(AppTheme.accent.opacity(0.10), lineWidth: 1)
+        )
+    }
+}
+
+struct CyclicVomitingYesNoPicker: View {
+    let title: String
+    @Binding var isYes: Bool?
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(localizedAppString(title))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppTheme.text)
+
+            HStack(spacing: 10) {
+                yesNoButton(title: "Yes", selected: isYes == true) {
+                    isYes = isYes == true ? nil : true
+                }
+                yesNoButton(title: "No", selected: isYes == false) {
+                    isYes = isYes == false ? nil : false
+                }
+            }
+        }
+    }
+
+    private func yesNoButton(title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(selected ? tint : .secondary.opacity(0.6))
+
+                Text(localizedAppString(title))
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(AppTheme.text)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct CyclicVomitingOptionSection: View {
+    let title: String
+    let options: [String]
+    @Binding var selection: Set<String>
+    let tint: Color
+    let otherPlaceholder: String
+    @Binding var otherText: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if !title.isEmpty {
+                Text(localizedAppString(title))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.text)
+            }
+
+            FlowLayout(spacing: 8, rowSpacing: 8) {
+                ForEach(options, id: \.self) { option in
+                    CyclicVomitingOptionChip(
+                        title: option,
+                        isSelected: selection.contains(option),
+                        tint: tint
+                    ) {
+                        toggle(option)
+                    }
+                }
+            }
+
+            if !otherPlaceholder.isEmpty {
+                TextField(localizedAppString(otherPlaceholder), text: $otherText, axis: .vertical)
+                    .textInputAutocapitalization(.never)
+                    .lineLimit(1...3)
+                    .padding(12)
+                    .background(AppTheme.fieldBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+        }
+    }
+
+    private func toggle(_ option: String) {
+        if selection.contains(option) {
+            selection.remove(option)
+            return
+        }
+
+        if option.hasPrefix("None") {
+            selection = [option]
+        } else {
+            selection = selection.filter { !$0.hasPrefix("None") }
+            selection.insert(option)
+        }
+    }
+}
+
+struct CyclicVomitingSingleChoiceSection: View {
+    let title: String
+    let options: [String]
+    @Binding var selection: String
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(localizedAppString(title))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppTheme.text)
+
+            FlowLayout(spacing: 8, rowSpacing: 8) {
+                ForEach(options, id: \.self) { option in
+                    CyclicVomitingOptionChip(
+                        title: option,
+                        isSelected: selection == option,
+                        tint: tint
+                    ) {
+                        selection = selection == option ? "" : option
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct CyclicVomitingMeasurementField: View {
+    let title: String
+    let unit: String
+    @Binding var text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(localizedAppString(title))
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                TextField("", text: $text)
+                    .keyboardType(.decimalPad)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.text)
+
+                Text(unit)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(12)
+            .background(AppTheme.fieldBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+    }
+}
+
+struct CyclicVomitingOptionChip: View {
+    let title: String
+    let isSelected: Bool
+    let tint: Color
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(isSelected ? .white : .secondary.opacity(0.7))
+                Text(localizedAppString(title))
+                    .font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(isSelected ? .white : AppTheme.text)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 8)
+            .background(isSelected ? tint : AppTheme.fieldBackground)
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct CyclicVomitingNumberPicker: View {
+    let title: String
+    @Binding var value: Int
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(localizedAppString(title))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.text)
+                Spacer()
+                Text(localizedAppString("Times per Day"))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 14) {
+                Button {
+                    value = max(0, value - 1)
+                } label: {
+                    Image(systemName: "minus")
+                        .font(.headline.weight(.bold))
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.bordered)
+                .tint(tint)
+
+                Text("\(value)")
+                    .font(.title.weight(.black))
+                    .foregroundStyle(AppTheme.text)
+                    .frame(minWidth: 62)
+
+                Button {
+                    value = min(50, value + 1)
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.headline.weight(.bold))
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(tint)
+
+                Spacer()
+            }
+        }
     }
 }
 
@@ -2193,6 +3716,7 @@ struct NutritionSnapshotSheet: View {
                             NutritionGoalField(title: "Iron", placeholder: "mg", text: $ironGoal)
 
                             TextField("Other supplements or vitamins", text: $otherSupplements, axis: .vertical)
+                                .textInputAutocapitalization(.never)
                                 .lineLimit(2...4)
                                 .padding(12)
                                 .background(AppTheme.fieldBackground)
@@ -2209,6 +3733,7 @@ struct NutritionSnapshotSheet: View {
                                 .foregroundStyle(AppTheme.text)
 
                             TextField("Diet restrictions, feeding notes, texture needs, or parent reminders", text: $notes, axis: .vertical)
+                                .textInputAutocapitalization(.never)
                                 .lineLimit(3...6)
                                 .padding(12)
                                 .background(AppTheme.fieldBackground)
@@ -2576,6 +4101,7 @@ struct MoodLogSheet: View {
                 .foregroundStyle(AppTheme.text)
 
             TextField("Add context, trigger, activity, place, person, or change in routine", text: $cause, axis: .vertical)
+                .textInputAutocapitalization(.never)
                 .lineLimit(6...9)
                 .padding(12)
                 .background(AppTheme.fieldBackground)
@@ -3605,6 +5131,7 @@ struct MedicationEditorSheet: View {
                         }
 
                         TextEditor(text: $draft.instructions)
+                            .textInputAutocapitalization(.never)
                             .frame(minHeight: 88)
                             .scrollContentBackground(.hidden)
                             .padding(8)
@@ -3830,7 +5357,7 @@ struct MedicationFormTextField: View {
         HStack(spacing: 8) {
             TextField(placeholder, text: $text)
                 .keyboardType(keyboardType)
-                .textInputAutocapitalization(.words)
+                .textInputAutocapitalization(.never)
                 .font(.headline.weight(.semibold))
                 .foregroundStyle(AppTheme.text)
 
@@ -3955,6 +5482,7 @@ struct PainLogEntrySheet: View {
                                 .foregroundStyle(AppTheme.text)
 
                             TextField("What happened or what helped?", text: $shortComment, axis: .vertical)
+                                .textInputAutocapitalization(.never)
                                 .lineLimit(3...5)
                                 .padding(12)
                                 .background(AppTheme.fieldBackground)
@@ -3967,6 +5495,7 @@ struct PainLogEntrySheet: View {
                                 .foregroundStyle(AppTheme.text)
 
                             TextField("Crying, holding head, aggression, guarding, limping", text: $indicators, axis: .vertical)
+                                .textInputAutocapitalization(.never)
                                 .lineLimit(3...6)
                                 .padding(12)
                                 .background(AppTheme.fieldBackground)
@@ -4840,6 +6369,7 @@ struct SeizureTimerSheet: View {
                                     .foregroundStyle(AppTheme.text)
 
                                 TextField("Flashing lights, missed sleep, heat, illness, etc.", text: $triggers, axis: .vertical)
+                                    .textInputAutocapitalization(.never)
                                     .lineLimit(3...6)
                                     .padding(12)
                                     .background(AppTheme.fieldBackground)
@@ -4852,6 +6382,7 @@ struct SeizureTimerSheet: View {
                                     .foregroundStyle(AppTheme.text)
 
                                 TextField("Recovery, breathing, color, awareness, what helped", text: $postEventNotes, axis: .vertical)
+                                    .textInputAutocapitalization(.never)
                                     .lineLimit(4...7)
                                     .padding(12)
                                     .background(AppTheme.fieldBackground)
@@ -5135,7 +6666,7 @@ struct QuickLogTrendPreviewCard: View {
                 medicineHistoryCard
             }
             .buttonStyle(.plain)
-        } else if option.id == "mood" || option.id == "pain" {
+        } else if option.id == "mood" || option.id == "pain" || option.id == "cyclicVomiting" {
             NavigationLink {
                 QuickLogHistoryDetailView(option: option, entries: entries)
             } label: {
@@ -5586,6 +7117,14 @@ struct SleepTrackerHistoryView: View {
         Array(18...33)
     }
 
+    private var chartContentWidth: CGFloat {
+        dateColumnWidth + timelineWidth + 28
+    }
+
+    private var chartContentHeight: CGFloat {
+        34 + 6 + CGFloat(sleepRecords.count) * rowHeight + 28
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -5595,27 +7134,17 @@ struct SleepTrackerHistoryView: View {
                         .foregroundStyle(.secondary)
                         .authPanel()
                 } else {
-                    ScrollView(.horizontal, showsIndicators: true) {
-                        VStack(alignment: .leading, spacing: 0) {
-                            timelineHeader
-
-                            ForEach(sleepRecords) { record in
-                                SleepTrackerTimelineRow(
-                                    record: record,
-                                    tint: option.tint,
-                                    dateColumnWidth: dateColumnWidth,
-                                    timelineWidth: timelineWidth,
-                                    rowHeight: rowHeight,
-                                    startMinutes: timelineStartMinutes,
-                                    endMinutes: timelineEndMinutes
-                                )
-                            }
+                    ScrollView([.horizontal, .vertical], showsIndicators: true) {
+                        ZStack {
+                            timelineChart
+                                .frame(width: chartContentWidth, height: chartContentHeight, alignment: .topLeading)
+                                .rotationEffect(.degrees(-90))
+                                .position(x: chartContentHeight / 2, y: chartContentWidth / 2)
                         }
-                        .padding(14)
-                        .background(AppTheme.panel)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .shadow(color: Color.black.opacity(0.08), radius: 14, x: 0, y: 8)
+                        .frame(width: chartContentHeight, height: chartContentWidth)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: min(chartContentWidth, 640))
                 }
             }
             .padding(18)
@@ -5623,12 +7152,28 @@ struct SleepTrackerHistoryView: View {
         .background(AppTheme.background.ignoresSafeArea())
         .navigationTitle("Sleep & Rest")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            OrientationController.shared.lock(to: .landscapeLeft)
+    }
+
+    private var timelineChart: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            timelineHeader
+
+            ForEach(sleepRecords) { record in
+                SleepTrackerTimelineRow(
+                    record: record,
+                    tint: option.tint,
+                    dateColumnWidth: dateColumnWidth,
+                    timelineWidth: timelineWidth,
+                    rowHeight: rowHeight,
+                    startMinutes: timelineStartMinutes,
+                    endMinutes: timelineEndMinutes
+                )
+            }
         }
-        .onDisappear {
-            OrientationController.shared.unlock()
-        }
+        .padding(14)
+        .background(AppTheme.panel)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(color: Color.black.opacity(0.08), radius: 14, x: 0, y: 8)
     }
 
     private var timelineHeader: some View {
@@ -5882,7 +7427,7 @@ struct QuickLogHistoryDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 if sortedEntries.isEmpty {
-                    Text("No \(option.title.lowercased()) logs saved yet.")
+                    Text("No saved logs yet")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .authPanel()
@@ -6154,7 +7699,7 @@ struct QuickLogHistoryLogCard: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 if !entry.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    SeizureHistoryDetailRow(title: option.id == "pain" ? "Pain Location" : "Mood", value: entry.value)
+                    SeizureHistoryDetailRow(title: primaryValueTitle, value: entry.value)
                 }
 
                 ForEach(cleanedComments, id: \.self) { comment in
@@ -6178,6 +7723,17 @@ struct QuickLogHistoryLogCard: View {
         let title = String(comment[..<colonIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
         let value = String(comment[comment.index(after: colonIndex)...]).trimmingCharacters(in: .whitespacesAndNewlines)
         return (title.isEmpty ? "Notes" : title, value.isEmpty ? comment : value)
+    }
+
+    private var primaryValueTitle: String {
+        switch option.id {
+        case "pain":
+            return "Pain Location"
+        case "cyclicVomiting":
+            return "Episodes"
+        default:
+            return "Mood"
+        }
     }
 }
 
@@ -6441,9 +7997,26 @@ struct TherapyTrackingView: View {
                     }
 
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Recent Milestones")
-                            .font(.headline.weight(.bold))
-                            .foregroundStyle(AppTheme.text)
+                        HStack {
+                            Text("Recent Milestones")
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            Spacer()
+
+                            NavigationLink {
+                                TherapyMilestoneHistoryView(milestones: milestones)
+                            } label: {
+                                Label("History", systemImage: "clock.arrow.circlepath")
+                                    .font(.caption.weight(.black))
+                                    .foregroundStyle(AppTheme.accent)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 8)
+                                    .background(AppTheme.accent.opacity(0.12))
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
 
                         if recentMilestones.isEmpty {
                             Text("No milestones logged yet.")
@@ -6454,7 +8027,7 @@ struct TherapyTrackingView: View {
                                 .background(AppTheme.panel)
                                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         } else {
-                            ForEach(recentMilestones.prefix(8)) { milestone in
+                            ForEach(recentMilestones.prefix(5)) { milestone in
                                 TherapyMilestoneRow(milestone: milestone)
                             }
                         }
@@ -6493,6 +8066,13 @@ struct TherapyCategory: Identifiable {
 
     static let all: [TherapyCategory] = [
         TherapyCategory(
+            id: "physical",
+            title: "Physical",
+            icon: "figure.walk",
+            tint: Color(red: 0.89, green: 0.62, blue: 0.35),
+            examples: "Balance, strength, stairs, movement"
+        ),
+        TherapyCategory(
             id: "occupational",
             title: "Occupational",
             icon: "hand.raised.fill",
@@ -6508,24 +8088,10 @@ struct TherapyCategory: Identifiable {
         ),
         TherapyCategory(
             id: "behavioral",
-            title: "Behavioral",
+            title: "Behavioral/RDI",
             icon: "brain.head.profile",
             tint: Color(red: 0.83, green: 0.48, blue: 0.66),
             examples: "Transitions, regulation, coping, routines"
-        ),
-        TherapyCategory(
-            id: "physical",
-            title: "Physical",
-            icon: "figure.walk",
-            tint: Color(red: 0.89, green: 0.62, blue: 0.35),
-            examples: "Balance, strength, stairs, movement"
-        ),
-        TherapyCategory(
-            id: "feeding",
-            title: "Feeding",
-            icon: "fork.knife",
-            tint: Color(red: 0.50, green: 0.73, blue: 0.48),
-            examples: "Textures, chewing, new foods, hydration"
         ),
         TherapyCategory(
             id: "social",
@@ -6533,6 +8099,13 @@ struct TherapyCategory: Identifiable {
             icon: "person.2.fill",
             tint: Color(red: 0.62, green: 0.57, blue: 0.86),
             examples: "Play, turn-taking, peer interaction"
+        ),
+        TherapyCategory(
+            id: "feeding",
+            title: "Feeding",
+            icon: "fork.knife",
+            tint: Color(red: 0.50, green: 0.73, blue: 0.48),
+            examples: "Textures, chewing, new foods, hydration"
         )
     ]
 
@@ -6672,6 +8245,151 @@ struct TherapyMilestoneRow: View {
     }
 }
 
+struct TherapyMilestoneHistoryView: View {
+    let milestones: [TherapyMilestone]
+
+    @State private var selectedCategoryIDs: Set<String> = []
+    @State private var startDate = Calendar.current.date(byAdding: .day, value: -7, to: Calendar.current.startOfDay(for: Date())) ?? Date()
+    @State private var endDate = Date()
+
+    private var sortedMilestones: [TherapyMilestone] {
+        milestones.sorted { $0.date > $1.date }
+    }
+
+    private var filteredMilestones: [TherapyMilestone] {
+        sortedMilestones.filter { milestone in
+            let matchesCategory = selectedCategoryIDs.isEmpty || selectedCategoryIDs.contains(milestone.categoryID)
+            let dateRange = normalizedDateRange
+            return matchesCategory && milestone.date >= dateRange.start && milestone.date <= dateRange.end
+        }
+    }
+
+    private var normalizedDateRange: (start: Date, end: Date) {
+        let calendar = Calendar.current
+        let earlier = min(startDate, endDate)
+        let later = max(startDate, endDate)
+        let start = calendar.startOfDay(for: earlier)
+        let end = calendar.date(byAdding: DateComponents(day: 1, second: -1), to: calendar.startOfDay(for: later)) ?? later
+        return (start, end)
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Therapy Type")
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(AppTheme.text)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            TherapyFilterChip(
+                                title: "All",
+                                isSelected: selectedCategoryIDs.isEmpty,
+                                tint: AppTheme.accent
+                            ) {
+                                selectedCategoryIDs.removeAll()
+                            }
+
+                            ForEach(TherapyCategory.all) { category in
+                                TherapyFilterChip(
+                                    title: category.title,
+                                    isSelected: selectedCategoryIDs.contains(category.id),
+                                    tint: category.tint
+                                ) {
+                                    toggleCategory(category.id)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+                .authPanel()
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Time Frame")
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(AppTheme.text)
+
+                    VStack(spacing: 10) {
+                        DatePicker(
+                            "Start Date",
+                            selection: $startDate,
+                            displayedComponents: .date
+                        )
+                        .font(.subheadline.weight(.semibold))
+
+                        DatePicker(
+                            "End Date",
+                            selection: $endDate,
+                            displayedComponents: .date
+                        )
+                        .font(.subheadline.weight(.semibold))
+                    }
+                    .padding(12)
+                    .background(AppTheme.fieldBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .authPanel()
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Milestones")
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(AppTheme.text)
+
+                    if filteredMilestones.isEmpty {
+                        Text("No milestones found.")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(14)
+                            .background(AppTheme.panel)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    } else {
+                        ForEach(filteredMilestones) { milestone in
+                            TherapyMilestoneRow(milestone: milestone)
+                        }
+                    }
+                }
+                .authPanel()
+            }
+            .padding(20)
+        }
+        .background(AppTheme.background.ignoresSafeArea())
+        .navigationTitle("History")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func toggleCategory(_ id: String) {
+        if selectedCategoryIDs.contains(id) {
+            selectedCategoryIDs.remove(id)
+        } else {
+            selectedCategoryIDs.insert(id)
+        }
+    }
+}
+
+struct TherapyFilterChip: View {
+    let title: String
+    let isSelected: Bool
+    let tint: Color
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(LocalizedStringKey(title))
+                .font(.caption.weight(.black))
+                .foregroundStyle(isSelected ? .white : tint)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(isSelected ? tint : tint.opacity(0.12))
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 struct TherapyMilestoneSheet: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -6800,6 +8518,8 @@ struct NutrientView: View {
     @AppStorage private var mealEstimateData: Data
     @AppStorage private var savedMealHistoryData: Data
     @State private var selectedMealPhoto: PhotosPickerItem?
+    @State private var isMealPhotoSourcePresented = false
+    @State private var isCameraPickerPresented = false
     @State private var isEstimating = false
     @State private var estimateError = ""
     @State private var saveMessage = ""
@@ -6839,7 +8559,9 @@ struct NutrientView: View {
                     }
 
                     VStack(alignment: .leading, spacing: 16) {
-                        PhotosPicker(selection: $selectedMealPhoto, matching: .images) {
+                        Button {
+                            isMealPhotoSourcePresented = true
+                        } label: {
                             MealPhotoUploadPanel(imageData: mealPhotoData)
                         }
                         .buttonStyle(.plain)
@@ -6929,6 +8651,24 @@ struct NutrientView: View {
             .task(id: selectedMealPhoto) {
                 await loadSelectedMealPhoto()
             }
+            .sheet(isPresented: $isMealPhotoSourcePresented) {
+                MealPhotoSourceSheet(
+                    selectedMealPhoto: $selectedMealPhoto,
+                    cameraAvailable: UIImagePickerController.isSourceTypeAvailable(.camera),
+                    takePhoto: openMealCamera,
+                    cameraUnavailable: {
+                        saveMessage = localizedAppString("Camera unavailable on this device.")
+                    }
+                )
+                .presentationDetents([.height(240)])
+                .presentationDragIndicator(.visible)
+            }
+            .fullScreenCover(isPresented: $isCameraPickerPresented) {
+                CameraMealPhotoPicker { data in
+                    applyMealPhotoData(data)
+                }
+                .ignoresSafeArea()
+            }
             .sheet(item: $activeMealPDF) { item in
                 PDFShareSheet(url: item.url)
             }
@@ -6970,15 +8710,28 @@ struct NutrientView: View {
 
         do {
             if let data = try await selectedMealPhoto.loadTransferable(type: Data.self) {
-                mealPhotoData = data
-                mealEstimateData = Data()
-                estimateError = ""
-                saveMessage = ""
-                hasSavedCurrentMeal = false
+                await MainActor.run {
+                    applyMealPhotoData(data)
+                }
             }
         } catch {
             // Photo selection is user-driven; keeping the existing photo avoids data loss.
         }
+    }
+
+    private func openMealCamera() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            isCameraPickerPresented = true
+        }
+    }
+
+    private func applyMealPhotoData(_ data: Data) {
+        mealPhotoData = data
+        mealEstimateData = Data()
+        selectedMealPhoto = nil
+        estimateError = ""
+        saveMessage = ""
+        hasSavedCurrentMeal = false
     }
 
     private func estimateMeal() {
@@ -7318,6 +9071,101 @@ extension UIImage {
         let newSize = CGSize(width: size.width * scale, height: size.height * scale)
         return UIGraphicsImageRenderer(size: newSize).image { _ in
             draw(in: CGRect(origin: .zero, size: newSize))
+        }
+    }
+}
+
+struct MealPhotoSourceSheet: View {
+    @Binding var selectedMealPhoto: PhotosPickerItem?
+    let cameraAvailable: Bool
+    let takePhoto: () -> Void
+    let cameraUnavailable: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Capsule()
+                .fill(Color.secondary.opacity(0.25))
+                .frame(width: 42, height: 5)
+                .padding(.top, 4)
+
+            Text("Meal Photo")
+                .font(.headline.weight(.bold))
+                .foregroundStyle(AppTheme.text)
+
+            Button {
+                dismiss()
+                if cameraAvailable {
+                    takePhoto()
+                } else {
+                    cameraUnavailable()
+                }
+            } label: {
+                Label("Take Photo", systemImage: "camera.fill")
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(cameraAvailable ? AppTheme.accent : Color.gray.opacity(0.55))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+
+            PhotosPicker(selection: $selectedMealPhoto, matching: .images) {
+                Label("Choose from Library", systemImage: "photo.on.rectangle")
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(AppTheme.accent)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(AppTheme.accent.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+        }
+        .padding(20)
+        .background(AppTheme.background.ignoresSafeArea())
+        .onChange(of: selectedMealPhoto) { _, newValue in
+            if newValue != nil {
+                dismiss()
+            }
+        }
+    }
+}
+
+struct CameraMealPhotoPicker: UIViewControllerRepresentable {
+    let onImageData: (Data) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.cameraCaptureMode = .photo
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+        let parent: CameraMealPhotoPicker
+
+        init(parent: CameraMealPhotoPicker) {
+            self.parent = parent
+        }
+
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            if let image = info[.originalImage] as? UIImage,
+               let data = image.resizedForMealAnalysis(maxDimension: 1600).jpegData(compressionQuality: 0.78) {
+                parent.onImageData(data)
+            }
+            parent.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
         }
     }
 }
@@ -7993,7 +9841,7 @@ struct ProfileTextField: View {
                 .foregroundStyle(AppTheme.text)
 
             TextField(LocalizedStringKey(placeholder), text: $text, axis: axis)
-                .textInputAutocapitalization(.words)
+                .textInputAutocapitalization(.never)
                 .padding(12)
                 .background(AppTheme.fieldBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))

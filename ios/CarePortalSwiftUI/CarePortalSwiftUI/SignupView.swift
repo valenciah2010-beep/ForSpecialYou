@@ -23,7 +23,7 @@ struct SignupView: View {
                     .foregroundStyle(.secondary)
             }
 
-            AuthTextField(title: "Parent Username", text: $viewModel.signupNickname, contentType: .nickname)
+            AuthTextField(title: "Parent Username", text: $viewModel.signupNickname)
             AuthTextField(title: "Email", text: $viewModel.signupEmail, keyboard: .emailAddress, contentType: .emailAddress)
 
             AuthSecureField(title: "Password", text: $viewModel.signupPassword, contentType: .newPassword)

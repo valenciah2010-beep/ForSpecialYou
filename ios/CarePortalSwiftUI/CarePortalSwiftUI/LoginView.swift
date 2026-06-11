@@ -19,7 +19,7 @@ struct LoginView: View {
                     .font(.title2.weight(.bold))
             }
 
-            AuthTextField(title: "Parent Username", text: $viewModel.loginNickname, contentType: .username)
+            AuthTextField(title: "Parent Username", text: $viewModel.loginNickname)
 
             AuthSecureField(title: "Password", text: $viewModel.loginPassword, contentType: .password)
 
