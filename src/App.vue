@@ -68,7 +68,10 @@ const parentDetail = ref(null);
 const parentDetailMessage = ref('');
 const isLoadingParentDetail = ref(false);
 const parentHistoryDateFilter = ref('');
+const parentHistoryPageFilter = ref('health');
 const parentHistorySectionFilter = ref('all');
+const isSavingNutrientLimit = ref(false);
+const nutrientLimitMessage = ref('');
 const isBusy = ref(false);
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || '';
 const maxProfileImageSize = 5 * 1024 * 1024;
@@ -135,51 +138,79 @@ const filteredParentSavedMeals = computed(() => {
     .slice()
     .sort((left, right) => logTimestampMs(right.savedAt) - logTimestampMs(left.savedAt));
 });
-const parentHistorySections = computed(() => {
-  const sectionMap = new Map();
-
-  filteredParentHistoryLogs.value.forEach((log) => {
-    const key = historySectionKey(log);
-    if (!sectionMap.has(key)) {
-      sectionMap.set(key, {
-        key,
-        title: historySectionTitle(log),
-        icon: historySectionIcon(key),
-        logs: []
-      });
-    }
-
-    sectionMap.get(key).logs.push(log);
-  });
-
-  if (filteredParentSavedMeals.value.length) {
-    sectionMap.set('nutrition', {
-      key: 'nutrition',
-      title: 'Nutrition',
-      icon: historySectionIcon('nutrition'),
-      logs: [],
-      meals: filteredParentSavedMeals.value
-    });
+const filteredParentHealthLogs = computed(() => (
+  filteredParentHistoryLogs.value.filter((log) => historyPageKey(log) === 'health')
+));
+const filteredParentTherapyLogs = computed(() => (
+  filteredParentHistoryLogs.value.filter((log) => historyPageKey(log) === 'therapy')
+));
+const parentHistoryPages = computed(() => [
+  {
+    key: 'health',
+    title: 'Health',
+    icon: '🩺',
+    count: filteredParentHealthLogs.value.length
+  },
+  {
+    key: 'therapy',
+    title: 'Therapy',
+    icon: '🧩',
+    count: filteredParentTherapyLogs.value.length
+  },
+  {
+    key: 'nutrient',
+    title: 'Nutrient',
+    icon: '🍽️',
+    count: filteredParentSavedMeals.value.length
+  }
+]);
+const activeParentHistoryPageTitle = computed(() => (
+  parentHistoryPages.value.find((pageOption) => pageOption.key === parentHistoryPageFilter.value)?.title || 'History'
+));
+const activeParentHistorySections = computed(() => {
+  if (parentHistoryPageFilter.value === 'nutrient') {
+    return buildParentHistorySections([], filteredParentSavedMeals.value);
   }
 
-  return Array.from(sectionMap.values()).sort((left, right) => {
-    const preferredOrder = ['nutrition', 'medicine', 'sleep', 'seizure'];
-    const leftIndex = preferredOrder.indexOf(left.key);
-    const rightIndex = preferredOrder.indexOf(right.key);
+  const logs = parentHistoryPageFilter.value === 'therapy'
+    ? filteredParentTherapyLogs.value
+    : filteredParentHealthLogs.value;
 
-    if (leftIndex !== -1 || rightIndex !== -1) {
-      return (leftIndex === -1 ? 99 : leftIndex) - (rightIndex === -1 ? 99 : rightIndex);
-    }
+  return buildParentHistorySections(logs);
+});
+const activeParentHistoryItemCount = computed(() => (
+  activeParentHistorySections.value.reduce((total, section) => total + historySectionCount(section), 0)
+));
+const hasParentHistoryForDate = computed(() => (
+  filteredParentHistoryLogs.value.length > 0 || filteredParentSavedMeals.value.length > 0
+));
+const hasAnyParentHistory = computed(() => (
+  Boolean(parentDetail.value?.healthLogs?.length) || Boolean(parentDetail.value?.savedMeals?.length)
+));
+const nutrientDailyLimit = computed(() => (
+  clamp(Number(parentDetail.value?.nutrientDailyLimit ?? 3) || 0, 0, 20)
+));
+const nutrientUsageSummary = computed(() => {
+  const limit = nutrientDailyLimit.value;
+  const usage = parentDetail.value?.nutrientDailyUsage || {};
+  const selectedDate = parentHistoryDateFilter.value;
+  const usageDateMatches = usage?.dateKey && usage.dateKey === selectedDate;
+  const syncedUsageCount = usageDateMatches ? Number(usage.estimateCount || 0) : NaN;
+  const savedMealEstimateCount = filteredParentSavedMeals.value.length;
+  const used = Number.isFinite(syncedUsageCount) ? syncedUsageCount : savedMealEstimateCount;
 
-    return left.title.localeCompare(right.title);
-  });
+  return {
+    used,
+    left: Math.max(0, limit - used),
+    limit
+  };
 });
 const visibleParentHistorySections = computed(() => {
   if (parentHistorySectionFilter.value === 'all') {
-    return parentHistorySections.value;
+    return activeParentHistorySections.value;
   }
 
-  return parentHistorySections.value.filter((section) => section.key === parentHistorySectionFilter.value);
+  return activeParentHistorySections.value.filter((section) => section.key === parentHistorySectionFilter.value);
 });
 let cropImageElement;
 let cropDragStart = {
@@ -381,6 +412,12 @@ function shiftParentHistoryDate(dayOffset) {
   parentHistoryDateFilter.value = dateInputValue(date);
 }
 
+function setParentHistoryPage(pageKey) {
+  parentHistoryPageFilter.value = pageKey;
+  parentHistorySectionFilter.value = 'all';
+  nutrientLimitMessage.value = '';
+}
+
 function formatDateInputLabel(dateValue) {
   if (!dateValue) return '';
   const [year, month, day] = dateValue.split('-').map(Number);
@@ -408,6 +445,50 @@ function logTypeLabel(log) {
   return log?.type === 'snapshot' ? 'Daily Snapshot' : 'Quick Log';
 }
 
+function buildParentHistorySections(logs = [], meals = []) {
+  const sectionMap = new Map();
+
+  logs.forEach((log) => {
+    const key = historySectionKey(log);
+    if (!sectionMap.has(key)) {
+      sectionMap.set(key, {
+        key,
+        title: historySectionTitle(log),
+        icon: historySectionIcon(key),
+        logs: []
+      });
+    }
+
+    sectionMap.get(key).logs.push(log);
+  });
+
+  if (meals.length) {
+    sectionMap.set('nutrition', {
+      key: 'nutrition',
+      title: 'Nutrition',
+      icon: historySectionIcon('nutrition'),
+      logs: [],
+      meals
+    });
+  }
+
+  return Array.from(sectionMap.values()).sort((left, right) => {
+    const preferredOrder = ['nutrition', 'medicine', 'sleep', 'seizure'];
+    const leftIndex = preferredOrder.indexOf(left.key);
+    const rightIndex = preferredOrder.indexOf(right.key);
+
+    if (leftIndex !== -1 || rightIndex !== -1) {
+      return (leftIndex === -1 ? 99 : leftIndex) - (rightIndex === -1 ? 99 : rightIndex);
+    }
+
+    return left.title.localeCompare(right.title);
+  });
+}
+
+function historyPageKey(log) {
+  return historySectionKey(log) === 'therapy' ? 'therapy' : 'health';
+}
+
 function historySectionKey(log) {
   const category = String(log?.categoryID || '').toLowerCase();
   const title = String(log?.title || '').toLowerCase();
@@ -415,6 +496,7 @@ function historySectionKey(log) {
   if (category === 'medsfood' || category === 'medicine' || title.includes('medicine')) return 'medicine';
   if (category === 'sleep' || title.includes('sleep')) return 'sleep';
   if (category === 'seizure' || title.includes('seizure')) return 'seizure';
+  if (category === 'therapy' || title.includes('therapy')) return 'therapy';
   return category || title.replace(/\s+/g, '-') || 'other';
 }
 
@@ -782,7 +864,9 @@ async function openParentDetail(user) {
   parentDetail.value = null;
   parentDetailMessage.value = '';
   parentHistoryDateFilter.value = dateInputValue(new Date());
+  parentHistoryPageFilter.value = 'health';
   parentHistorySectionFilter.value = 'all';
+  nutrientLimitMessage.value = '';
   isParentDetailOpen.value = true;
   isLoadingParentDetail.value = true;
 
@@ -792,6 +876,7 @@ async function openParentDetail(user) {
 async function refreshParentDetail() {
   if (!selectedParentUser.value?.id) return;
   parentDetailMessage.value = '';
+  nutrientLimitMessage.value = '';
   isLoadingParentDetail.value = true;
   await loadParentDetail(selectedParentUser.value.id);
 }
@@ -820,7 +905,43 @@ function closeParentDetail() {
   parentDetail.value = null;
   parentDetailMessage.value = '';
   parentHistoryDateFilter.value = '';
+  parentHistoryPageFilter.value = 'health';
   parentHistorySectionFilter.value = 'all';
+  nutrientLimitMessage.value = '';
+  isSavingNutrientLimit.value = false;
+}
+
+async function saveParentNutrientLimit(nextLimit) {
+  const userId = parentDetail.value?.user?.id || selectedParentUser.value?.id;
+  if (!userId) return;
+
+  const dailyLimit = clamp(Number(nextLimit) || 0, 0, 20);
+  nutrientLimitMessage.value = '';
+  isSavingNutrientLimit.value = true;
+
+  try {
+    const response = await apiFetch(`/api/admin/app-users/${userId}/nutrient-limit`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dailyLimit })
+    });
+    const data = await response.json();
+
+    if (!response.ok) {
+      nutrientLimitMessage.value = data.message || 'Could not update nutrient estimate limit.';
+      return;
+    }
+
+    parentDetail.value = {
+      ...parentDetail.value,
+      nutrientDailyLimit: data.nutrientDailyLimit
+    };
+    nutrientLimitMessage.value = data.message;
+  } catch {
+    nutrientLimitMessage.value = 'Unable to reach the server.';
+  } finally {
+    isSavingNutrientLimit.value = false;
+  }
 }
 
 async function submitEditUser() {
@@ -1727,17 +1848,63 @@ async function submitSignup() {
                 </div>
               </div>
 
-              <div v-if="parentHistorySections.length" class="history-section-tabs">
+              <div class="history-page-tabs" role="tablist" aria-label="Parent history pages">
+                <button
+                  v-for="historyPage in parentHistoryPages"
+                  :key="historyPage.key"
+                  type="button"
+                  role="tab"
+                  :aria-selected="parentHistoryPageFilter === historyPage.key"
+                  :class="{ active: parentHistoryPageFilter === historyPage.key }"
+                  @click="setParentHistoryPage(historyPage.key)"
+                >
+                  <span class="history-page-label">{{ historyPage.icon }} {{ historyPage.title }}</span>
+                  <span class="history-page-count">{{ historyPage.count }}</span>
+                </button>
+              </div>
+
+              <div v-if="parentHistoryPageFilter === 'nutrient'" class="nutrient-quota-card">
+                <div>
+                  <p class="eyebrow">Daily Estimate Quota</p>
+                  <h4>{{ nutrientUsageSummary.used }} used · {{ nutrientUsageSummary.left }} left</h4>
+                  <span>{{ formatDateInputLabel(parentHistoryDateFilter) }}</span>
+                </div>
+
+                <div class="nutrient-quota-control" aria-label="Nutrient estimate daily limit">
+                  <button
+                    type="button"
+                    :disabled="isSavingNutrientLimit || nutrientDailyLimit <= 0"
+                    aria-label="Decrease daily estimate limit"
+                    @click="saveParentNutrientLimit(nutrientDailyLimit - 1)"
+                  >
+                    −
+                  </button>
+                  <strong>{{ nutrientDailyLimit }}</strong>
+                  <button
+                    type="button"
+                    :disabled="isSavingNutrientLimit || nutrientDailyLimit >= 20"
+                    aria-label="Increase daily estimate limit"
+                    @click="saveParentNutrientLimit(nutrientDailyLimit + 1)"
+                  >
+                    +
+                  </button>
+                  <span>per day</span>
+                </div>
+
+                <p v-if="nutrientLimitMessage" class="quota-message">{{ nutrientLimitMessage }}</p>
+              </div>
+
+              <div v-if="activeParentHistorySections.length" class="history-section-tabs">
                 <button
                   type="button"
                   :class="{ active: parentHistorySectionFilter === 'all' }"
                   @click="parentHistorySectionFilter = 'all'"
                 >
                   All
-                  <span>{{ filteredParentHistoryLogs.length + filteredParentSavedMeals.length }}</span>
+                  <span>{{ activeParentHistoryItemCount }}</span>
                 </button>
                 <button
-                  v-for="section in parentHistorySections"
+                  v-for="section in activeParentHistorySections"
                   :key="section.key"
                   type="button"
                   :class="{ active: parentHistorySectionFilter === section.key }"
@@ -1812,8 +1979,8 @@ async function submitSignup() {
                   </div>
                 </article>
               </div>
-              <p v-else-if="parentDetail.healthLogs?.length || parentDetail.savedMeals?.length" class="empty-note">
-                No history for {{ formatDateInputLabel(parentHistoryDateFilter) }}.
+              <p v-else-if="hasParentHistoryForDate || hasAnyParentHistory" class="empty-note">
+                No {{ activeParentHistoryPageTitle.toLowerCase() }} history for {{ formatDateInputLabel(parentHistoryDateFilter) }}.
               </p>
               <p v-else class="empty-note">No history synced yet.</p>
             </section>

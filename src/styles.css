@@ -1093,6 +1093,58 @@ td {
   padding: 10px 11px;
 }
 
+.history-page-tabs {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 14px;
+}
+
+.history-page-tabs button {
+  align-items: center;
+  background: #fff;
+  border: 1px solid #d8e5dc;
+  border-radius: 10px;
+  color: #456056;
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  font-weight: 900;
+  gap: 10px;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 12px 14px;
+}
+
+.history-page-tabs button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.history-page-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-page-count {
+  align-items: center;
+  background: rgba(39, 105, 93, 0.12);
+  border-radius: 999px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 0.76rem;
+  justify-content: center;
+  min-width: 26px;
+  padding: 3px 7px;
+}
+
+.history-page-tabs button.active .history-page-count {
+  background: rgba(255, 255, 255, 0.22);
+}
+
 .history-section-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -1186,6 +1238,82 @@ td {
 
 .history-section-icon {
   font-size: 1.1rem;
+}
+
+.nutrient-quota-card {
+  align-items: center;
+  background: #fff8f1;
+  border: 1px solid #f2d7b8;
+  border-radius: 10px;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-bottom: 14px;
+  padding: 14px;
+}
+
+.nutrient-quota-card h4 {
+  color: #16211c;
+  font-size: 1.05rem;
+  margin: 2px 0;
+}
+
+.nutrient-quota-card > div:first-child > span {
+  color: #667085;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.nutrient-quota-control {
+  align-items: center;
+  background: #fff;
+  border: 1px solid #eedcc8;
+  border-radius: 999px;
+  display: inline-grid;
+  gap: 8px;
+  grid-template-columns: 34px 38px 34px auto;
+  padding: 6px 10px 6px 6px;
+}
+
+.nutrient-quota-control button {
+  align-items: center;
+  background: #eef6f0;
+  border: 0;
+  border-radius: 999px;
+  color: var(--accent);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 1.15rem;
+  font-weight: 900;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+
+.nutrient-quota-control button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.nutrient-quota-control strong {
+  color: #16211c;
+  text-align: center;
+}
+
+.nutrient-quota-control span {
+  color: #667085;
+  font-size: 0.78rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.quota-message {
+  color: #8a5a16;
+  font-size: 0.82rem;
+  font-weight: 800;
+  grid-column: 1 / -1;
+  margin: 0;
 }
 
 .medicine-history-list,
@@ -1615,6 +1743,19 @@ td {
 
   .date-filter-control {
     min-width: 0;
+  }
+
+  .history-page-tabs {
+    grid-template-columns: 1fr;
+  }
+
+  .nutrient-quota-card {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .nutrient-quota-control {
+    justify-self: start;
   }
 
   .history-section-list {

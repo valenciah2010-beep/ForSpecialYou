@@ -19,6 +19,10 @@ final class AuthViewModel: ObservableObject {
     @Published var isError = false
     @Published var isLoading = false
     @Published var currentUser: CarePortalUser?
+    @Published var failedLoginAttempts = 0
+    @Published var isCaptchaRequired = false
+    @Published var captchaCode = AuthViewModel.makeCaptchaCode()
+    @Published var captchaInput = ""
 
     private static let savedUserKey = "auth.savedCarePortalUser"
     private let api = AuthAPI()
@@ -45,6 +49,11 @@ final class AuthViewModel: ObservableObject {
     func login() async {
         clearMessage()
 
+        if isCaptchaRequired {
+            showError(localizedAppString("Please complete the verification code before entering your password again."))
+            return
+        }
+
         guard !loginNickname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !loginPassword.isEmpty else {
             showError(localizedAppString("Please enter your parent username and password."))
@@ -59,8 +68,22 @@ final class AuthViewModel: ObservableObject {
             currentUser = user
             saveUser(user)
             loginPassword = ""
+            resetLoginProtection()
         } catch {
-            showError(error.localizedDescription)
+            if isInvalidCredentialError(error) {
+                failedLoginAttempts += 1
+
+                if failedLoginAttempts >= 2 {
+                    isCaptchaRequired = true
+                    refreshCaptcha()
+                    captchaInput = ""
+                    showError(localizedAppString("Too many incorrect attempts. Please complete the verification code."))
+                } else {
+                    showError(error.localizedDescription)
+                }
+            } else {
+                showError(error.localizedDescription)
+            }
         }
     }
 
@@ -137,8 +160,31 @@ final class AuthViewModel: ObservableObject {
         UserDefaults.standard.removeObject(forKey: Self.savedUserKey)
         loginNickname = ""
         loginPassword = ""
+        resetLoginProtection()
         screen = .home
         clearMessage()
+    }
+
+    func refreshCaptcha() {
+        captchaCode = Self.makeCaptchaCode()
+    }
+
+    func completeCaptchaChallenge() {
+        clearMessage()
+        let enteredCode = captchaInput.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard enteredCode == captchaCode else {
+            captchaInput = ""
+            refreshCaptcha()
+            showError(localizedAppString("Please enter the verification code shown."))
+            return
+        }
+
+        isCaptchaRequired = false
+        failedLoginAttempts = 0
+        captchaInput = ""
+        loginPassword = ""
+        message = localizedAppString("Verification complete. Please enter your password again.")
+        isError = false
     }
 
     private static func loadSavedUser() -> CarePortalUser? {
@@ -155,6 +201,29 @@ final class AuthViewModel: ObservableObject {
     private func saveUser(_ user: CarePortalUser) {
         guard let data = try? JSONEncoder().encode(user) else { return }
         UserDefaults.standard.set(data, forKey: Self.savedUserKey)
+    }
+
+    private func resetLoginProtection() {
+        failedLoginAttempts = 0
+        isCaptchaRequired = false
+        captchaInput = ""
+        refreshCaptcha()
+    }
+
+    private func isInvalidCredentialError(_ error: Error) -> Bool {
+        guard case AuthAPIError.server(let message) = error else {
+            return false
+        }
+
+        return message.localizedCaseInsensitiveContains("invalid")
+            && (message.localizedCaseInsensitiveContains("password")
+                || message.localizedCaseInsensitiveContains("nickname")
+                || message.localizedCaseInsensitiveContains("username"))
+    }
+
+    private static func makeCaptchaCode() -> String {
+        let characters = Array("23456789ABCDEFGHJKLMNPQRSTUVWXYZ")
+        return String((0..<4).compactMap { _ in characters.randomElement() })
     }
 
     private func clearMessage() {

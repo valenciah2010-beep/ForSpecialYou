@@ -56,50 +56,76 @@ struct HeaderView: View {
 
 struct AuthHomeView: View {
     @ObservedObject var viewModel: AuthViewModel
+    @AppStorage(AppLanguage.storageKey) private var languageCode = AppLanguage.english.rawValue
+    @State private var isShowingLanguagePicker = false
 
     var body: some View {
-        VStack(spacing: 24) {
-            Spacer(minLength: 12)
-
-            HeaderView()
-
-            VStack(spacing: 10) {
-                Text("For Special You")
-                    .font(.title.weight(.bold))
-                    .foregroundStyle(AppTheme.text)
-
-                Text("A parent-run care space for tracking your child's health, routines, and support needs.")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .lineSpacing(3)
+        ZStack(alignment: .topTrailing) {
+            Button {
+                isShowingLanguagePicker = true
+            } label: {
+                Image(systemName: "globe")
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(AppTheme.accent)
+                    .frame(width: 42, height: 42)
+                    .background(AppTheme.accent.opacity(0.12))
+                    .clipShape(Circle())
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Language")
 
-            VStack(spacing: 12) {
-                Button {
-                    viewModel.showLogin()
-                } label: {
-                    ButtonLabel(title: "Log In")
+            VStack(spacing: 24) {
+                Spacer(minLength: 12)
+
+                HeaderView()
+
+                VStack(spacing: 10) {
+                    Text("For Special You")
+                        .font(.title.weight(.bold))
+                        .foregroundStyle(AppTheme.text)
+
+                    Text("A parent-run care space for tracking your child's health, routines, and support needs.")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(3)
                 }
 
-                Button {
-                    viewModel.showSignup()
-                } label: {
-                    Text("Create Parent Account")
-                        .font(.headline.weight(.bold))
-                        .foregroundStyle(AppTheme.accent)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(AppTheme.accent.opacity(0.12))
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                }
-            }
+                VStack(spacing: 12) {
+                    Button {
+                        viewModel.showLogin()
+                    } label: {
+                        ButtonLabel(title: "Log In")
+                    }
 
-            Spacer(minLength: 12)
+                    Button {
+                        viewModel.showSignup()
+                    } label: {
+                        Text("Create Parent Account")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.accent)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(AppTheme.accent.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                }
+
+                Spacer(minLength: 12)
+            }
         }
         .frame(maxWidth: .infinity)
-        .frame(minHeight: max(560, UIScreen.main.bounds.height - 170))
+        .frame(minHeight: AuthLayout.tallPanelMinHeight)
         .authPanel()
+        .confirmationDialog("Language", isPresented: $isShowingLanguagePicker, titleVisibility: .visible) {
+            Button("English") {
+                languageCode = AppLanguage.english.rawValue
+            }
+
+            Button("中文") {
+                languageCode = AppLanguage.chinese.rawValue
+            }
+        }
     }
 }
 

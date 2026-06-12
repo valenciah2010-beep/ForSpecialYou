@@ -58,15 +58,21 @@ struct AuthAPI {
         userId: Int,
         childProfile: ChildProfileSync?,
         healthLogs: [HealthLogEntry]?,
-        savedMeals: [SavedMealEstimate]? = nil
+        savedMeals: [SavedMealEstimate]? = nil,
+        nutrientDailyUsage: NutrientDailyUsage? = nil
     ) async throws {
         let body = ParentAppDataSyncRequest(
             userId: userId,
             childProfile: childProfile,
             healthLogs: healthLogs,
-            savedMeals: savedMeals
+            savedMeals: savedMeals,
+            nutrientDailyUsage: nutrientDailyUsage
         )
         let _: MessageResponse = try await post("/api/app-data", body: body)
+    }
+
+    func appSettings(userId: Int) async throws -> ParentAppSettings {
+        try await post("/api/app-settings", body: AppSessionRequest(userId: userId))
     }
 
     func healthInsights(
@@ -166,6 +172,11 @@ private struct ParentAppDataSyncRequest: Encodable {
     let childProfile: ChildProfileSync?
     let healthLogs: [HealthLogEntry]?
     let savedMeals: [SavedMealEstimate]?
+    let nutrientDailyUsage: NutrientDailyUsage?
+}
+
+struct ParentAppSettings: Decodable {
+    let nutrientDailyLimit: Int
 }
 
 private struct HealthInsightsRequest: Encodable {

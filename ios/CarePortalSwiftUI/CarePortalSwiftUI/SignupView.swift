@@ -2,6 +2,8 @@ import SwiftUI
 
 struct SignupView: View {
     @ObservedObject var viewModel: AuthViewModel
+    @State private var isShowingTerms = false
+    @State private var hasAgreedToTerms = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -31,12 +33,18 @@ struct SignupView: View {
 
             MessageBanner(message: viewModel.message, isError: viewModel.isError)
 
+            TermsAgreementToggle(
+                isAgreed: $hasAgreedToTerms,
+                showTerms: { isShowingTerms = true }
+            )
+
             Button {
                 Task { await viewModel.signup() }
             } label: {
                 ButtonLabel(title: viewModel.isLoading ? "Creating Account..." : "Create Parent Account")
+                    .opacity(hasAgreedToTerms ? 1 : 0.45)
             }
-            .disabled(viewModel.isLoading)
+            .disabled(viewModel.isLoading || !hasAgreedToTerms)
 
             Button("Already have an account? Log in") {
                 viewModel.showLogin()
@@ -45,6 +53,9 @@ struct SignupView: View {
             .foregroundStyle(AppTheme.accent)
             .frame(maxWidth: .infinity)
         }
-        .authPanel()
+        .authPanel(minHeight: AuthLayout.tallPanelMinHeight, alignment: .topLeading)
+        .sheet(isPresented: $isShowingTerms) {
+            TermsDetailsSheet()
+        }
     }
 }

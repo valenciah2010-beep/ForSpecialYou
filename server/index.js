@@ -209,6 +209,10 @@ function clampNumber(value, min, max, fallback) {
   return Math.min(Math.max(Math.round(number), min), max);
 }
 
+function normalizeNutrientDailyLimit(value) {
+  return clampNumber(value, 0, 20, 3);
+}
+
 function normalizeResponseLanguage(language) {
   const requested = String(language || '').trim().toLowerCase();
   if (requested.includes('chinese') || requested.includes('zh') || requested.includes('中文')) {
@@ -344,6 +348,8 @@ async function ensureDatabaseShape() {
         child_profile LONGTEXT NULL,
         health_logs LONGTEXT NULL,
         saved_meals LONGTEXT NULL,
+        nutrient_daily_usage LONGTEXT NULL,
+        nutrient_daily_limit INT NOT NULL DEFAULT 3,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         CONSTRAINT parent_app_data_user_fk
           FOREIGN KEY (user_id) REFERENCES users(id)
@@ -356,11 +362,20 @@ async function ensureDatabaseShape() {
        FROM INFORMATION_SCHEMA.COLUMNS
        WHERE TABLE_SCHEMA = DATABASE()
         AND TABLE_NAME = 'parent_app_data'
-        AND COLUMN_NAME = 'saved_meals'`
+        AND COLUMN_NAME IN ('saved_meals', 'nutrient_daily_usage', 'nutrient_daily_limit')`
     );
+    const existingColumns = new Set(columns.map((column) => column.COLUMN_NAME));
 
-    if (columns.length === 0) {
+    if (!existingColumns.has('saved_meals')) {
       await pool.execute('ALTER TABLE parent_app_data ADD COLUMN saved_meals LONGTEXT NULL AFTER health_logs');
+    }
+
+    if (!existingColumns.has('nutrient_daily_usage')) {
+      await pool.execute('ALTER TABLE parent_app_data ADD COLUMN nutrient_daily_usage LONGTEXT NULL AFTER saved_meals');
+    }
+
+    if (!existingColumns.has('nutrient_daily_limit')) {
+      await pool.execute('ALTER TABLE parent_app_data ADD COLUMN nutrient_daily_limit INT NOT NULL DEFAULT 3 AFTER nutrient_daily_usage');
     }
   } catch (error) {
     setupFailed = true;
@@ -501,6 +516,8 @@ app.get('/api/admin/app-users/:id/details', requireAdmin, async (req, res) => {
         parent_app_data.child_profile AS childProfile,
         parent_app_data.health_logs AS healthLogs,
         parent_app_data.saved_meals AS savedMeals,
+        parent_app_data.nutrient_daily_usage AS nutrientDailyUsage,
+        COALESCE(parent_app_data.nutrient_daily_limit, 3) AS nutrientDailyLimit,
         DATE_FORMAT(parent_app_data.updated_at, '%Y-%m-%d %H:%i') AS appDataUpdatedAt
       FROM users
       LEFT JOIN parent_app_data ON parent_app_data.user_id = users.id
@@ -529,6 +546,8 @@ app.get('/api/admin/app-users/:id/details', requireAdmin, async (req, res) => {
       childProfile: parseStoredJSON(row.childProfile, {}),
       healthLogs: parseStoredJSON(row.healthLogs, []),
       savedMeals: parseStoredJSON(row.savedMeals, []),
+      nutrientDailyUsage: parseStoredJSON(row.nutrientDailyUsage, null),
+      nutrientDailyLimit: normalizeNutrientDailyLimit(row.nutrientDailyLimit),
       appDataUpdatedAt: row.appDataUpdatedAt
     });
   } catch (error) {
@@ -627,17 +646,51 @@ app.delete('/api/admin/app-users/:id/block', requireAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/app-data', async (req, res) => {
-  const userId = Number(req.body?.userId);
-  const hasChildProfile = Object.prototype.hasOwnProperty.call(req.body || {}, 'childProfile');
-  const hasHealthLogs = Object.prototype.hasOwnProperty.call(req.body || {}, 'healthLogs');
-  const hasSavedMeals = Object.prototype.hasOwnProperty.call(req.body || {}, 'savedMeals');
+app.patch('/api/admin/app-users/:id/nutrient-limit', requireAdmin, async (req, res) => {
+  const userId = Number(req.params.id);
+  const dailyLimit = normalizeNutrientDailyLimit(req.body?.dailyLimit);
 
   if (!Number.isInteger(userId) || userId <= 0) {
     return res.status(400).json({ message: 'Please choose a valid parent user.' });
   }
 
-  if (!hasChildProfile && !hasHealthLogs && !hasSavedMeals) {
+  try {
+    const [userRows] = await pool.execute('SELECT id FROM users WHERE id = ? AND role = ? LIMIT 1', [userId, 'parent']);
+    if (!userRows[0]) {
+      return res.status(404).json({ message: 'Parent user was not found.' });
+    }
+
+    await pool.execute(
+      `INSERT INTO parent_app_data (user_id, nutrient_daily_limit)
+       VALUES (?, ?)
+       ON DUPLICATE KEY UPDATE
+        nutrient_daily_limit = VALUES(nutrient_daily_limit),
+        updated_at = CURRENT_TIMESTAMP`,
+      [userId, dailyLimit]
+    );
+
+    res.json({
+      message: `Nutrient estimate limit updated to ${dailyLimit} per day.`,
+      nutrientDailyLimit: dailyLimit
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Could not update nutrient estimate limit right now.' });
+  }
+});
+
+app.post('/api/app-data', async (req, res) => {
+  const userId = Number(req.body?.userId);
+  const hasChildProfile = Object.prototype.hasOwnProperty.call(req.body || {}, 'childProfile');
+  const hasHealthLogs = Object.prototype.hasOwnProperty.call(req.body || {}, 'healthLogs');
+  const hasSavedMeals = Object.prototype.hasOwnProperty.call(req.body || {}, 'savedMeals');
+  const hasNutrientDailyUsage = Object.prototype.hasOwnProperty.call(req.body || {}, 'nutrientDailyUsage');
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ message: 'Please choose a valid parent user.' });
+  }
+
+  if (!hasChildProfile && !hasHealthLogs && !hasSavedMeals && !hasNutrientDailyUsage) {
     return res.status(400).json({ message: 'No app data was provided.' });
   }
 
@@ -654,22 +707,65 @@ app.post('/api/app-data', async (req, res) => {
     const childProfile = hasChildProfile ? JSON.stringify(req.body.childProfile || {}) : null;
     const healthLogs = hasHealthLogs ? JSON.stringify(Array.isArray(req.body.healthLogs) ? req.body.healthLogs : []) : null;
     const savedMeals = hasSavedMeals ? JSON.stringify(Array.isArray(req.body.savedMeals) ? req.body.savedMeals : []) : null;
+    const nutrientDailyUsage = hasNutrientDailyUsage ? JSON.stringify(req.body.nutrientDailyUsage || {}) : null;
 
     await pool.execute(
-      `INSERT INTO parent_app_data (user_id, child_profile, health_logs, saved_meals)
-       VALUES (?, ?, ?, ?)
+      `INSERT INTO parent_app_data (user_id, child_profile, health_logs, saved_meals, nutrient_daily_usage)
+       VALUES (?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
         child_profile = COALESCE(VALUES(child_profile), child_profile),
         health_logs = COALESCE(VALUES(health_logs), health_logs),
         saved_meals = COALESCE(VALUES(saved_meals), saved_meals),
+        nutrient_daily_usage = COALESCE(VALUES(nutrient_daily_usage), nutrient_daily_usage),
         updated_at = CURRENT_TIMESTAMP`,
-      [userId, childProfile, healthLogs, savedMeals]
+      [userId, childProfile, healthLogs, savedMeals, nutrientDailyUsage]
     );
 
     res.json({ message: 'App data synced.' });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Could not sync app data right now.' });
+  }
+});
+
+app.post('/api/app-settings', async (req, res) => {
+  const userId = Number(req.body?.userId);
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ message: 'Please choose a valid parent user.' });
+  }
+
+  try {
+    await ensureDatabaseShapeReady();
+
+    const [rows] = await pool.execute(
+      `SELECT
+        users.id,
+        users.role,
+        ${blockFieldsSQL('users')}
+        COALESCE(parent_app_data.nutrient_daily_limit, 3) AS nutrientDailyLimit
+       FROM users
+       LEFT JOIN parent_app_data ON parent_app_data.user_id = users.id
+       WHERE users.id = ? AND users.role = 'parent'
+       LIMIT 1`,
+      [userId]
+    );
+
+    const user = rows[0];
+    if (!user) {
+      return res.status(404).json({ message: 'Parent user was not found.' });
+    }
+
+    if (Number(user.isBlocked) === 1) {
+      return res.status(403).json({ message: activeBlockMessage(user) });
+    }
+
+    res.json({
+      nutrientDailyLimit: normalizeNutrientDailyLimit(user.nutrientDailyLimit)
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Could not load app settings right now.' });
   }
 });
 

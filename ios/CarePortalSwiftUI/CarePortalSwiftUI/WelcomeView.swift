@@ -1020,7 +1020,9 @@ struct CyclicVomitingPatternsData: Codable {
     var postdromalSymptoms: [String] = []
     var otherPostdromalSymptoms = ""
     var heightCm = ""
+    var heightUnit: String? = "cm"
     var weightKg = ""
+    var weightUnit: String? = "Kg"
     var qualityOfLifeAgeGroup = ""
 }
 
@@ -2293,7 +2295,9 @@ struct CyclicVomitingLogSheet: View {
     @State private var selectedPostdromalSymptoms: Set<String> = []
     @State private var otherPostdromalSymptoms = ""
     @State private var childHeightCm = ""
+    @State private var childHeightUnit = "cm"
     @State private var childWeightKg = ""
+    @State private var childWeightUnit = "Kg"
     @State private var qualityOfLifeAgeGroup = ""
 
     init(option: QuickLogOption, userID: Int, onSave: @escaping (HealthLogEntry) -> Void) {
@@ -2326,6 +2330,7 @@ struct CyclicVomitingLogSheet: View {
         "Epilepsy",
         "Tourette syndrome",
         "Coffin-Siris syndrome",
+        "Klinefelter syndrome",
         "Inborn errors of metabolism",
         "Celiac disease",
         "Inflammatory bowel disease",
@@ -2754,6 +2759,7 @@ struct CyclicVomitingLogSheet: View {
             ) {
                 CyclicVomitingOptionSection(
                     title: "Other co-existing conditions",
+                    titleNote: "Multiple select",
                     options: comorbidityOptions,
                     selection: $selectedComorbidities,
                     tint: option.tint,
@@ -2959,14 +2965,16 @@ struct CyclicVomitingLogSheet: View {
                 HStack(spacing: 10) {
                     CyclicVomitingMeasurementField(
                         title: "Current Height of the child",
-                        unit: "cm",
-                        text: $childHeightCm
+                        units: ["cm", "in"],
+                        text: $childHeightCm,
+                        selectedUnit: $childHeightUnit
                     )
 
                     CyclicVomitingMeasurementField(
                         title: "Current Weight of the child",
-                        unit: "Kg",
-                        text: $childWeightKg
+                        units: ["Kg", "lbs"],
+                        text: $childWeightKg,
+                        selectedUnit: $childWeightUnit
                     )
                 }
             }
@@ -3109,7 +3117,9 @@ struct CyclicVomitingLogSheet: View {
         selectedPostdromalSymptoms = Set(data.postdromalSymptoms)
         otherPostdromalSymptoms = data.otherPostdromalSymptoms
         childHeightCm = data.heightCm
+        childHeightUnit = data.heightUnit ?? "cm"
         childWeightKg = data.weightKg
+        childWeightUnit = data.weightUnit ?? "Kg"
         qualityOfLifeAgeGroup = data.qualityOfLifeAgeGroup
     }
 
@@ -3187,7 +3197,9 @@ struct CyclicVomitingLogSheet: View {
             postdromalSymptoms: selectedPostdromalSymptoms.sorted(),
             otherPostdromalSymptoms: otherPostdromalSymptoms.trimmingCharacters(in: .whitespacesAndNewlines),
             heightCm: childHeightCm.trimmingCharacters(in: .whitespacesAndNewlines),
+            heightUnit: childHeightUnit,
             weightKg: childWeightKg.trimmingCharacters(in: .whitespacesAndNewlines),
+            weightUnit: childWeightUnit,
             qualityOfLifeAgeGroup: qualityOfLifeAgeGroup
         )
 
@@ -3339,11 +3351,20 @@ struct CyclicVomitingCompactTextField: View {
     @Binding var text: String
 
     var body: some View {
-        TextField(localizedAppString(placeholder), text: $text)
+        TextField(localizedAppString(placeholder), text: digitsOnlyText)
             .keyboardType(.numberPad)
             .padding(12)
             .background(AppTheme.fieldBackground)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private var digitsOnlyText: Binding<String> {
+        Binding(
+            get: { text },
+            set: { newValue in
+                text = newValue.filter(\.isNumber)
+            }
+        )
     }
 }
 
@@ -3478,6 +3499,7 @@ struct CyclicVomitingYesNoPicker: View {
 
 struct CyclicVomitingOptionSection: View {
     let title: String
+    var titleNote = ""
     let options: [String]
     @Binding var selection: Set<String>
     let tint: Color
@@ -3487,9 +3509,21 @@ struct CyclicVomitingOptionSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if !title.isEmpty {
-                Text(localizedAppString(title))
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppTheme.text)
+                HStack(spacing: 6) {
+                    Text(localizedAppString(title))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AppTheme.text)
+
+                    if !titleNote.isEmpty {
+                        Text(localizedAppString(titleNote))
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(tint)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(tint.opacity(0.12))
+                            .clipShape(Capsule())
+                    }
+                }
             }
 
             FlowLayout(spacing: 8, rowSpacing: 8) {
@@ -3559,8 +3593,9 @@ struct CyclicVomitingSingleChoiceSection: View {
 
 struct CyclicVomitingMeasurementField: View {
     let title: String
-    let unit: String
+    let units: [String]
     @Binding var text: String
+    @Binding var selectedUnit: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -3569,19 +3604,82 @@ struct CyclicVomitingMeasurementField: View {
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 8) {
-                TextField("", text: $text)
+                TextField("", text: decimalText)
                     .keyboardType(.decimalPad)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(AppTheme.text)
 
-                Text(unit)
-                    .font(.caption.weight(.bold))
+                Menu {
+                    ForEach(units, id: \.self) { unit in
+                        Button(unit) {
+                            selectedUnit = unit
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Text(selectedUnit)
+                            .font(.caption.weight(.bold))
+
+                        Image(systemName: "chevron.down")
+                            .font(.caption2.weight(.black))
+                    }
                     .foregroundStyle(.secondary)
+                    .padding(.horizontal, 4)
+                }
+                .buttonStyle(.plain)
             }
             .padding(12)
             .background(AppTheme.fieldBackground)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
+        .onAppear {
+            text = Self.sanitizedDecimal(text, fractionalDigits: 1)
+            if !units.contains(selectedUnit), let firstUnit = units.first {
+                selectedUnit = firstUnit
+            }
+        }
+        .onChange(of: text) { _, newValue in
+            let cleaned = Self.sanitizedDecimal(newValue, fractionalDigits: 1)
+            if cleaned != newValue {
+                text = cleaned
+            }
+        }
+        .onChange(of: selectedUnit) { _, newValue in
+            if !units.contains(newValue), let firstUnit = units.first {
+                selectedUnit = firstUnit
+            }
+        }
+    }
+
+    private var decimalText: Binding<String> {
+        Binding(
+            get: { text },
+            set: { newValue in
+                text = Self.sanitizedDecimal(newValue, fractionalDigits: 1)
+            }
+        )
+    }
+
+    private static func sanitizedDecimal(_ value: String, fractionalDigits: Int) -> String {
+        var result = ""
+        var hasDecimal = false
+        var digitsAfterDecimal = 0
+
+        for character in value.replacingOccurrences(of: ",", with: ".") {
+            if character.isNumber {
+                if hasDecimal {
+                    guard digitsAfterDecimal < fractionalDigits else { continue }
+                    digitsAfterDecimal += 1
+                }
+
+                result.append(character)
+            } else if character == ".", !hasDecimal {
+                hasDecimal = true
+                result.append(result.isEmpty ? "0." : ".")
+            }
+        }
+
+        return result
     }
 }
 
@@ -8513,10 +8611,14 @@ struct TherapyMilestoneSheet: View {
 struct NutrientView: View {
     let user: CarePortalUser
 
+    private static let photoDailyLimit = 3
+
     @AppStorage(AppLanguage.storageKey) private var languageCode = AppLanguage.english.rawValue
     @AppStorage private var mealPhotoData: Data
     @AppStorage private var mealEstimateData: Data
     @AppStorage private var savedMealHistoryData: Data
+    @AppStorage private var dailyUsageData: Data
+    @AppStorage private var dailyEstimateLimit: Int
     @State private var selectedMealPhoto: PhotosPickerItem?
     @State private var isMealPhotoSourcePresented = false
     @State private var isCameraPickerPresented = false
@@ -8531,6 +8633,8 @@ struct NutrientView: View {
         self._mealPhotoData = AppStorage(wrappedValue: Data(), "nutrient.\(user.id).mealPhotoData")
         self._mealEstimateData = AppStorage(wrappedValue: Data(), "nutrient.\(user.id).mealEstimateData")
         self._savedMealHistoryData = AppStorage(wrappedValue: Data(), "nutrient.\(user.id).savedMealHistoryData")
+        self._dailyUsageData = AppStorage(wrappedValue: Data(), "nutrient.\(user.id).dailyUsageData")
+        self._dailyEstimateLimit = AppStorage(wrappedValue: 3, "nutrient.\(user.id).dailyEstimateLimit")
     }
 
     var body: some View {
@@ -8559,10 +8663,16 @@ struct NutrientView: View {
                     }
 
                     VStack(alignment: .leading, spacing: 16) {
+                        NutrientDailyLimitSummary(
+                            estimateCount: dailyUsage.estimateCount,
+                            limit: dailyEstimateLimit
+                        )
+
                         Button {
-                            isMealPhotoSourcePresented = true
+                            openMealPhotoSource()
                         } label: {
                             MealPhotoUploadPanel(imageData: mealPhotoData)
+                                .opacity(canUploadMealPhoto ? 1 : 0.55)
                         }
                         .buttonStyle(.plain)
 
@@ -8583,7 +8693,7 @@ struct NutrientView: View {
                             .foregroundStyle(.white)
                             .frame(maxWidth: .infinity)
                             .padding()
-                            .background(mealPhotoData.isEmpty ? Color.gray.opacity(0.45) : AppTheme.accent)
+                            .background(mealPhotoData.isEmpty || !canEstimateMeal ? Color.gray.opacity(0.45) : AppTheme.accent)
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         }
                         .disabled(mealPhotoData.isEmpty || isEstimating)
@@ -8647,6 +8757,10 @@ struct NutrientView: View {
             .onAppear {
                 resetCurrentMealForNextImage()
                 syncSavedMealHistoryIfNeeded()
+                syncNutrientDailyUsage(dailyUsage)
+            }
+            .task {
+                await refreshNutrientSettings()
             }
             .task(id: selectedMealPhoto) {
                 await loadSelectedMealPhoto()
@@ -8705,6 +8819,33 @@ struct NutrientView: View {
         return savedMeals.sorted { $0.savedAt > $1.savedAt }
     }
 
+    private var dailyUsage: NutrientDailyUsage {
+        guard !dailyUsageData.isEmpty,
+              let usage = try? JSONDecoder().decode(NutrientDailyUsage.self, from: dailyUsageData),
+              usage.dateKey == MedicationCheckState.todayKey else {
+            return NutrientDailyUsage.today()
+        }
+
+        return usage
+    }
+
+    private var canUploadMealPhoto: Bool {
+        dailyUsage.uploadCount < Self.photoDailyLimit
+    }
+
+    private var canEstimateMeal: Bool {
+        dailyUsage.estimateCount < dailyEstimateLimit
+    }
+
+    private func openMealPhotoSource() {
+        guard canUploadMealPhoto else {
+            saveMessage = localizedAppString("Daily nutrient photo limit reached.")
+            return
+        }
+
+        isMealPhotoSourcePresented = true
+    }
+
     private func loadSelectedMealPhoto() async {
         guard let selectedMealPhoto else { return }
 
@@ -8720,12 +8861,24 @@ struct NutrientView: View {
     }
 
     private func openMealCamera() {
+        guard canUploadMealPhoto else {
+            saveMessage = localizedAppString("Daily nutrient photo limit reached.")
+            return
+        }
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             isCameraPickerPresented = true
         }
     }
 
     private func applyMealPhotoData(_ data: Data) {
+        guard canUploadMealPhoto else {
+            selectedMealPhoto = nil
+            saveMessage = localizedAppString("Daily nutrient photo limit reached.")
+            return
+        }
+
+        incrementDailyUsage(upload: 1)
         mealPhotoData = data
         mealEstimateData = Data()
         selectedMealPhoto = nil
@@ -8736,11 +8889,19 @@ struct NutrientView: View {
 
     private func estimateMeal() {
         guard !mealPhotoData.isEmpty else { return }
+        guard canEstimateMeal else {
+            estimateError = String(
+                format: localizedAppString("Daily nutrient estimate limit reached with limit %@."),
+                "\(dailyEstimateLimit)"
+            )
+            return
+        }
 
         isEstimating = true
         estimateError = ""
         saveMessage = ""
         hasSavedCurrentMeal = false
+        incrementDailyUsage(estimate: 1)
 
         Task {
             do {
@@ -8759,6 +8920,45 @@ struct NutrientView: View {
                     estimateError = error.localizedDescription
                     isEstimating = false
                 }
+            }
+        }
+    }
+
+    private func incrementDailyUsage(upload: Int = 0, estimate: Int = 0) {
+        var usage = dailyUsage
+        usage.uploadCount = min(Self.photoDailyLimit, usage.uploadCount + upload)
+        usage.estimateCount += estimate
+
+        if let data = try? JSONEncoder().encode(usage) {
+            dailyUsageData = data
+        }
+
+        syncNutrientDailyUsage(usage)
+    }
+
+    private func refreshNutrientSettings() async {
+        do {
+            let settings = try await AuthAPI().appSettings(userId: user.id)
+            await MainActor.run {
+                dailyEstimateLimit = max(0, settings.nutrientDailyLimit)
+            }
+        } catch {
+            // The local limit remains usable if the backend is offline.
+        }
+    }
+
+    private func syncNutrientDailyUsage(_ usage: NutrientDailyUsage) {
+        Task {
+            do {
+                try await AuthAPI().syncAppData(
+                    userId: user.id,
+                    childProfile: nil,
+                    healthLogs: nil,
+                    savedMeals: nil,
+                    nutrientDailyUsage: usage
+                )
+            } catch {
+                print("Nutrient usage sync failed for user \(user.id): \(error.localizedDescription)")
             }
         }
     }
@@ -8849,6 +9049,62 @@ struct NutrientView: View {
         }
 
         return "data:image/jpeg;base64,\(mealPhotoData.base64EncodedString())"
+    }
+}
+
+struct NutrientDailyUsage: Codable {
+    var dateKey: String
+    var uploadCount: Int
+    var estimateCount: Int
+
+    static func today() -> NutrientDailyUsage {
+        NutrientDailyUsage(
+            dateKey: MedicationCheckState.todayKey,
+            uploadCount: 0,
+            estimateCount: 0
+        )
+    }
+}
+
+struct NutrientDailyLimitSummary: View {
+    let estimateCount: Int
+    let limit: Int
+
+    private var estimatesLeft: Int {
+        max(0, limit - estimateCount)
+    }
+
+    private var limitColor: Color {
+        if estimatesLeft == 0 {
+            return .red
+        }
+
+        if estimatesLeft == limit {
+            return AppTheme.accent
+        }
+
+        return .orange
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "sparkles")
+                .font(.caption.weight(.bold))
+
+            Text("Estimates Left Today")
+                .font(.caption.weight(.bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+
+            Text("\(estimatesLeft)/\(limit)")
+                .font(.caption.weight(.black))
+        }
+        .foregroundStyle(limitColor)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(limitColor.opacity(0.12))
+        .clipShape(Capsule())
     }
 }
 
