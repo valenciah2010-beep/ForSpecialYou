@@ -13,22 +13,22 @@ struct WelcomeView: View {
         TabView {
             BasicHealthView(user: user)
                 .tabItem {
-                    Label("Health", systemImage: "heart.text.square")
+                    Label(localizedAppString("Health"), systemImage: "heart.text.square")
                 }
 
             TherapyTrackingView(user: user)
                 .tabItem {
-                    Label("Therapy", systemImage: "figure.mind.and.body")
+                    Label(localizedAppString("Therapy"), systemImage: "figure.mind.and.body")
                 }
 
             NutrientView(user: user)
                 .tabItem {
-                    Label("Nutrient", systemImage: "leaf")
+                    Label(localizedAppString("Nutrient"), systemImage: "leaf")
                 }
 
             ProfileView(user: user, logout: logout)
                 .tabItem {
-                    Label("Profile", systemImage: "person.crop.circle")
+                    Label(localizedAppString("Profile"), systemImage: "person.crop.circle")
                 }
         }
         .tint(AppTheme.accent)
@@ -112,13 +112,13 @@ struct BasicHealthView: View {
                                     .background(AppTheme.accent)
                                     .clipShape(Circle())
 
-                                Text("History")
+                                Text(localizedAppString("History"))
                                     .font(.caption.weight(.bold))
                                     .foregroundStyle(AppTheme.accent)
                             }
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Open quick-log history")
+                        .accessibilityLabel(localizedAppString("Open quick-log history"))
 
                         Spacer()
 
@@ -133,7 +133,7 @@ struct BasicHealthView: View {
                                 .clipShape(Circle())
                                 .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 4)
                         }
-                        .accessibilityLabel("Choose quick-log buttons")
+                        .accessibilityLabel(localizedAppString("Choose quick-log buttons"))
                     }
 
                     if selectedQuickLogs.isEmpty {
@@ -190,13 +190,13 @@ struct BasicHealthView: View {
                                     .background(AppTheme.accent)
                                     .clipShape(Circle())
 
-                                Text("History")
+                                Text(localizedAppString("History"))
                                     .font(.caption.weight(.bold))
                                     .foregroundStyle(AppTheme.accent)
                             }
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Open daily snapshot history")
+                        .accessibilityLabel(localizedAppString("Open daily snapshot history"))
 
                         Spacer()
                     }
@@ -238,7 +238,7 @@ struct BasicHealthView: View {
                 .padding(.bottom, 24)
             }
             .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle("Dashboard")
+            .navigationTitle(localizedAppString("Dashboard"))
             .sheet(isPresented: $isQuickLogEditorPresented) {
                 QuickLogSelectionSheet(selectedIDs: selectedQuickLogIDsBinding)
             }
@@ -1679,11 +1679,11 @@ struct QuickLogEmptySelectionCard: View {
                     .clipShape(Circle())
 
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("No quick-log buttons selected")
+                    Text(localizedAppString("No quick-log buttons selected"))
                         .font(.headline.weight(.black))
                         .foregroundStyle(AppTheme.text)
 
-                    Text("Tap the slider icon in the top right to choose quick-log buttons.")
+                    Text(localizedAppString("Tap the slider icon in the top right to choose quick-log buttons."))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1698,7 +1698,7 @@ struct QuickLogEmptySelectionCard: View {
             .shadow(color: Color.black.opacity(0.04), radius: 10, x: 0, y: 6)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Choose quick-log buttons")
+        .accessibilityLabel(localizedAppString("Choose quick-log buttons"))
     }
 }
 
@@ -1771,10 +1771,10 @@ struct QuickLogSelectionSheet: View {
                 .padding(18)
             }
             .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle("Quick Logs")
+            .navigationTitle(localizedAppString("Quick Logs"))
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
+                    Button(localizedAppString("Done")) {
                         dismiss()
                     }
                     .font(.headline.weight(.semibold))
@@ -1943,7 +1943,7 @@ struct SleepRestSnapshotSheet: View {
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
                         VStack(alignment: .leading, spacing: 3) {
-                            Text("Sleep & Rest")
+                            Text(localizedAppString("Sleep & Rest"))
                                 .font(.title3.weight(.bold))
                                 .foregroundStyle(AppTheme.text)
 
@@ -1954,17 +1954,17 @@ struct SleepRestSnapshotSheet: View {
                     }
 
                     VStack(alignment: .leading, spacing: 16) {
-                        Text("Sleep Times")
+                        Text(localizedAppString("Sleep Times"))
                             .font(.headline.weight(.bold))
                             .foregroundStyle(AppTheme.text)
 
-                        TimeWheelPicker(title: "Fell asleep at", selection: $fellAsleepAt)
-                        TimeWheelPicker(title: "Woke up at", selection: $wokeUpAt)
+                        TimeWheelPicker(title: localizedAppString("Fell asleep at"), selection: $fellAsleepAt)
+                        TimeWheelPicker(title: localizedAppString("Woke up at"), selection: $wokeUpAt)
                     }
                     .authPanel()
 
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Rest Quality")
+                        Text(localizedAppString("Rest Quality"))
                             .font(.headline.weight(.bold))
                             .foregroundStyle(AppTheme.text)
 
@@ -1998,7 +1998,7 @@ struct SleepRestSnapshotSheet: View {
                     .authPanel()
 
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Waking Counter")
+                        Text(localizedAppString("Waking Counter"))
                             .font(.headline.weight(.bold))
                             .foregroundStyle(AppTheme.text)
 
@@ -2028,7 +2028,7 @@ struct SleepRestSnapshotSheet: View {
                             .buttonStyle(.borderedProminent)
                             .tint(option.tint)
 
-                            Text(wakingCount == 1 ? "wake-up" : "wake-ups")
+                            Text(localizedAppString(wakingCount == 1 ? "wake-up" : "wake-ups"))
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.secondary)
 
@@ -2038,11 +2038,11 @@ struct SleepRestSnapshotSheet: View {
                     .authPanel()
 
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Notes")
+                        Text(localizedAppString("Notes"))
                             .font(.headline.weight(.bold))
                             .foregroundStyle(AppTheme.text)
 
-                        TextField("Nap, bedtime routine, night waking, comfort item, etc.", text: $comments, axis: .vertical)
+                        TextField(localizedAppString("Nap, bedtime routine, night waking, comfort item, etc."), text: $comments, axis: .vertical)
                             .textInputAutocapitalization(.never)
                             .lineLimit(3...6)
                             .padding(12)
@@ -2054,16 +2054,16 @@ struct SleepRestSnapshotSheet: View {
                 .padding(18)
             }
             .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle("Sleep & Rest")
+            .navigationTitle(localizedAppString("Sleep & Rest"))
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
+                    Button(localizedAppString("Cancel")) {
                         dismiss()
                     }
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") {
+                    Button(localizedAppString("Save")) {
                         save()
                     }
                     .font(.headline.weight(.semibold))
@@ -2197,11 +2197,11 @@ struct TimeWheelPicker: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(LocalizedStringKey(title))
+            Text(localizedAppString(title))
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(AppTheme.text)
 
-            DatePicker(LocalizedStringKey(title), selection: $selection, displayedComponents: [.hourAndMinute])
+            DatePicker(localizedAppString(title), selection: $selection, displayedComponents: [.hourAndMinute])
                 .datePickerStyle(.wheel)
                 .labelsHidden()
                 .frame(maxWidth: .infinity)
@@ -2285,7 +2285,7 @@ struct DigestionSnapshotSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     HStack(spacing: 12) {
-                        Text("Movement time")
+                        Text(localizedAppString("Movement time"))
                             .font(.headline.weight(.bold))
                             .foregroundStyle(AppTheme.text)
                             .lineLimit(1)
@@ -2306,11 +2306,11 @@ struct DigestionSnapshotSheet: View {
                     VStack(alignment: .leading, spacing: 14) {
                         HStack {
                             VStack(alignment: .leading, spacing: 3) {
-                                Text("Consistency")
+                                Text(localizedAppString("Consistency"))
                                     .font(.headline.weight(.bold))
                                     .foregroundStyle(AppTheme.text)
 
-                                Text("The Bristol Stool Chart")
+                                Text(localizedAppString("The Bristol Stool Chart"))
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(.secondary)
                             }
@@ -2327,7 +2327,7 @@ struct DigestionSnapshotSheet: View {
                                     .background(option.tint.opacity(0.14))
                                     .clipShape(Circle())
                             }
-                            .accessibilityLabel("Show stool type descriptions")
+                            .accessibilityLabel(localizedAppString("Show stool type descriptions"))
                         }
 
                         ScrollView(.horizontal, showsIndicators: false) {
@@ -2348,7 +2348,7 @@ struct DigestionSnapshotSheet: View {
                     .authPanel()
 
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Volume")
+                        Text(localizedAppString("Volume"))
                             .font(.headline.weight(.bold))
                             .foregroundStyle(AppTheme.text)
 
@@ -2357,7 +2357,7 @@ struct DigestionSnapshotSheet: View {
                                 Button {
                                     selectedVolume = volume
                                 } label: {
-                                    Text(LocalizedStringKey(volume))
+                                    Text(localizedAppString(volume))
                                         .font(.subheadline.weight(.bold))
                                         .foregroundStyle(selectedVolume == volume ? .white : AppTheme.text)
                                         .frame(maxWidth: .infinity)
@@ -2372,7 +2372,7 @@ struct DigestionSnapshotSheet: View {
                     .authPanel()
 
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Color Check")
+                        Text(localizedAppString("Color Check"))
                             .font(.headline.weight(.bold))
                             .foregroundStyle(AppTheme.text)
 
@@ -2393,7 +2393,7 @@ struct DigestionSnapshotSheet: View {
                                                     )
                                             }
 
-                                        Text(LocalizedStringKey(stoolColor.title))
+                                        Text(localizedAppString(stoolColor.title))
                                             .font(.caption2.weight(.bold))
                                             .foregroundStyle(AppTheme.text)
                                             .lineLimit(1)
@@ -2411,7 +2411,7 @@ struct DigestionSnapshotSheet: View {
                     .authPanel()
 
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Pain & Strain")
+                        Text(localizedAppString("Pain & Strain"))
                             .font(.headline.weight(.bold))
                             .foregroundStyle(AppTheme.text)
 
@@ -2438,17 +2438,17 @@ struct DigestionSnapshotSheet: View {
                 .padding(18)
             }
             .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle("Gut & Digestion")
+            .navigationTitle(localizedAppString("Gut & Digestion"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
+                    Button(localizedAppString("Cancel")) {
                         dismiss()
                     }
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") {
+                    Button(localizedAppString("Save")) {
                         save()
                     }
                     .font(.headline.weight(.semibold))
@@ -2465,15 +2465,15 @@ struct DigestionSnapshotSheet: View {
     private func save() {
         let group = BristolStoolGuide.group(for: selectedStoolType)
         let description = BristolStoolGuide.description(for: selectedStoolType)
-        let value = "Type \(selectedStoolType) · \(group)"
+        let value = "\(localizedAppString("Type")) \(selectedStoolType) · \(localizedAppString(group))"
         let detailLines = [
-            "Time: \(movementTime.formatted(date: .omitted, time: .shortened))",
-            "Consistency: Type \(selectedStoolType) - \(description)",
-            "Volume: \(selectedVolume)",
-            "Color: \(selectedColor.title)",
-            "Straining/Discomfort: \(answerText(hasStraining))",
-            "Gas/Bloating: \(answerText(hasGas))",
-            "Undigested Food: \(answerText(hasUndigestedFood))"
+            "\(localizedAppString("Time")): \(localizedDateString(movementTime, dateStyle: .none, timeStyle: .short))",
+            "\(localizedAppString("Consistency")): \(localizedAppString("Type")) \(selectedStoolType) - \(localizedAppString(description))",
+            "\(localizedAppString("Volume")): \(localizedAppString(selectedVolume))",
+            "\(localizedAppString("Color")): \(localizedAppString(selectedColor.title))",
+            "\(localizedAppString("Straining/Discomfort")): \(answerText(hasStraining))",
+            "\(localizedAppString("Gas/Bloating")): \(answerText(hasGas))",
+            "\(localizedAppString("Undigested Food")): \(answerText(hasUndigestedFood))"
         ]
 
         let entry = HealthLogEntry(
@@ -2492,7 +2492,7 @@ struct DigestionSnapshotSheet: View {
 
     private func answerText(_ value: Bool?) -> String {
         guard let value else { return "--" }
-        return value ? "Yes" : "No"
+        return localizedAppString(value ? "Yes" : "No")
     }
 }
 
@@ -2591,11 +2591,11 @@ struct StoolTypePickerCard: View {
                 BristolStoolIcon(type: type)
                     .frame(width: 92, height: 58)
 
-                Text("Type \(type)")
+                Text("\(localizedAppString("Type")) \(type)")
                     .font(.caption.weight(.black))
                     .foregroundStyle(AppTheme.text)
 
-                Text(BristolStoolGuide.group(for: type))
+                Text(localizedAppString(BristolStoolGuide.group(for: type)))
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -2653,7 +2653,7 @@ struct DigestionYesNoRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(LocalizedStringKey(title))
+            Text(localizedAppString(title))
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(AppTheme.text)
 
@@ -2668,7 +2668,7 @@ struct DigestionYesNoRow: View {
         Button {
             value = value == option ? nil : option
         } label: {
-            Text(LocalizedStringKey(title))
+            Text(localizedAppString(title))
                 .font(.subheadline.weight(.bold))
                 .foregroundStyle(value == option ? .white : AppTheme.text)
                 .frame(maxWidth: .infinity)
@@ -2698,15 +2698,15 @@ struct BristolStoolInfoSheet: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("Type \(type)")
+                                Text("\(localizedAppString("Type")) \(type)")
                                     .font(.headline.weight(.bold))
                                     .foregroundStyle(AppTheme.text)
 
-                                Text(BristolStoolGuide.group(for: type))
+                                Text(localizedAppString(BristolStoolGuide.group(for: type)))
                                     .font(.caption.weight(.bold))
                                     .foregroundStyle(tint)
 
-                                Text(BristolStoolGuide.description(for: type))
+                                Text(localizedAppString(BristolStoolGuide.description(for: type)))
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(.secondary)
                             }
@@ -2720,11 +2720,11 @@ struct BristolStoolInfoSheet: View {
                 .padding(18)
             }
             .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle("Bristol Stool Chart")
+            .navigationTitle(localizedAppString("Bristol Stool Chart"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
+                    Button(localizedAppString("Done")) {
                         dismiss()
                     }
                     .font(.headline.weight(.semibold))
@@ -2809,11 +2809,11 @@ struct HealthLogEntrySheet: View {
                         }
 
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Comments")
+                            Text(localizedAppString("Comments"))
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(AppTheme.text)
 
-                            TextField("Add details, context, triggers, or what helped", text: $comments, axis: .vertical)
+                            TextField(localizedAppString("Add details, context, triggers, or what helped"), text: $comments, axis: .vertical)
                                 .textInputAutocapitalization(.never)
                                 .lineLimit(4...7)
                                 .padding(12)
@@ -2830,13 +2830,13 @@ struct HealthLogEntrySheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
+                    Button(localizedAppString("Cancel")) {
                         dismiss()
                     }
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") {
+                    Button(localizedAppString("Save")) {
                         save()
                     }
                     .font(.headline.weight(.semibold))
@@ -3122,19 +3122,19 @@ struct CyclicVomitingLogSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
+                    Button(localizedAppString("Cancel")) {
                         dismiss()
                     }
                 }
 
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button("Save Progress") {
+                    Button(localizedAppString("Save Progress")) {
                         saveProgress()
                     }
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(AppTheme.accent)
 
-                    Button("Save") {
+                    Button(localizedAppString("Save")) {
                         saveVomitingLog()
                     }
                     .font(.headline.weight(.semibold))
@@ -3160,7 +3160,7 @@ struct CyclicVomitingLogSheet: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Save") {
+                Button(localizedAppString("Save")) {
                     saveBackground()
                     dismiss()
                 }
@@ -3180,7 +3180,7 @@ struct CyclicVomitingLogSheet: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Save") {
+                Button(localizedAppString("Save")) {
                     savePatterns()
                     dismiss()
                 }
@@ -3961,6 +3961,152 @@ struct CyclicVomitingQualityOfLifeAssessmentSheet: View {
         )
     ]
 
+    private let childSections: [(title: String, questions: [String])] = [
+        (
+            title: "Physical Functioning",
+            questions: [
+                "Walking more than one block",
+                "Running",
+                "Participating in sports activity or exercise",
+                "Lifting something heavy",
+                "Doing chores around the house"
+            ]
+        ),
+        (
+            title: "Emotional Functioning",
+            questions: [
+                "Feeling afraid or scared",
+                "Feeling sad or blue",
+                "Feeling angry",
+                "Worrying about what will happen to him or her"
+            ]
+        ),
+        (
+            title: "Social Functioning",
+            questions: [
+                "Getting along with other children",
+                "Other kids not wanting to be his or her friend",
+                "Getting teased by other children"
+            ]
+        ),
+        (
+            title: "School Functioning",
+            questions: [
+                "Paying attention in class",
+                "Forgetting things",
+                "Keeping up with schoolwork"
+            ]
+        )
+    ]
+
+    private let youngChildSections: [(title: String, questions: [String])] = [
+        (
+            title: "Physical Functioning",
+            questions: [
+                "Walking more than one block",
+                "Running",
+                "Participating in sports activity or exercise",
+                "Lifting something heavy",
+                "Doing chores, like picking up his or her toys"
+            ]
+        ),
+        (
+            title: "Emotional Functioning",
+            questions: [
+                "Feeling afraid or scared",
+                "Feeling sad or blue",
+                "Feeling angry",
+                "Worrying about what will happen to him or her"
+            ]
+        ),
+        (
+            title: "Social Functioning",
+            questions: [
+                "Getting along with other children",
+                "Other kids not wanting to be his or her friend",
+                "Getting teased by other children"
+            ]
+        ),
+        (
+            title: "School Functioning",
+            questions: [
+                "Paying attention in class",
+                "Forgetting things",
+                "Keeping up with school activities"
+            ]
+        )
+    ]
+
+    private let toddlerSections: [(title: String, questions: [String])] = [
+        (
+            title: "Physical Functioning",
+            questions: [
+                "Walking",
+                "Running",
+                "Participating in active play or exercise",
+                "Lifting something heavy",
+                "Helping to pick up his or her toys"
+            ]
+        ),
+        (
+            title: "Emotional Functioning",
+            questions: [
+                "Feeling afraid or scared",
+                "Feeling sad or blue",
+                "Feeling angry",
+                "Worrying"
+            ]
+        ),
+        (
+            title: "Social Functioning",
+            questions: [
+                "Playing with other children",
+                "Other kids not wanting to play with him or her",
+                "Getting teased by other children"
+            ]
+        ),
+        (
+            title: "School Functioning",
+            questions: [
+                "Doing the same school activities as peers",
+                "Missing school/daycare because of not feeling well",
+                "Missing school/daycare to go to the doctor or hospital"
+            ]
+        )
+    ]
+
+    private var isClickableQualityAssessment: Bool {
+        ageRange == "13–18 years old"
+            || ageRange == "8–12 years old"
+            || ageRange == "5–7 years old"
+            || ageRange == "2–4 years old"
+    }
+
+    private var activeAssessmentSections: [(title: String, questions: [String])] {
+        switch ageRange {
+        case "8–12 years old":
+            return childSections
+        case "5–7 years old":
+            return youngChildSections
+        case "2–4 years old":
+            return toddlerSections
+        default:
+            return teenSections
+        }
+    }
+
+    private var activeAssessmentInstruction: String {
+        ageRange == "8–12 years old" || ageRange == "5–7 years old" || ageRange == "2–4 years old"
+            ? "In the past ONE month, how much of a problem has your child had with ..."
+            : "In the past ONE month, how much of a problem has your teen had with ..."
+    }
+
+    private var activeAssessmentFootnote: String? {
+        ageRange == "2–4 years old"
+            ? "Please complete this section if your child attends school or daycare"
+            : nil
+    }
+
     private var assessmentTitle: String {
         switch ageRange {
         case "13–18 years old":
@@ -4000,20 +4146,37 @@ struct CyclicVomitingQualityOfLifeAssessmentSheet: View {
     }
 
     private var teenTotalQuestionCount: Int {
-        teenSections.reduce(0) { total, section in total + section.questions.count }
+        activeAssessmentSections.reduce(0) { total, section in total + section.questions.count }
     }
 
     private var teenScoreText: String {
-        guard teenAnsweredCount > 0 else { return localizedAppString("No answers yet") }
-        let total = teenResponses.values.reduce(0, +)
-        return "\(total) / \(teenAnsweredCount * 4)"
+        scoreText(totalScaleScore)
+    }
+
+    private var totalScaleScore: Double? {
+        meanConvertedScore(for: activeAssessmentSections.flatMap(\.questions))
+    }
+
+    private var physicalHealthScore: Double? {
+        guard let physicalSection = activeAssessmentSections.first(where: { $0.title == "Physical Functioning" }) else {
+            return nil
+        }
+
+        return meanConvertedScore(for: physicalSection.questions)
+    }
+
+    private var psychosocialHealthScore: Double? {
+        let psychosocialQuestions = activeAssessmentSections
+            .filter { $0.title != "Physical Functioning" }
+            .flatMap(\.questions)
+        return meanConvertedScore(for: psychosocialQuestions)
     }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    if ageRange == "13–18 years old" {
+                    if isClickableQualityAssessment {
                         Text(localizedAppString(ageRange))
                             .font(.title3.weight(.black))
                             .foregroundStyle(tint)
@@ -4029,7 +4192,7 @@ struct CyclicVomitingQualityOfLifeAssessmentSheet: View {
                         }
                     }
 
-                    if ageRange == "13–18 years old" {
+                    if isClickableQualityAssessment {
                         teenAssessment
                     } else {
                         placeholderAssessment
@@ -4054,23 +4217,39 @@ struct CyclicVomitingQualityOfLifeAssessmentSheet: View {
 
     private var teenAssessment: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(localizedAppString("In the past ONE month, how much of a problem has your teen had with ..."))
+            Text(localizedAppString(activeAssessmentInstruction))
                 .font(.headline.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            HStack {
-                Label("\(teenAnsweredCount)/\(teenTotalQuestionCount)", systemImage: "checkmark.circle.fill")
-                Spacer()
-                Text(localizedAppString("Score") + ": " + teenScoreText)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Label("\(teenAnsweredCount)/\(teenTotalQuestionCount)", systemImage: "checkmark.circle.fill")
+                    Spacer()
+                    Text("0-100")
+                }
+                .font(.caption.weight(.black))
+                .foregroundStyle(tint)
+
+                HStack(spacing: 8) {
+                    qualityScorePill(title: "Total", value: teenScoreText)
+                    qualityScorePill(title: "Physical", value: scoreText(physicalHealthScore))
+                    qualityScorePill(title: "Psychosocial", value: scoreText(psychosocialHealthScore))
+                }
             }
-            .font(.caption.weight(.black))
-            .foregroundStyle(tint)
             .padding(10)
             .background(tint.opacity(0.12))
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
-            ForEach(teenSections, id: \.title) { section in
+            ForEach(activeAssessmentSections, id: \.title) { section in
+                if section.title == "School Functioning", let activeAssessmentFootnote {
+                    Text(localizedAppString(activeAssessmentFootnote))
+                        .font(.subheadline.weight(.black))
+                        .italic()
+                        .foregroundStyle(AppTheme.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 teenSectionCard(title: section.title, questions: section.questions)
             }
         }
@@ -4132,17 +4311,17 @@ struct CyclicVomitingQualityOfLifeAssessmentSheet: View {
                     } label: {
                         VStack(spacing: 3) {
                             Text(localizedAppString(option.label))
-                                .font(.caption2.weight(.black))
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.5)
+                                .font(.system(size: 10, weight: .black, design: .rounded))
+                                .lineLimit(2)
                                 .multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true)
 
                             Text("\(option.value)")
                                 .font(.caption.weight(.black))
                         }
                         .foregroundStyle(teenResponses[question] == option.value ? .white : tint)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 48)
+                        .frame(height: 54)
                         .background(teenResponses[question] == option.value ? tint : tint.opacity(0.12))
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
@@ -4153,6 +4332,50 @@ struct CyclicVomitingQualityOfLifeAssessmentSheet: View {
         .padding(10)
         .background(AppTheme.fieldBackground)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private func qualityScorePill(title: String, value: String) -> some View {
+        VStack(spacing: 3) {
+            Text(localizedAppString(title))
+                .font(.caption2.weight(.black))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+
+            Text(value)
+                .font(.subheadline.weight(.black))
+                .foregroundStyle(AppTheme.text)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .background(.white.opacity(0.75))
+        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+
+    private func meanConvertedScore(for questions: [String]) -> Double? {
+        let scores = questions.compactMap { question -> Double? in
+            guard let rawScore = teenResponses[question] else { return nil }
+            return convertedScaleScore(for: rawScore)
+        }
+
+        guard !scores.isEmpty else { return nil }
+        return scores.reduce(0, +) / Double(scores.count)
+    }
+
+    private func convertedScaleScore(for rawScore: Int) -> Double {
+        Double(4 - rawScore) * 25
+    }
+
+    private func scoreText(_ score: Double?) -> String {
+        guard let score else { return "--" }
+
+        if score.rounded() == score {
+            return "\(Int(score))"
+        }
+
+        return String(format: "%.1f", score)
     }
 
     private var placeholderAssessment: some View {
@@ -4854,11 +5077,11 @@ struct NutritionSnapshotSheet: View {
                             .clipShape(Circle())
 
                         VStack(alignment: .leading, spacing: 3) {
-                            Text("Nutrition Goals")
+                            Text(localizedAppString("Nutrition Goals"))
                                 .font(.title3.weight(.bold))
                                 .foregroundStyle(AppTheme.text)
 
-                            Text("Calories, macros, supplements, and hydration")
+                            Text(localizedAppString("Calories, macros, supplements, and hydration"))
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
                         }
@@ -4874,7 +5097,7 @@ struct NutritionSnapshotSheet: View {
                                 NutritionGoalsEditor(goals: $goals)
                                     .padding(.top, 12)
                             } label: {
-                                Text("View Nutrition Goals")
+                                Text(localizedAppString("View Nutrition Goals"))
                                     .font(.headline.weight(.bold))
                                     .foregroundStyle(AppTheme.accent)
                             }
@@ -4886,17 +5109,17 @@ struct NutritionSnapshotSheet: View {
                 .padding(18)
             }
             .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle("Nutrition")
+            .navigationTitle(localizedAppString("Nutrition"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
+                    Button(localizedAppString("Cancel")) {
                         dismiss()
                     }
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") {
+                    Button(localizedAppString("Save")) {
                         save()
                     }
                     .font(.headline.weight(.semibold))
@@ -4960,7 +5183,7 @@ struct NutritionGoalsSummary: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Nutrition Goals")
+            Text(localizedAppString("Nutrition Goals"))
                 .font(.headline.weight(.bold))
                 .foregroundStyle(AppTheme.text)
 
@@ -5015,11 +5238,11 @@ struct NutritionGoalsEditor: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Notes")
+                Text(localizedAppString("Notes"))
                     .font(.subheadline.weight(.bold))
                     .foregroundStyle(AppTheme.text)
 
-                TextField("Diet restrictions, feeding notes, texture needs, or parent reminders", text: $goals.notes, axis: .vertical)
+                TextField(localizedAppString("Diet restrictions, feeding notes, texture needs, or parent reminders"), text: $goals.notes, axis: .vertical)
                     .textInputAutocapitalization(.never)
                     .lineLimit(3...6)
                     .padding(12)
@@ -5055,11 +5278,11 @@ struct NutritionGoalsPage: View {
             .padding(20)
         }
         .background(AppTheme.background.ignoresSafeArea())
-        .navigationTitle("Nutrition Goals")
+        .navigationTitle(localizedAppString("Nutrition Goals"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Save") {
+                Button(localizedAppString("Save")) {
                     onSave()
                     dismiss()
                 }
@@ -5076,7 +5299,7 @@ struct NutritionGoalSection<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(LocalizedStringKey(title))
+            Text(localizedAppString(title))
                 .font(.subheadline.weight(.bold))
                 .foregroundStyle(AppTheme.text)
 
@@ -5094,12 +5317,12 @@ struct NutritionGoalField: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Text(LocalizedStringKey(title))
+            Text(localizedAppString(title))
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(AppTheme.text)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            TextField(LocalizedStringKey(placeholder), text: $text)
+            TextField(localizedAppString(placeholder), text: $text)
                 .keyboardType(.decimalPad)
                 .multilineTextAlignment(.trailing)
                 .font(.subheadline.weight(.bold))
@@ -5272,7 +5495,7 @@ struct MoodLogSheet: View {
                 .clipShape(Circle())
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("Track Emotion or Mood")
+                Text(localizedAppString("Track Emotion or Mood"))
                     .font(.title3.weight(.bold))
                     .foregroundStyle(AppTheme.text)
 
@@ -5358,11 +5581,11 @@ struct MoodLogSheet: View {
 
     private var causeStep: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("What may have caused this feeling?")
+            Text(localizedAppString("What may have caused this feeling?"))
                 .font(.headline.weight(.bold))
                 .foregroundStyle(AppTheme.text)
 
-            TextField("Add context, trigger, activity, place, person, or change in routine", text: $cause, axis: .vertical)
+            TextField(localizedAppString("Add context, trigger, activity, place, person, or change in routine"), text: $cause, axis: .vertical)
                 .textInputAutocapitalization(.never)
                 .lineLimit(6...9)
                 .padding(12)
@@ -5616,7 +5839,7 @@ struct MedicineLogSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
+                    Button(localizedAppString("Cancel")) {
                         dismiss()
                     }
                 }
@@ -5625,7 +5848,7 @@ struct MedicineLogSheet: View {
                     Button {
                         isMedicineManagerPresented = true
                     } label: {
-                        Text("Edit")
+                        Text(localizedAppString("Edit"))
                             .font(.headline.weight(.semibold))
                             .foregroundStyle(AppTheme.accent)
                     }
@@ -5637,7 +5860,7 @@ struct MedicineLogSheet: View {
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: "checkmark.circle.fill")
-                            Text("Save")
+                            Text(localizedAppString("Save"))
                         }
                             .font(.headline.weight(.bold))
                             .foregroundStyle(.white)
@@ -5685,12 +5908,12 @@ struct MedicineLogSheet: View {
         let rows = checklistRows
 
         return VStack(alignment: .leading, spacing: 12) {
-            Text("Today's Medicines")
+            Text(localizedAppString("Today's Medicines"))
                 .font(.headline.weight(.bold))
                 .foregroundStyle(AppTheme.text)
 
             if rows.isEmpty {
-                Text("None")
+                Text(localizedAppString("None"))
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -5934,7 +6157,7 @@ struct MedicineManagerSheet: View {
                                 .foregroundStyle(tint)
                                 .frame(width: 30)
 
-                            Text("Add New")
+                            Text(localizedAppString("Add New"))
                                 .font(.headline.weight(.semibold))
                                 .foregroundStyle(AppTheme.text)
 
@@ -5947,7 +6170,7 @@ struct MedicineManagerSheet: View {
                     .buttonStyle(.plain)
 
                     if medications.isEmpty {
-                        Text("None")
+                        Text(localizedAppString("None"))
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -5992,7 +6215,7 @@ struct MedicineManagerSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
+                    Button(localizedAppString("Done")) {
                         dismiss()
                     }
                     .font(.headline.weight(.semibold))
@@ -6385,7 +6608,7 @@ struct MedicationEditorSheet: View {
 
                     ZStack(alignment: .topLeading) {
                         if draft.instructions.isEmpty {
-                            Text("Medication Instruction (Optional)")
+                            Text(localizedAppString("Medication Instruction (Optional)"))
                                 .font(.headline.weight(.semibold))
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 13)
@@ -6427,7 +6650,7 @@ struct MedicationEditorSheet: View {
                     Button {
                         save()
                     } label: {
-                        Text("Save")
+                        Text(localizedAppString("Save"))
                             .font(.headline.weight(.bold))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 18)
@@ -6617,7 +6840,7 @@ struct MedicationFormTextField: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            TextField(placeholder, text: $text)
+            TextField(localizedAppString(placeholder), text: $text)
                 .keyboardType(keyboardType)
                 .textInputAutocapitalization(.never)
                 .font(.headline.weight(.semibold))
@@ -6739,11 +6962,11 @@ struct PainLogEntrySheet: View {
                         }
 
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Short Comment")
+                            Text(localizedAppString("Short Comment"))
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(AppTheme.text)
 
-                            TextField("What happened or what helped?", text: $shortComment, axis: .vertical)
+                            TextField(localizedAppString("What happened or what helped?"), text: $shortComment, axis: .vertical)
                                 .textInputAutocapitalization(.never)
                                 .lineLimit(3...5)
                                 .padding(12)
@@ -6752,11 +6975,11 @@ struct PainLogEntrySheet: View {
                         }
 
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Indicators")
+                            Text(localizedAppString("Indicators"))
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(AppTheme.text)
 
-                            TextField("Crying, holding head, aggression, guarding, limping", text: $indicators, axis: .vertical)
+                            TextField(localizedAppString("Crying, holding head, aggression, guarding, limping"), text: $indicators, axis: .vertical)
                                 .textInputAutocapitalization(.never)
                                 .lineLimit(3...6)
                                 .padding(12)
@@ -6773,13 +6996,13 @@ struct PainLogEntrySheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
+                    Button(localizedAppString("Cancel")) {
                         dismiss()
                     }
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") {
+                    Button(localizedAppString("Save")) {
                         save()
                     }
                     .font(.headline.weight(.semibold))
@@ -6840,7 +7063,7 @@ struct PainBodySelector: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Pain Location")
+            Text(localizedAppString("Pain Location"))
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(AppTheme.text)
 
@@ -6863,7 +7086,7 @@ struct PainBodySelector: View {
                     Button {
                         painPoints.removeAll()
                     } label: {
-                        Label("Clear pain dots", systemImage: "xmark.circle")
+                        Label(localizedAppString("Clear pain dots"), systemImage: "xmark.circle")
                             .font(.caption.weight(.bold))
                             .foregroundStyle(.secondary)
                     }
@@ -6943,7 +7166,7 @@ struct TappablePainBodyMap: View {
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(side.rawValue) body pain map")
+        .accessibilityLabel(String(format: localizedAppString("%@ body pain map"), localizedAppString(side.rawValue)))
     }
 
     private func imageFrame(in size: CGSize) -> CGRect {
@@ -6983,7 +7206,7 @@ struct PainLocationBodyImage: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(Color(red: 1.00, green: 0.92, blue: 0.94))
                 .overlay {
-                    Text("Pain body image missing")
+                    Text(localizedAppString("Pain body image missing"))
                         .font(.caption.weight(.bold))
                         .foregroundStyle(.secondary)
                 }
@@ -7567,7 +7790,7 @@ struct SeizureTimerSheet: View {
                             isRunning = false
                             isStopped = true
                         } label: {
-                            Text("Stop")
+                            Text(localizedAppString("Stop"))
                                 .font(.headline.weight(.bold))
                                 .foregroundStyle(.white)
                                 .frame(maxWidth: .infinity)
@@ -7582,7 +7805,7 @@ struct SeizureTimerSheet: View {
                         Button {
                             skipTimer()
                         } label: {
-                            Text("Skip")
+                            Text(localizedAppString("Skip"))
                                 .font(.headline.weight(.bold))
                                 .foregroundStyle(AppTheme.accent)
                                 .frame(maxWidth: .infinity)
@@ -7594,24 +7817,24 @@ struct SeizureTimerSheet: View {
 
                     if isStopped {
                         VStack(alignment: .leading, spacing: 16) {
-                            Text("Seizure Details")
+                            Text(localizedAppString("Seizure Details"))
                                 .font(.headline.weight(.bold))
 
                             VStack(alignment: .leading, spacing: 10) {
-                                Text("Duration")
+                                Text(localizedAppString("Duration"))
                                     .font(.subheadline.weight(.semibold))
 
                                 HStack(spacing: 10) {
-                                    DurationNumberField(title: "Minutes", value: durationMinutesBinding)
-                                    DurationNumberField(title: "Seconds", value: durationSecondsBinding)
+                                    DurationNumberField(title: localizedAppString("Minutes"), value: durationMinutesBinding)
+                                    DurationNumberField(title: localizedAppString("Seconds"), value: durationSecondsBinding)
                                 }
 
-                                Stepper("Fine tune: \(durationText(elapsedSeconds))", value: $elapsedSeconds, in: 0...7200, step: 1)
+                                Stepper("\(localizedAppString("Fine tune")): \(durationText(elapsedSeconds))", value: $elapsedSeconds, in: 0...7200, step: 1)
                                     .font(.footnote.weight(.semibold))
                                     .foregroundStyle(.secondary)
                             }
 
-                            Picker("Seizure Type", selection: $seizureType) {
+                            Picker(localizedAppString("Seizure Type"), selection: $seizureType) {
                                 ForEach(seizureTypes, id: \.self) { type in
                                     Text(LocalizedStringKey(type)).tag(type)
                                 }
@@ -7626,11 +7849,11 @@ struct SeizureTimerSheet: View {
                             }
 
                             VStack(alignment: .leading, spacing: 8) {
-                                Text("Triggers")
+                                Text(localizedAppString("Triggers"))
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(AppTheme.text)
 
-                                TextField("Flashing lights, missed sleep, heat, illness, etc.", text: $triggers, axis: .vertical)
+                                TextField(localizedAppString("Flashing lights, missed sleep, heat, illness, etc."), text: $triggers, axis: .vertical)
                                     .textInputAutocapitalization(.never)
                                     .lineLimit(3...6)
                                     .padding(12)
@@ -7639,11 +7862,11 @@ struct SeizureTimerSheet: View {
                             }
 
                             VStack(alignment: .leading, spacing: 8) {
-                                Text("Post-event Notes")
+                                Text(localizedAppString("Post-event Notes"))
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(AppTheme.text)
 
-                                TextField("Recovery, breathing, color, awareness, what helped", text: $postEventNotes, axis: .vertical)
+                                TextField(localizedAppString("Recovery, breathing, color, awareness, what helped"), text: $postEventNotes, axis: .vertical)
                                     .textInputAutocapitalization(.never)
                                     .lineLimit(4...7)
                                     .padding(12)
@@ -7655,7 +7878,7 @@ struct SeizureTimerSheet: View {
                                 Button(role: .destructive) {
                                     showingDeleteConfirmation = true
                                 } label: {
-                                    Text("Delete")
+                                    Text(localizedAppString("Delete"))
                                         .font(.headline.weight(.bold))
                                         .frame(maxWidth: .infinity)
                                         .padding()
@@ -7666,7 +7889,7 @@ struct SeizureTimerSheet: View {
                                 Button {
                                     save()
                                 } label: {
-                                    Text("Save")
+                                    Text(localizedAppString("Save"))
                                         .font(.headline.weight(.bold))
                                         .foregroundStyle(.white)
                                         .frame(maxWidth: .infinity)
@@ -7682,10 +7905,10 @@ struct SeizureTimerSheet: View {
                 .padding(18)
             }
             .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle("Seizure Track")
+            .navigationTitle(localizedAppString("Seizure Track"))
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
+                    Button(localizedAppString("Cancel")) {
                         if isStopped {
                             showingDeleteConfirmation = true
                         } else {
@@ -7695,17 +7918,17 @@ struct SeizureTimerSheet: View {
                 }
             }
             .confirmationDialog(
-                "Delete this seizure timer?",
+                localizedAppString("Delete this seizure timer?"),
                 isPresented: $showingDeleteConfirmation,
                 titleVisibility: .visible
             ) {
-                Button("Delete Timer", role: .destructive) {
+                Button(localizedAppString("Delete Timer"), role: .destructive) {
                     dismiss()
                 }
-                Button("Keep Editing", role: .cancel) {
+                Button(localizedAppString("Keep Editing"), role: .cancel) {
                 }
             } message: {
-                Text("This timer has not been saved.")
+                Text(localizedAppString("This timer has not been saved."))
             }
         }
         .presentationDetents([.large])
@@ -7818,10 +8041,10 @@ struct HealthTrendChart: View {
         VStack(alignment: .leading, spacing: 12) {
             if recentEntries.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("No trend data yet")
+                    Text(localizedAppString("No trend data yet"))
                         .font(.headline.weight(.bold))
 
-                    Text("Tap a quick-log or daily snapshot card to save the first entry.")
+                    Text(localizedAppString("Tap a quick-log or daily snapshot card to save the first entry."))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -7864,7 +8087,7 @@ struct QuickLogTrendsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 if options.isEmpty {
-                    Text("Choose quick-log buttons on the dashboard to see history here.")
+                    Text(localizedAppString("Choose quick-log buttons on the dashboard to see history here."))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .authPanel()
@@ -7958,7 +8181,7 @@ struct QuickLogTrendPreviewCard: View {
                     .font(.title3.weight(.bold))
                     .foregroundStyle(AppTheme.text)
 
-                Text("\(entries.count) entries · Avg \(averageSeverityText)/\(scaleMax)")
+                Text(String(format: localizedAppString("%d entries · Avg %@/%d"), entries.count, averageSeverityText, scaleMax))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
@@ -8001,7 +8224,7 @@ struct QuickLogTrendPreviewCard: View {
                         .background(option.tint.opacity(0.14))
                         .clipShape(Circle())
 
-                    Text("No saved logs yet")
+                    Text(localizedAppString("No saved logs yet"))
                         .font(.subheadline.weight(.bold))
                         .foregroundStyle(.secondary)
 
@@ -8056,11 +8279,11 @@ struct QuickLogTrendPreviewCard: View {
                     .clipShape(Circle())
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("\(entries.count) saved logs")
+                    Text(String(format: localizedAppString("%d saved logs"), entries.count))
                         .font(.subheadline.weight(.bold))
                         .foregroundStyle(AppTheme.text)
 
-                    Text("Dates, times, duration, type, triggers, and notes")
+                    Text(localizedAppString("Dates, times, duration, type, triggers, and notes"))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
@@ -8091,7 +8314,7 @@ struct QuickLogTrendPreviewCard: View {
                         .background(option.tint.opacity(0.14))
                         .clipShape(Circle())
 
-                    Text("No medicine checklist saved yet")
+                    Text(localizedAppString("No medicine checklist saved yet"))
                         .font(.subheadline.weight(.bold))
                         .foregroundStyle(.secondary)
 
@@ -8109,7 +8332,7 @@ struct QuickLogTrendPreviewCard: View {
                                 .foregroundStyle(AppTheme.text)
                                 .frame(width: 54, alignment: .leading)
 
-                            Text("Last saved \(day.savedTimeText)")
+                            Text(String(format: localizedAppString("Last saved %@"), day.savedTimeText))
                                 .font(.caption.weight(.bold))
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -8141,7 +8364,7 @@ struct QuickLogTrendPreviewCard: View {
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(option.tint)
 
-                Text("No data yet")
+                Text(localizedAppString("No data yet"))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
@@ -8263,7 +8486,7 @@ struct SnapshotHistoryPreviewCard: View {
                     .font(.title3.weight(.bold))
                     .foregroundStyle(AppTheme.text)
 
-                Text("\(entries.count) entries · Avg \(averageSeverityText)/5")
+                Text(String(format: localizedAppString("%d entries · Avg %@/5"), entries.count, averageSeverityText))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
@@ -8289,11 +8512,11 @@ struct SnapshotHistoryPreviewCard: View {
                     .clipShape(Circle())
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("\(entries.count) nights tracked")
+                    Text(String(format: localizedAppString("%d nights tracked"), entries.count))
                         .font(.subheadline.weight(.bold))
                         .foregroundStyle(AppTheme.text)
 
-                    Text("Sleep times and nightly duration")
+                    Text(localizedAppString("Sleep times and nightly duration"))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
@@ -8315,7 +8538,7 @@ struct SnapshotHistoryPreviewCard: View {
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(option.tint)
 
-                Text("No data yet")
+                Text(localizedAppString("No data yet"))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
@@ -8396,10 +8619,10 @@ struct SleepTrackerHistoryView: View {
 
     private var headerLabel: String {
         guard let selectedSleepRecord else {
-            return "AVG. TIME IN BED"
+            return localizedAppString("AVG. TIME IN BED")
         }
 
-        let wakeText = selectedSleepRecord.wakingCount == 1 ? "1 wake-up" : "\(selectedSleepRecord.wakingCount) wake-ups"
+        let wakeText = selectedSleepRecord.wakingCount == 1 ? localizedAppString("1 wake-up") : String(format: localizedAppString("%d wake-ups"), selectedSleepRecord.wakingCount)
         return "\(selectedSleepRecord.qualityTitle.uppercased()) · \(wakeText)"
     }
 
@@ -8430,13 +8653,13 @@ struct SleepTrackerHistoryView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     if sleepRecords.isEmpty {
-                        Text("No Sleep & Rest entries yet.")
+                        Text(localizedAppString("No Sleep & Rest entries yet."))
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.secondary)
                             .authPanel()
                     } else {
                         VStack(alignment: .leading, spacing: 16) {
-                            Picker("Sleep range", selection: $selectedPeriod) {
+                            Picker(localizedAppString("Sleep range"), selection: $selectedPeriod) {
                                 ForEach(SleepHistoryPeriod.allCases) { period in
                                     Text(period.shortTitle).tag(period)
                                 }
@@ -8465,7 +8688,7 @@ struct SleepTrackerHistoryView: View {
                             }
 
                             if periodRecords.isEmpty {
-                                Text("No Sleep & Rest entries for this period.")
+                                Text(localizedAppString("No Sleep & Rest entries for this period."))
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(.secondary)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -8500,7 +8723,7 @@ struct SleepTrackerHistoryView: View {
                 }
             )
         }
-        .navigationTitle("Sleep & Rest")
+        .navigationTitle(localizedAppString("Sleep & Rest"))
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: selectedPeriod) { _, _ in
             clearSleepSelection()
@@ -8979,7 +9202,7 @@ struct SeizureHistoryDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 if sortedEntries.isEmpty {
-                    Text("No seizure logs saved yet.")
+                    Text(localizedAppString("No seizure logs saved yet."))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .authPanel()
@@ -8992,7 +9215,7 @@ struct SeizureHistoryDetailView: View {
             .padding(18)
         }
         .background(AppTheme.background.ignoresSafeArea())
-        .navigationTitle("Seizure History")
+        .navigationTitle(localizedAppString("Seizure History"))
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -9009,7 +9232,7 @@ struct MedicineHistoryDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 if days.isEmpty {
-                    Text("No medicine checklist saved yet.")
+                    Text(localizedAppString("No medicine checklist saved yet."))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .authPanel()
@@ -9022,7 +9245,7 @@ struct MedicineHistoryDetailView: View {
             .padding(18)
         }
         .background(AppTheme.background.ignoresSafeArea())
-        .navigationTitle("Medicine History")
+        .navigationTitle(localizedAppString("Medicine History"))
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -9039,7 +9262,7 @@ struct QuickLogHistoryDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 if sortedEntries.isEmpty {
-                    Text("No saved logs yet")
+                    Text(localizedAppString("No saved logs yet"))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .authPanel()
@@ -9052,7 +9275,7 @@ struct QuickLogHistoryDetailView: View {
             .padding(18)
         }
         .background(AppTheme.background.ignoresSafeArea())
-        .navigationTitle("\(option.title) History")
+        .navigationTitle(String(format: localizedAppString("%@ History"), localizedAppString(option.title)))
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -9223,7 +9446,7 @@ struct MedicineHistoryDayCard: View {
                         .font(.headline.weight(.bold))
                         .foregroundStyle(AppTheme.text)
 
-                    Text("Last saved \(day.savedTimeText)")
+                    Text(String(format: localizedAppString("Last saved %@"), day.savedTimeText))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
@@ -9560,7 +9783,7 @@ struct InsightUnavailableIndicator: View {
                 .background(AppTheme.panel)
                 .clipShape(Circle())
                 .shadow(color: Color.black.opacity(0.05), radius: 8, x: 0, y: 4)
-                .accessibilityLabel("AI insights unavailable")
+                .accessibilityLabel(localizedAppString("AI insights unavailable"))
 
             Spacer()
         }
@@ -9610,7 +9833,7 @@ struct TherapyTrackingView: View {
 
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
-                            Text("Recent Milestones")
+                            Text(localizedAppString("Recent Milestones"))
                                 .font(.headline.weight(.bold))
                                 .foregroundStyle(AppTheme.text)
 
@@ -9619,7 +9842,7 @@ struct TherapyTrackingView: View {
                             NavigationLink {
                                 TherapyMilestoneHistoryView(milestones: milestones)
                             } label: {
-                                Label("History", systemImage: "clock.arrow.circlepath")
+                                Label(localizedAppString("History"), systemImage: "clock.arrow.circlepath")
                                     .font(.caption.weight(.black))
                                     .foregroundStyle(AppTheme.accent)
                                     .padding(.horizontal, 10)
@@ -9631,7 +9854,7 @@ struct TherapyTrackingView: View {
                         }
 
                         if recentMilestones.isEmpty {
-                            Text("No milestones logged yet.")
+                            Text(localizedAppString("No milestones logged yet."))
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -9649,7 +9872,7 @@ struct TherapyTrackingView: View {
                 .padding(20)
             }
             .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle("Therapy")
+            .navigationTitle(localizedAppString("Therapy"))
             .sheet(item: $activeCategory) { category in
                 TherapyMilestoneSheet(category: category) { milestone in
                     saveMilestone(milestone)
@@ -9889,7 +10112,7 @@ struct TherapyMilestoneHistoryView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Therapy Type")
+                    Text(localizedAppString("Therapy Type"))
                         .font(.headline.weight(.bold))
                         .foregroundStyle(AppTheme.text)
 
@@ -9919,20 +10142,20 @@ struct TherapyMilestoneHistoryView: View {
                 .authPanel()
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Time Frame")
+                    Text(localizedAppString("Time Frame"))
                         .font(.headline.weight(.bold))
                         .foregroundStyle(AppTheme.text)
 
                     VStack(spacing: 10) {
                         DatePicker(
-                            "Start Date",
+                            localizedAppString("Start Date"),
                             selection: $startDate,
                             displayedComponents: .date
                         )
                         .font(.subheadline.weight(.semibold))
 
                         DatePicker(
-                            "End Date",
+                            localizedAppString("End Date"),
                             selection: $endDate,
                             displayedComponents: .date
                         )
@@ -9945,12 +10168,12 @@ struct TherapyMilestoneHistoryView: View {
                 .authPanel()
 
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Milestones")
+                    Text(localizedAppString("Milestones"))
                         .font(.headline.weight(.bold))
                         .foregroundStyle(AppTheme.text)
 
                     if filteredMilestones.isEmpty {
-                        Text("No milestones found.")
+                        Text(localizedAppString("No milestones found."))
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -9968,7 +10191,7 @@ struct TherapyMilestoneHistoryView: View {
             .padding(20)
         }
         .background(AppTheme.background.ignoresSafeArea())
-        .navigationTitle("History")
+        .navigationTitle(localizedAppString("History"))
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -9989,7 +10212,7 @@ struct TherapyFilterChip: View {
 
     var body: some View {
         Button(action: action) {
-            Text(LocalizedStringKey(title))
+            Text(localizedAppString(title))
                 .font(.caption.weight(.black))
                 .foregroundStyle(isSelected ? .white : tint)
                 .frame(maxWidth: .infinity)
@@ -10038,13 +10261,13 @@ struct TherapyMilestoneSheet: View {
                                 .font(.title3.weight(.bold))
                                 .foregroundStyle(AppTheme.text)
 
-                            Text("Log a new milestone")
+                            Text(localizedAppString("Log a new milestone"))
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
                         }
                     }
 
-                    DatePicker("Date", selection: $date, displayedComponents: .date)
+                    DatePicker(localizedAppString("Date"), selection: $date, displayedComponents: .date)
                         .font(.subheadline.weight(.semibold))
                         .padding(12)
                         .background(AppTheme.fieldBackground)
@@ -10058,11 +10281,11 @@ struct TherapyMilestoneSheet: View {
                     )
 
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Support level")
+                        Text(localizedAppString("Support level"))
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(AppTheme.text)
 
-                        Picker("Support level", selection: $supportLevel) {
+                        Picker(localizedAppString("Support level"), selection: $supportLevel) {
                             ForEach(supportLevels, id: \.self) { level in
                                 Text(LocalizedStringKey(level)).tag(level)
                             }
@@ -10084,17 +10307,17 @@ struct TherapyMilestoneSheet: View {
                 .padding(20)
             }
             .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle("Milestone")
+            .navigationTitle(localizedAppString("Milestone"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
+                    Button(localizedAppString("Cancel")) {
                         dismiss()
                     }
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") {
+                    Button(localizedAppString("Save")) {
                         save()
                     }
                     .fontWeight(.bold)
@@ -10173,7 +10396,7 @@ struct NutrientView: View {
                                 .background(AppTheme.accent.opacity(0.12))
                                 .clipShape(Circle())
                         }
-                        .accessibilityLabel("Meal history")
+                        .accessibilityLabel(localizedAppString("Meal history"))
                         .padding(.top, 2)
                     }
 
@@ -10189,7 +10412,7 @@ struct NutrientView: View {
                             }
                         } label: {
                             HStack(spacing: 12) {
-                                Text(nutritionGoals.isEmpty ? "Set Nutrition Goals" : "View Nutrition Goals")
+                                Text(localizedAppString(nutritionGoals.isEmpty ? "Set Nutrition Goals" : "View Nutrition Goals"))
                                     .font(.headline.weight(.bold))
                                     .foregroundStyle(AppTheme.accent)
 
@@ -10224,7 +10447,7 @@ struct NutrientView: View {
                                     Image(systemName: "sparkles")
                                 }
 
-                                Text(isEstimating ? "Estimating..." : "Estimate Nutrients")
+                                Text(localizedAppString(isEstimating ? "Estimating..." : "Estimate Nutrients"))
                                     .font(.headline.weight(.bold))
                             }
                             .foregroundStyle(.white)
@@ -10253,7 +10476,7 @@ struct NutrientView: View {
                             Button {
                                 saveCurrentMeal(estimate)
                             } label: {
-                                Label(hasSavedCurrentMeal ? "Saved" : "Save Meal", systemImage: hasSavedCurrentMeal ? "checkmark.circle.fill" : "tray.and.arrow.down.fill")
+                                Label(localizedAppString(hasSavedCurrentMeal ? "Saved" : "Save Meal"), systemImage: hasSavedCurrentMeal ? "checkmark.circle.fill" : "tray.and.arrow.down.fill")
                                     .font(.headline.weight(.bold))
                                     .foregroundStyle(.white)
                                     .frame(maxWidth: .infinity)
@@ -10266,7 +10489,7 @@ struct NutrientView: View {
                             Button {
                                 exportCurrentMealPDF(estimate)
                             } label: {
-                                Label("Export as PDF", systemImage: "doc.richtext.fill")
+                                Label(localizedAppString("Export as PDF"), systemImage: "doc.richtext.fill")
                                     .font(.headline.weight(.bold))
                                     .foregroundStyle(AppTheme.accent)
                                     .frame(maxWidth: .infinity)
@@ -10279,7 +10502,7 @@ struct NutrientView: View {
                             MealNutritionEstimateView(estimate: estimate)
                         } else {
                             VStack(alignment: .leading, spacing: 12) {
-                                HealthMetricRow(icon: "fork.knife", title: "Meals", value: "0 analyzed")
+                                HealthMetricRow(icon: "fork.knife", title: "Meals", value: localizedAppString("0 analyzed"))
                                 HealthMetricRow(icon: "flame.fill", title: "Calories", value: "--")
                                 HealthMetricRow(icon: "chart.pie.fill", title: "Macros", value: "--")
                             }
@@ -10290,7 +10513,7 @@ struct NutrientView: View {
                 .padding(20)
             }
             .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle("Nutrient")
+            .navigationTitle(localizedAppString("Nutrient"))
             .onAppear {
                 resetCurrentMealForNextImage()
                 loadStoredNutritionGoals()
@@ -10527,21 +10750,21 @@ struct NutrientView: View {
 
         if let data = try? JSONEncoder().encode(savedMeals) {
             savedMealHistoryData = data
-            saveMessage = "Meal saved to history."
+            saveMessage = localizedAppString("Meal saved to history.")
             hasSavedCurrentMeal = true
             syncSavedMeals(savedMeals, showFailure: true)
             mealPhotoData = Data()
             mealEstimateData = Data()
             selectedMealPhoto = nil
         } else {
-            saveMessage = "Unable to save this meal."
+            saveMessage = localizedAppString("Unable to save this meal.")
         }
     }
 
     private func exportCurrentMealPDF(_ estimate: MealNutritionEstimate) {
         guard !mealPhotoData.isEmpty,
               let url = MealPDFExporter.export(imageData: mealPhotoData, estimate: estimate, savedAt: Date()) else {
-            saveMessage = "Unable to create PDF."
+            saveMessage = localizedAppString("Unable to create PDF.")
             return
         }
 
@@ -10572,7 +10795,7 @@ struct NutrientView: View {
             } catch {
                 if showFailure {
                     await MainActor.run {
-                        saveMessage = "Meal saved on this phone, but backend sync failed. Make sure the server is running on port 3002."
+                        saveMessage = localizedAppString("Meal saved on this phone, but backend sync failed. Make sure the server is running on port 3002.")
                     }
                 }
                 print("Saved nutrient meals sync failed for user \(user.id): \(error.localizedDescription)")
@@ -10674,7 +10897,7 @@ struct NutrientDailyLimitSummary: View {
             Image(systemName: "sparkles")
                 .font(.caption.weight(.bold))
 
-            Text("Estimates Left Today")
+            Text(localizedAppString("Estimates Left Today"))
                 .font(.caption.weight(.bold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
@@ -10928,7 +11151,7 @@ struct MealPhotoSourceSheet: View {
                 .frame(width: 42, height: 5)
                 .padding(.top, 4)
 
-            Text("Meal Photo")
+            Text(localizedAppString("Meal Photo"))
                 .font(.headline.weight(.bold))
                 .foregroundStyle(AppTheme.text)
 
@@ -10940,7 +11163,7 @@ struct MealPhotoSourceSheet: View {
                     cameraUnavailable()
                 }
             } label: {
-                Label("Take Photo", systemImage: "camera.fill")
+                Label(localizedAppString("Take Photo"), systemImage: "camera.fill")
                     .font(.headline.weight(.bold))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
@@ -10950,7 +11173,7 @@ struct MealPhotoSourceSheet: View {
             }
 
             PhotosPicker(selection: $selectedMealPhoto, matching: .images) {
-                Label("Choose from Library", systemImage: "photo.on.rectangle")
+                Label(localizedAppString("Choose from Library"), systemImage: "photo.on.rectangle")
                     .font(.headline.weight(.bold))
                     .foregroundStyle(AppTheme.accent)
                     .frame(maxWidth: .infinity)
@@ -11030,11 +11253,11 @@ struct MealPhotoUploadPanel: View {
                         .font(.system(size: 36, weight: .semibold))
                         .foregroundStyle(AppTheme.accent)
 
-                    Text("Upload Meal Photo")
+                    Text(localizedAppString("Upload Meal Photo"))
                         .font(.headline.weight(.bold))
                         .foregroundStyle(AppTheme.text)
 
-                    Text("Breakfast, lunch, dinner, or snack")
+                    Text(localizedAppString("Breakfast, lunch, dinner, or snack"))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
@@ -11073,7 +11296,7 @@ struct MealNutritionEstimateView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("AI Estimate")
+                    Text(localizedAppString("AI Estimate"))
                         .font(.headline.weight(.bold))
                         .foregroundStyle(AppTheme.text)
 
@@ -11145,11 +11368,11 @@ struct MealHistoryView: View {
                         .font(.system(size: 42, weight: .semibold))
                         .foregroundStyle(AppTheme.accent)
 
-                    Text("No saved meals yet")
+                    Text(localizedAppString("No saved meals yet"))
                         .font(.headline.weight(.bold))
                         .foregroundStyle(AppTheme.text)
 
-                    Text("Saved nutrient estimates will appear here.")
+                    Text(localizedAppString("Saved nutrient estimates will appear here."))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
@@ -11170,7 +11393,7 @@ struct MealHistoryView: View {
             }
         }
         .background(AppTheme.background.ignoresSafeArea())
-        .navigationTitle("Meal History")
+        .navigationTitle(localizedAppString("Meal History"))
     }
 }
 
@@ -11235,7 +11458,7 @@ struct MealHistoryDetailView: View {
                 Button {
                     exportSavedMealPDF()
                 } label: {
-                    Label("Export as PDF", systemImage: "doc.richtext.fill")
+                    Label(localizedAppString("Export as PDF"), systemImage: "doc.richtext.fill")
                         .font(.headline.weight(.bold))
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
@@ -11249,7 +11472,7 @@ struct MealHistoryDetailView: View {
             .padding(20)
         }
         .background(AppTheme.background.ignoresSafeArea())
-        .navigationTitle("Meal Details")
+        .navigationTitle(localizedAppString("Meal Details"))
         .sheet(item: $activeMealPDF) { item in
             PDFShareSheet(url: item.url)
         }
@@ -11280,7 +11503,7 @@ struct MealReportTextSection: View {
                 .foregroundStyle(AppTheme.text)
 
             if text.isEmpty {
-                Text("No summary available.")
+                Text(localizedAppString("No summary available."))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -11351,19 +11574,19 @@ struct ProfileView: View {
                     ProfileHeader(user: user, imageData: profileImageData, selectedPhoto: $selectedPhoto)
 
                     VStack(alignment: .leading, spacing: 14) {
-                        Text("Parent Account")
+                        Text(localizedAppString("Parent Account"))
                             .font(.title3.weight(.bold))
 
                         InfoRow(title: "Parent Username", value: user.nickname)
                         InfoRow(title: "Parent Email", value: user.email)
-                        InfoRow(title: "Account Type", value: "Parent")
+                        InfoRow(title: "Account Type", value: localizedAppString("Parent"))
                     }
                     .authPanel()
 
                     NavigationLink {
                         SettingsMenuView()
                     } label: {
-                        Text("Settings")
+                        Text(localizedAppString("Settings"))
                             .font(.headline.weight(.bold))
                             .foregroundStyle(AppTheme.accent)
                             .frame(maxWidth: .infinity)
@@ -11380,7 +11603,7 @@ struct ProfileView: View {
                     .buttonStyle(.plain)
 
                     Button(role: .destructive, action: logout) {
-                        Text("Log Out")
+                        Text(localizedAppString("Log Out"))
                             .font(.headline.weight(.bold))
                             .frame(maxWidth: .infinity)
                             .padding()
@@ -11391,7 +11614,7 @@ struct ProfileView: View {
                 .padding(20)
             }
             .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle("Profile")
+            .navigationTitle(localizedAppString("Profile"))
             .task(id: selectedPhoto) {
                 await loadSelectedProfileImage()
             }
@@ -11433,7 +11656,7 @@ struct SettingsMenuView: View {
                             .background(AppTheme.accent.opacity(0.12))
                             .clipShape(Circle())
 
-                        Text("Language")
+                        Text(localizedAppString("Language"))
                             .font(.headline.weight(.bold))
                             .foregroundStyle(AppTheme.text)
 
@@ -11456,9 +11679,9 @@ struct SettingsMenuView: View {
             .padding(20)
         }
         .background(AppTheme.background.ignoresSafeArea())
-        .navigationTitle("Settings")
-        .confirmationDialog("Language", isPresented: $isShowingLanguagePicker, titleVisibility: .visible) {
-            Button("English") {
+        .navigationTitle(localizedAppString("Settings"))
+        .confirmationDialog(localizedAppString("Language"), isPresented: $isShowingLanguagePicker, titleVisibility: .visible) {
+            Button(localizedAppString("English")) {
                 languageCode = AppLanguage.english.rawValue
             }
 
@@ -11466,7 +11689,7 @@ struct SettingsMenuView: View {
                 languageCode = AppLanguage.chinese.rawValue
             }
 
-            Button("Cancel", role: .cancel) {}
+            Button(localizedAppString("Cancel"), role: .cancel) {}
         }
     }
 }
@@ -11518,7 +11741,7 @@ struct ProfileHeader: View {
                                 .stroke(AppTheme.panel, lineWidth: 3)
                         }
                 }
-                .accessibilityLabel("Change child profile picture")
+                .accessibilityLabel(localizedAppString("Change child profile picture"))
             }
             .buttonStyle(.plain)
 
@@ -11538,9 +11761,9 @@ struct ProfileHeader: View {
                     .foregroundStyle(AppTheme.text)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Open child basic information")
+                .accessibilityLabel(localizedAppString("Open child basic information"))
 
-                Text("Parent account for your child's care.")
+                Text(localizedAppString("Parent account for your child's care."))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -11721,17 +11944,17 @@ struct BasicInfoView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 14) {
-                    Text("Parent Account")
+                    Text(localizedAppString("Parent Account"))
                         .font(.headline.weight(.bold))
 
                     InfoRow(title: "Parent Username", value: user.nickname)
                     InfoRow(title: "Parent Email", value: user.email)
-                    InfoRow(title: "Account Type", value: "Parent")
+                    InfoRow(title: "Account Type", value: localizedAppString("Parent"))
                 }
                 .authPanel()
 
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Child Profile")
+                    Text(localizedAppString("Child Profile"))
                         .font(.headline.weight(.bold))
 
                     if isEditing {
