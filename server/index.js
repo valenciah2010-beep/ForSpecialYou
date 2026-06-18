@@ -289,6 +289,146 @@ function normalizeHealthInsights(rawInsights, languageInfo = normalizeResponseLa
   };
 }
 
+function normalizeAdminAIReport(rawReport, fallbackDateRange, languageInfo = normalizeResponseLanguage('English')) {
+  const isChinese = languageInfo.name === 'Simplified Chinese';
+  const toShortString = (value, maxLength = 420) => String(value || '').trim().slice(0, maxLength);
+  const toStringList = (value, maxItems = 8, maxLength = 420) => (
+    Array.isArray(value)
+      ? value.map((item) => toShortString(item, maxLength)).filter(Boolean).slice(0, maxItems)
+      : []
+  );
+
+  return {
+    title: toShortString(rawReport?.title, 90) || (isChinese ? '照护数据分析报告' : 'Care Data Analysis Report'),
+    dateRange: toShortString(rawReport?.dateRange, 80) || fallbackDateRange,
+    summary: toShortString(rawReport?.summary, 900) || (isChinese ? '所选记录未返回摘要。' : 'No summary was returned for the selected records.'),
+    highlights: toStringList(rawReport?.highlights),
+    patterns: toStringList(rawReport?.patterns || rawReport?.detailedPatterns),
+    concerns: toStringList(rawReport?.concerns),
+    recommendations: toStringList(rawReport?.recommendations),
+    dataQualityNotes: toStringList(rawReport?.dataQualityNotes, 6),
+    followUpQuestions: toStringList(rawReport?.followUpQuestions, 8),
+    language: languageInfo.name
+  };
+}
+
+function dateFromStoredTimestamp(timestamp) {
+  if (!timestamp) return '';
+
+  let normalizedTimestamp = timestamp;
+  if (typeof timestamp === 'number') {
+    const swiftReferenceDateOffsetSeconds = 978307200;
+    const timestampSeconds = timestamp < 1000000000
+      ? timestamp + swiftReferenceDateOffsetSeconds
+      : timestamp;
+
+    normalizedTimestamp = timestampSeconds < 100000000000
+      ? timestampSeconds * 1000
+      : timestampSeconds;
+  }
+
+  const date = new Date(normalizedTimestamp);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function dateInputFromTimestamp(timestamp) {
+  const date = dateFromStoredTimestamp(timestamp);
+  if (!date) return '';
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function timestampInInputDateRange(timestamp, startDate, endDate) {
+  const dateValue = dateInputFromTimestamp(timestamp);
+  if (!dateValue) return false;
+  if (startDate && dateValue < startDate) return false;
+  if (endDate && dateValue > endDate) return false;
+  return true;
+}
+
+function adminHistorySectionKey(log) {
+  const category = String(log?.categoryID || '').toLowerCase();
+  const title = String(log?.title || '').toLowerCase();
+
+  if (category === 'medsfood' || category === 'medicine' || title.includes('medicine')) return 'medicine';
+  if (category === 'sleep' || title.includes('sleep')) return 'sleep';
+  if (category === 'seizure' || title.includes('seizure')) return 'seizure';
+  if (category === 'therapy' || title.includes('therapy')) return 'therapy';
+  return category || title.replace(/\s+/g, '-') || 'other';
+}
+
+function adminHistoryPageKey(log) {
+  return adminHistorySectionKey(log) === 'therapy' ? 'therapy' : 'health';
+}
+
+function formatAdminRecordTime(timestamp) {
+  const date = dateFromStoredTimestamp(timestamp);
+  if (date) {
+    return date.toLocaleString();
+  }
+  return String(timestamp || '');
+}
+
+function buildAdminReportRecords({ healthLogs, savedMeals, filters }) {
+  const selectedHealthSections = new Set(filters.healthSections || []);
+  const allHealthSectionsSelected = selectedHealthSections.size === 0;
+  const records = [];
+
+  if (filters.includeHealth || filters.includeTherapy) {
+    healthLogs
+      .filter((log) => timestampInInputDateRange(log.timestamp, filters.startDate, filters.endDate))
+      .forEach((log) => {
+        const pageKey = adminHistoryPageKey(log);
+        const sectionKey = adminHistorySectionKey(log);
+
+        if (pageKey === 'therapy' && !filters.includeTherapy) return;
+        if (pageKey === 'health') {
+          if (!filters.includeHealth) return;
+          if (!allHealthSectionsSelected && !selectedHealthSections.has(sectionKey)) return;
+        }
+
+        records.push({
+          page: pageKey,
+          section: sectionKey,
+          title: log.title || sectionKey,
+          type: log.type || '',
+          timestamp: formatAdminRecordTime(log.timestamp),
+          severity: log.severity ?? null,
+          value: String(log.value || '').slice(0, 1200),
+          comments: String(log.comments || '').slice(0, 1200)
+        });
+      });
+  }
+
+  if (filters.includeNutrient) {
+    savedMeals
+      .filter((meal) => timestampInInputDateRange(meal.savedAt, filters.startDate, filters.endDate))
+      .forEach((meal) => {
+        const estimate = meal.estimate || {};
+        records.push({
+          page: 'nutrient',
+          section: 'nutrition',
+          title: 'AI meal estimate',
+          timestamp: formatAdminRecordTime(meal.savedAt),
+          calories: estimate.calories ?? null,
+          protein: estimate.protein ?? null,
+          carbs: estimate.carbs ?? null,
+          fat: estimate.fat ?? null,
+          fiber: estimate.fiber ?? null,
+          sugar: estimate.sugar ?? null,
+          summary: String(estimate.summary || '').slice(0, 700),
+          recommendations: Array.isArray(estimate.recommendations) ? estimate.recommendations.slice(0, 5) : [],
+          notes: Array.isArray(estimate.notes) ? estimate.notes.slice(0, 5) : []
+        });
+      });
+  }
+
+  return records.slice(0, 220);
+}
+
 async function ensureDatabaseShape() {
   let setupFailed = false;
 
@@ -553,6 +693,149 @@ app.get('/api/admin/app-users/:id/details', requireAdmin, async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Could not load parent app data right now.' });
+  }
+});
+
+app.post('/api/admin/app-users/:id/ai-report', requireAdmin, async (req, res) => {
+  const userId = Number(req.params.id);
+  const apiKey = process.env.OPENAI_API_KEY;
+  const model = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
+  const languageInfo = normalizeResponseLanguage(req.body?.language);
+  const filters = {
+    startDate: String(req.body?.startDate || '').trim(),
+    endDate: String(req.body?.endDate || '').trim(),
+    includeHealth: Boolean(req.body?.includeHealth),
+    includeTherapy: Boolean(req.body?.includeTherapy),
+    includeNutrient: Boolean(req.body?.includeNutrient),
+    healthSections: Array.isArray(req.body?.healthSections)
+      ? req.body.healthSections.map((item) => String(item).trim()).filter(Boolean)
+      : []
+  };
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ message: 'Please choose a valid parent user.' });
+  }
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(filters.startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(filters.endDate) || filters.startDate > filters.endDate) {
+    return res.status(400).json({ message: 'Choose a valid date range.' });
+  }
+
+  if (!filters.includeHealth && !filters.includeTherapy && !filters.includeNutrient) {
+    return res.status(400).json({ message: 'Choose at least one page for the AI report.' });
+  }
+
+  if (!apiKey) {
+    return res.status(503).json({
+      message: 'OpenAI is not configured. Add OPENAI_API_KEY to .env and restart the server.'
+    });
+  }
+
+  try {
+    const [rows] = await pool.execute(
+      `SELECT
+        users.id,
+        users.username AS nickname,
+        users.email,
+        parent_app_data.child_profile AS childProfile,
+        parent_app_data.health_logs AS healthLogs,
+        parent_app_data.saved_meals AS savedMeals,
+        DATE_FORMAT(parent_app_data.updated_at, '%Y-%m-%d %H:%i') AS appDataUpdatedAt
+      FROM users
+      LEFT JOIN parent_app_data ON parent_app_data.user_id = users.id
+      WHERE users.id = ? AND users.role = 'parent'
+      LIMIT 1`,
+      [userId]
+    );
+
+    const row = rows[0];
+    if (!row) {
+      return res.status(404).json({ message: 'Parent user was not found.' });
+    }
+
+    const childProfile = parseStoredJSON(row.childProfile, {});
+    const healthLogs = parseStoredJSON(row.healthLogs, []);
+    const savedMeals = parseStoredJSON(row.savedMeals, []);
+    const records = buildAdminReportRecords({ healthLogs, savedMeals, filters });
+    const dateRange = filters.startDate === filters.endDate
+      ? filters.startDate
+      : `${filters.startDate} to ${filters.endDate}`;
+
+    if (records.length === 0) {
+      return res.status(400).json({ message: 'No selected history is available for this date range.' });
+    }
+
+    const openAIResponse = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model,
+        input: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'input_text',
+                text: [
+                  'You are creating an admin-only caregiver data report from a parent-managed child health tracking app.',
+                  'Use only the provided synced app records. Do not invent facts.',
+                  'This is not medical advice, diagnosis, or treatment.',
+                  'Return JSON only with this exact shape:',
+                  '{"title": string, "dateRange": string, "summary": string, "highlights": string[], "patterns": string[], "concerns": string[], "recommendations": string[], "dataQualityNotes": string[], "followUpQuestions": string[]}',
+                  `Write every field in ${languageInfo.instruction}.`,
+                  'Make this a deep, admin-facing review, not a short alert.',
+                  'Summary must be 4-6 useful sentences and describe the overall picture of the selected date range.',
+                  'Highlights should identify positive or stable observations visible in the records.',
+                  'Patterns should compare timing, frequency, severity, repeated categories, therapy progress, sleep, nutrition, medication, and symptoms when those records exist.',
+                  'Concerns should only include patterns visible in the selected data; include why the pattern may deserve admin or care-team attention.',
+                  'Recommendations should focus on documentation quality, care coordination, parent follow-up, and questions to review with the care team.',
+                  'DataQualityNotes should mention missing categories, sparse days, duplicated records, unclear notes, or limits of the selected data.',
+                  'FollowUpQuestions should be concrete questions an admin could ask the parent or care team.',
+                  'Each list should contain 3-8 specific, useful bullet strings when data supports it.',
+                  'Avoid vague phrases. Use dates, categories, counts, and details from the selected records when available.',
+                  '',
+                  `Parent username: ${row.nickname}`,
+                  `Parent email: ${row.email}`,
+                  `Date range: ${dateRange}`,
+                  `Last app sync: ${row.appDataUpdatedAt || 'Not synced yet'}`,
+                  `Child profile JSON: ${JSON.stringify(childProfile)}`,
+                  `Selected records JSON: ${JSON.stringify(records)}`
+                ].join('\n')
+              }
+            ]
+          }
+        ],
+        max_output_tokens: 3000
+      })
+    });
+
+    const payload = await openAIResponse.json().catch(() => ({}));
+
+    if (!openAIResponse.ok) {
+      console.error('OpenAI admin report failed:', payload);
+      return res.status(502).json({
+        message: payload?.error?.message || 'Could not create the AI report right now.'
+      });
+    }
+
+    const outputText = extractOpenAIText(payload);
+    const rawReport = parseJSONOutput(outputText);
+
+    if (!rawReport) {
+      console.error('OpenAI admin report returned non-JSON:', outputText);
+      return res.status(502).json({ message: 'The AI returned an unexpected report.' });
+    }
+
+    res.json({
+      report: normalizeAdminAIReport(rawReport, dateRange, languageInfo),
+      recordCount: records.length,
+      generatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Admin AI report error:', error);
+    res.status(500).json({ message: 'Could not create the AI report right now.' });
   }
 });
 

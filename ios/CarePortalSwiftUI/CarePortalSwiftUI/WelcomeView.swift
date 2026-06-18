@@ -50,6 +50,7 @@ struct BasicHealthView: View {
     @AppStorage private var medicationData: Data
     @AppStorage private var medicationCheckData: Data
     @AppStorage private var healthInsightCacheData: Data
+    @AppStorage private var nutritionGoalsData: Data
     @State private var isQuickLogEditorPresented = false
     @State private var activeLogInput: HealthLogInputTarget?
     @State private var activeSeizureTimer: QuickLogOption?
@@ -58,6 +59,7 @@ struct BasicHealthView: View {
     @State private var activeMoodLog: QuickLogOption?
     @State private var activeCyclicVomitingLog: QuickLogOption?
     @State private var activeSleepSnapshot: SleepSnapshotEditorTarget?
+    @State private var activeDigestionSnapshot: SnapshotOption?
     @State private var activeNutritionSnapshot: SnapshotOption?
     @State private var draggingQuickLogID: String?
     @State private var isSyncingParentAppData = false
@@ -76,13 +78,14 @@ struct BasicHealthView: View {
         self._careNotes = AppStorage(wrappedValue: "", "profile.\(user.id).medicalNotes")
         self._profileImageData = AppStorage(wrappedValue: Data(), "profile.\(user.id).profileImageData")
         self._quickLogSelection = AppStorage(
-            wrappedValue: QuickLogOption.defaultSelectionString,
+            wrappedValue: "",
             "health.\(user.id).quickLogSelection"
         )
         self._healthLogData = AppStorage(wrappedValue: Data(), "health.\(user.id).logData")
         self._medicationData = AppStorage(wrappedValue: Data(), "health.\(user.id).medicationData")
         self._medicationCheckData = AppStorage(wrappedValue: Data(), "health.\(user.id).medicationCheckData")
         self._healthInsightCacheData = AppStorage(wrappedValue: Data(), "health.\(user.id).insightCacheData")
+        self._nutritionGoalsData = AppStorage(wrappedValue: Data(), "nutrient.\(user.id).nutritionGoalsData")
     }
 
     var body: some View {
@@ -133,37 +136,43 @@ struct BasicHealthView: View {
                         .accessibilityLabel("Choose quick-log buttons")
                     }
 
-                    LazyVGrid(columns: quickLogColumns, spacing: 10) {
-                        ForEach(selectedQuickLogs) { option in
-                            QuickLogCard(option: option) {
-                                if option.id == "seizure" {
-                                    activeSeizureTimer = option
-                                } else if option.id == "pain" {
-                                    activePainLog = option
-                                } else if option.id == "medsFood" {
-                                    activeMedicineLog = option
-                                } else if option.id == "mood" {
-                                    activeMoodLog = option
-                                } else if option.id == "cyclicVomiting" {
-                                    activeCyclicVomitingLog = option
-                                } else {
-                                    activeLogInput = .quickLog(option)
+                    if selectedQuickLogs.isEmpty {
+                        QuickLogEmptySelectionCard {
+                            isQuickLogEditorPresented = true
+                        }
+                    } else {
+                        LazyVGrid(columns: quickLogColumns, spacing: 10) {
+                            ForEach(selectedQuickLogs) { option in
+                                QuickLogCard(option: option) {
+                                    if option.id == "seizure" {
+                                        activeSeizureTimer = option
+                                    } else if option.id == "pain" {
+                                        activePainLog = option
+                                    } else if option.id == "medsFood" {
+                                        activeMedicineLog = option
+                                    } else if option.id == "mood" {
+                                        activeMoodLog = option
+                                    } else if option.id == "cyclicVomiting" {
+                                        activeCyclicVomitingLog = option
+                                    } else {
+                                        activeLogInput = .quickLog(option)
+                                    }
                                 }
-                            }
-                            .opacity(draggingQuickLogID == option.id ? 0.55 : 1)
-                            .onDrag {
-                                draggingQuickLogID = option.id
-                                return NSItemProvider(object: option.id as NSString)
-                            }
-                            .onDrop(
-                                of: [UTType.text],
-                                delegate: QuickLogDropDelegate(
-                                    targetOption: option,
-                                    selectedOptions: selectedQuickLogs,
-                                    draggingQuickLogID: $draggingQuickLogID,
-                                    moveAction: moveQuickLog
+                                .opacity(draggingQuickLogID == option.id ? 0.55 : 1)
+                                .onDrag {
+                                    draggingQuickLogID = option.id
+                                    return NSItemProvider(object: option.id as NSString)
+                                }
+                                .onDrop(
+                                    of: [UTType.text],
+                                    delegate: QuickLogDropDelegate(
+                                        targetOption: option,
+                                        selectedOptions: selectedQuickLogs,
+                                        draggingQuickLogID: $draggingQuickLogID,
+                                        moveAction: moveQuickLog
+                                    )
                                 )
-                            )
+                            }
                         }
                     }
 
@@ -194,19 +203,23 @@ struct BasicHealthView: View {
 
                     LazyVGrid(columns: snapshotColumns, spacing: 10) {
                         ForEach(SnapshotOption.all) { option in
-                            let sleepSummary = option.id == "sleep" ? latestSleepSummary : nil
+                            let snapshotSummary = todaysSnapshotSummary(for: option)
 
                             SnapshotCard(
                                 option: option,
-                                displayValue: sleepSummary?.durationText,
-                                displayDetail: sleepSummary?.detailText,
-                                sleepDurationText: sleepSummary?.durationText
+                                displayValue: snapshotSummary.value,
+                                displayDetail: snapshotSummary.detail,
+                                displayIcon: snapshotSummary.icon,
+                                sleepDurationText: option.id == "sleep" && snapshotSummary.isLoggedToday ? snapshotSummary.value : nil,
+                                isLoggedToday: snapshotSummary.isLoggedToday
                             ) {
                                 if option.id == "sleep" {
                                     activeSleepSnapshot = SleepSnapshotEditorTarget(
                                         option: option,
                                         existingEntry: todaysSleepEntry
                                     )
+                                } else if option.id == "digestion" {
+                                    activeDigestionSnapshot = option
                                 } else if option.id == "nutrition" {
                                     activeNutritionSnapshot = option
                                 } else {
@@ -239,9 +252,14 @@ struct BasicHealthView: View {
                     saveSleepEntry(entry)
                 }
             }
-            .sheet(item: $activeNutritionSnapshot) { option in
-                NutritionSnapshotSheet(option: option) { entry in
+            .sheet(item: $activeDigestionSnapshot) { option in
+                DigestionSnapshotSheet(option: option) { entry in
                     saveLogEntry(entry)
+                }
+            }
+            .sheet(item: $activeNutritionSnapshot) { option in
+                NutritionSnapshotSheet(userID: user.id, option: option) { entry in
+                    saveNutritionEntry(entry)
                 }
             }
             .sheet(item: $activeSeizureTimer) { option in
@@ -315,13 +333,7 @@ struct BasicHealthView: View {
         let storedIDs = quickLogSelection.split(separator: ",").map(String.init)
         let knownIDs = Set(QuickLogOption.all.map(\.id))
         let orderedKnownIDs = storedIDs.filter { knownIDs.contains($0) }
-        if orderedKnownIDs.isEmpty {
-            return QuickLogOption.defaultSelectionIDs
-        }
-
-        return ["mood", "cyclicVomiting"].reduce(orderedKnownIDs) { currentIDs, requiredID in
-            currentIDs.contains(requiredID) ? currentIDs : currentIDs + [requiredID]
-        }
+        return orderedKnownIDs
     }
 
     private var selectedQuickLogIDsBinding: Binding<Set<String>> {
@@ -385,14 +397,73 @@ struct BasicHealthView: View {
         )
     }
 
-    private var latestSleepSummary: SleepSnapshotSummary? {
-        guard let entry = logEntries
-            .filter({ $0.type == .snapshot && $0.categoryID == "sleep" })
-            .sorted(by: { $0.timestamp > $1.timestamp })
-            .first else {
+    private func todaysSnapshotSummary(for option: SnapshotOption) -> SnapshotCardDisplay {
+        if option.id == "nutrition", let display = nutritionGoalsSnapshotDisplay {
+            return display
+        }
+
+        guard let entry = latestTodaySnapshotEntry(for: option.id) else {
+            return SnapshotCardDisplay(value: "--", detail: "--", isLoggedToday: false)
+        }
+
+        if option.id == "sleep" {
+            let summary = sleepSummary(from: entry)
+            return SnapshotCardDisplay(
+                value: summary.durationText,
+                detail: summary.detailText,
+                isLoggedToday: true
+            )
+        }
+
+        let value = entry.value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let comments = entry.comments.trimmingCharacters(in: .whitespacesAndNewlines)
+        let firstValueLine = value
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+
+        return SnapshotCardDisplay(
+            value: firstValueLine ?? localizedAppString("Saved"),
+            detail: comments.isEmpty ? localizedAppString("Saved today") : comments,
+            isLoggedToday: true
+        )
+    }
+
+    private var nutritionGoalsSnapshotDisplay: SnapshotCardDisplay? {
+        guard !nutritionGoalsData.isEmpty,
+              var goals = try? JSONDecoder().decode(NutritionGoals.self, from: nutritionGoalsData),
+              !goals.isEmpty else {
             return nil
         }
 
+        let previousDateKey = goals.consumedDateKey
+        goals.resetDailyProgressIfNeeded()
+        if previousDateKey != goals.consumedDateKey,
+           let data = try? JSONEncoder().encode(goals) {
+            nutritionGoalsData = data
+        }
+
+        let lines = goals.summaryLines
+        let primaryLine = lines.first ?? localizedAppString("Nutrition goals saved")
+        let secondaryLine = lines.dropFirst().first ?? localizedAppString("Nutrition goals saved")
+
+        return SnapshotCardDisplay(
+            value: localizedSavedAIText(primaryLine),
+            detail: localizedSavedAIText(secondaryLine),
+            icon: goals.hasConsumedNutritionToday ? "fork.knife" : "checkmark.circle.fill",
+            isLoggedToday: true
+        )
+    }
+
+    private func latestTodaySnapshotEntry(for optionID: String) -> HealthLogEntry? {
+        logEntries
+            .filter({ $0.type == .snapshot && $0.categoryID == optionID })
+            .filter { Calendar.current.isDateInToday($0.timestamp) }
+            .sorted(by: { $0.timestamp > $1.timestamp })
+            .first
+    }
+
+    private func sleepSummary(from entry: HealthLogEntry) -> SleepSnapshotSummary {
         let parts = entry.value
             .components(separatedBy: "·")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -463,7 +534,8 @@ struct BasicHealthView: View {
     }
 
     private var isDailyHealthComplete: Bool {
-        selectedQuickLogs.allSatisfy { completedQuickLogIDsToday.contains($0.id) }
+        !selectedQuickLogs.isEmpty
+            && selectedQuickLogs.allSatisfy { completedQuickLogIDsToday.contains($0.id) }
             && SnapshotOption.all.allSatisfy { completedSnapshotIDsToday.contains($0.id) }
     }
 
@@ -639,6 +711,22 @@ struct BasicHealthView: View {
         var updatedEntries = logEntries.filter { savedEntry in
             !(savedEntry.type == .snapshot
               && savedEntry.categoryID == "sleep"
+              && Calendar.current.isDate(savedEntry.timestamp, inSameDayAs: entry.timestamp))
+        }
+        updatedEntries.append(entry)
+        updatedEntries.sort { $0.timestamp < $1.timestamp }
+
+        if let data = try? JSONEncoder().encode(updatedEntries) {
+            healthLogData = data
+        }
+
+        syncParentAppData(healthLogs: updatedEntries)
+    }
+
+    private func saveNutritionEntry(_ entry: HealthLogEntry) {
+        var updatedEntries = logEntries.filter { savedEntry in
+            !(savedEntry.type == .snapshot
+              && savedEntry.categoryID == "nutrition"
               && Calendar.current.isDate(savedEntry.timestamp, inSameDayAs: entry.timestamp))
         }
         updatedEntries.append(entry)
@@ -848,13 +936,28 @@ struct SnapshotOption: Identifiable {
     let tint: Color
     let progress: Double
 
+    var emptyCaption: String {
+        switch id {
+        case "sleep":
+            return "Click to fill out sleep"
+        case "digestion":
+            return "Click to fill out gut and digestion"
+        case "skin":
+            return "Click to fill out skin"
+        case "nutrition":
+            return "Click to set nutrition goals"
+        default:
+            return "Click to fill out"
+        }
+    }
+
     static let all: [SnapshotOption] = [
         SnapshotOption(
             id: "sleep",
             title: "Sleep & Rest",
             icon: "moon.zzz.fill",
-            value: "7h",
-            detail: "Tap to log",
+            value: "--",
+            detail: "--",
             tint: Color(red: 0.34, green: 0.66, blue: 0.88),
             progress: 0.78
         ),
@@ -862,8 +965,8 @@ struct SnapshotOption: Identifiable {
             id: "digestion",
             title: "Gut & Digestion",
             icon: "figure.core.training",
-            value: "1 bowel movement",
-            detail: "Normal",
+            value: "--",
+            detail: "--",
             tint: Color(red: 0.45, green: 0.75, blue: 0.52),
             progress: 0.55
         ),
@@ -871,8 +974,8 @@ struct SnapshotOption: Identifiable {
             id: "skin",
             title: "Skin",
             icon: "bandage.fill",
-            value: "2/5",
-            detail: "Eczema check",
+            value: "--",
+            detail: "--",
             tint: Color(red: 0.89, green: 0.72, blue: 0.49),
             progress: 0.4
         ),
@@ -880,8 +983,8 @@ struct SnapshotOption: Identifiable {
             id: "nutrition",
             title: "Nutrition",
             icon: "leaf.fill",
-            value: "3/4 checks",
-            detail: "Supplements",
+            value: "--",
+            detail: "--",
             tint: Color(red: 0.43, green: 0.77, blue: 0.62),
             progress: 0.75
         )
@@ -1029,6 +1132,13 @@ struct CyclicVomitingPatternsData: Codable {
 struct SleepSnapshotSummary {
     let durationText: String
     let detailText: String
+}
+
+struct SnapshotCardDisplay {
+    let value: String
+    let detail: String
+    var icon: String? = nil
+    let isLoggedToday: Bool
 }
 
 struct HealthInsightDailyCache: Codable {
@@ -1555,6 +1665,43 @@ struct QuickLogCard: View {
     }
 }
 
+struct QuickLogEmptySelectionCard: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(AppTheme.accent)
+                    .frame(width: 42, height: 42)
+                    .background(AppTheme.accent.opacity(0.12))
+                    .clipShape(Circle())
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("No quick-log buttons selected")
+                        .font(.headline.weight(.black))
+                        .foregroundStyle(AppTheme.text)
+
+                    Text("Tap the slider icon in the top right to choose quick-log buttons.")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(AppTheme.panel)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .shadow(color: Color.black.opacity(0.04), radius: 10, x: 0, y: 6)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Choose quick-log buttons")
+    }
+}
+
 struct QuickLogDropDelegate: DropDelegate {
     let targetOption: QuickLogOption
     let selectedOptions: [QuickLogOption]
@@ -1619,7 +1766,6 @@ struct QuickLogSelectionSheet: View {
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         }
                         .buttonStyle(.plain)
-                        .disabled(selectedIDs.count == 1 && selectedIDs.contains(option.id))
                     }
                 }
                 .padding(18)
@@ -1643,7 +1789,6 @@ struct QuickLogSelectionSheet: View {
         var updatedSelection = selectedIDs
 
         if selectedIDs.contains(option.id) {
-            guard selectedIDs.count > 1 else { return }
             updatedSelection.remove(option.id)
         } else {
             updatedSelection.insert(option.id)
@@ -1657,8 +1802,22 @@ struct SnapshotCard: View {
     let option: SnapshotOption
     var displayValue: String?
     var displayDetail: String?
+    var displayIcon: String?
     var sleepDurationText: String?
+    var isLoggedToday = true
     let action: () -> Void
+
+    private var valueText: String {
+        isLoggedToday ? (displayValue ?? localizedAppString(option.value)) : "--"
+    }
+
+    private var detailText: String {
+        isLoggedToday ? (displayDetail ?? localizedAppString(option.detail)) : localizedAppString(option.emptyCaption)
+    }
+
+    private var iconName: String {
+        displayIcon ?? option.icon
+    }
 
     var body: some View {
         Button {
@@ -1674,7 +1833,7 @@ struct SnapshotCard: View {
                 if option.id != "sleep" {
                     HStack {
                         Spacer()
-                        Image(systemName: option.icon)
+                        Image(systemName: iconName)
                             .font(.system(size: 30, weight: .semibold))
                             .foregroundStyle(option.tint)
                         Spacer()
@@ -1682,23 +1841,19 @@ struct SnapshotCard: View {
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(displayValue ?? localizedAppString(option.value))
+                    Text(valueText)
                         .font(option.id == "sleep" ? .title3.weight(.black) : .caption.weight(.bold))
                         .foregroundStyle(AppTheme.text)
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
 
-                    Text(displayDetail ?? localizedAppString(option.detail))
+                    Text(detailText)
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
                 }
 
-                if option.id != "sleep" {
-                    ProgressView(value: option.progress)
-                        .tint(option.tint)
-                }
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -2108,6 +2263,479 @@ enum SleepRestQuality: String, CaseIterable, Identifiable {
     }
 }
 
+struct DigestionSnapshotSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let option: SnapshotOption
+    let onSave: (HealthLogEntry) -> Void
+
+    @State private var movementTime = Date()
+    @State private var selectedStoolType = 4
+    @State private var selectedVolume = "Medium"
+    @State private var selectedColor = DigestionStoolColor.brown
+    @State private var hasStraining: Bool?
+    @State private var hasGas: Bool?
+    @State private var hasUndigestedFood: Bool?
+    @State private var isInfoPresented = false
+
+    private let volumeOptions = ["Small", "Medium", "Large"]
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(spacing: 12) {
+                        Text("Movement time")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+
+                        Spacer(minLength: 8)
+
+                        DatePicker(
+                            "",
+                            selection: $movementTime,
+                            displayedComponents: [.hourAndMinute]
+                        )
+                        .labelsHidden()
+                        .datePickerStyle(.compact)
+                    }
+                    .authPanel()
+
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Consistency")
+                                    .font(.headline.weight(.bold))
+                                    .foregroundStyle(AppTheme.text)
+
+                                Text("The Bristol Stool Chart")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Spacer()
+
+                            Button {
+                                isInfoPresented = true
+                            } label: {
+                                Image(systemName: "info.circle.fill")
+                                    .font(.title3.weight(.semibold))
+                                    .foregroundStyle(option.tint)
+                                    .frame(width: 34, height: 34)
+                                    .background(option.tint.opacity(0.14))
+                                    .clipShape(Circle())
+                            }
+                            .accessibilityLabel("Show stool type descriptions")
+                        }
+
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 10) {
+                                ForEach(1...7, id: \.self) { type in
+                                    StoolTypePickerCard(
+                                        type: type,
+                                        isSelected: selectedStoolType == type,
+                                        tint: option.tint
+                                    ) {
+                                        selectedStoolType = type
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                    .authPanel()
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Volume")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+
+                        HStack(spacing: 10) {
+                            ForEach(volumeOptions, id: \.self) { volume in
+                                Button {
+                                    selectedVolume = volume
+                                } label: {
+                                    Text(LocalizedStringKey(volume))
+                                        .font(.subheadline.weight(.bold))
+                                        .foregroundStyle(selectedVolume == volume ? .white : AppTheme.text)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 12)
+                                        .background(selectedVolume == volume ? option.tint : AppTheme.fieldBackground)
+                                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    .authPanel()
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Color Check")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 5), spacing: 10) {
+                            ForEach(DigestionStoolColor.allCases) { stoolColor in
+                                Button {
+                                    selectedColor = stoolColor
+                                } label: {
+                                    VStack(spacing: 7) {
+                                        Circle()
+                                            .fill(stoolColor.swatch)
+                                            .frame(width: 30, height: 30)
+                                            .overlay {
+                                                Circle()
+                                                    .stroke(
+                                                        selectedColor == stoolColor ? option.tint : Color.black.opacity(0.12),
+                                                        lineWidth: selectedColor == stoolColor ? 3 : 1
+                                                    )
+                                            }
+
+                                        Text(LocalizedStringKey(stoolColor.title))
+                                            .font(.caption2.weight(.bold))
+                                            .foregroundStyle(AppTheme.text)
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.75)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
+                                    .background(selectedColor == stoolColor ? option.tint.opacity(0.14) : AppTheme.fieldBackground)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    .authPanel()
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Pain & Strain")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+
+                        DigestionYesNoRow(
+                            title: "Straining/Discomfort during the movement?",
+                            value: $hasStraining,
+                            tint: option.tint
+                        )
+
+                        DigestionYesNoRow(
+                            title: "Excessive gas or bloating noticed afterward?",
+                            value: $hasGas,
+                            tint: option.tint
+                        )
+
+                        DigestionYesNoRow(
+                            title: "Visible undigested food in the stool?",
+                            value: $hasUndigestedFood,
+                            tint: option.tint
+                        )
+                    }
+                    .authPanel()
+                }
+                .padding(18)
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle("Gut & Digestion")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Save") {
+                        save()
+                    }
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(AppTheme.accent)
+                }
+            }
+        }
+        .presentationDetents([.large])
+        .sheet(isPresented: $isInfoPresented) {
+            BristolStoolInfoSheet(tint: option.tint)
+        }
+    }
+
+    private func save() {
+        let group = BristolStoolGuide.group(for: selectedStoolType)
+        let description = BristolStoolGuide.description(for: selectedStoolType)
+        let value = "Type \(selectedStoolType) · \(group)"
+        let detailLines = [
+            "Time: \(movementTime.formatted(date: .omitted, time: .shortened))",
+            "Consistency: Type \(selectedStoolType) - \(description)",
+            "Volume: \(selectedVolume)",
+            "Color: \(selectedColor.title)",
+            "Straining/Discomfort: \(answerText(hasStraining))",
+            "Gas/Bloating: \(answerText(hasGas))",
+            "Undigested Food: \(answerText(hasUndigestedFood))"
+        ]
+
+        let entry = HealthLogEntry(
+            id: UUID(),
+            type: .snapshot,
+            categoryID: option.id,
+            title: option.title,
+            timestamp: movementTime,
+            severity: BristolStoolGuide.severity(for: selectedStoolType),
+            value: value,
+            comments: detailLines.joined(separator: "\n")
+        )
+        onSave(entry)
+        dismiss()
+    }
+
+    private func answerText(_ value: Bool?) -> String {
+        guard let value else { return "--" }
+        return value ? "Yes" : "No"
+    }
+}
+
+enum DigestionStoolColor: String, CaseIterable, Identifiable {
+    case brown
+    case green
+    case clayWhite
+    case black
+    case red
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .brown:
+            return "Brown"
+        case .green:
+            return "Green"
+        case .clayWhite:
+            return "Clay/White"
+        case .black:
+            return "Black"
+        case .red:
+            return "Red"
+        }
+    }
+
+    var swatch: Color {
+        switch self {
+        case .brown:
+            return Color(red: 0.48, green: 0.25, blue: 0.13)
+        case .green:
+            return Color(red: 0.28, green: 0.55, blue: 0.25)
+        case .clayWhite:
+            return Color(red: 0.90, green: 0.86, blue: 0.72)
+        case .black:
+            return Color(red: 0.08, green: 0.07, blue: 0.06)
+        case .red:
+            return Color(red: 0.73, green: 0.12, blue: 0.11)
+        }
+    }
+}
+
+enum BristolStoolGuide {
+    static func group(for type: Int) -> String {
+        switch type {
+        case 1...2:
+            return "Constipation"
+        case 3...4:
+            return "Optimal"
+        default:
+            return "Diarrhea/Intolerance"
+        }
+    }
+
+    static func description(for type: Int) -> String {
+        switch type {
+        case 1:
+            return "Separate hard lumps, like little pebbles."
+        case 2:
+            return "Hard and lumpy, starting to resemble a sausage."
+        case 3:
+            return "Sausage-shaped with cracks on the surface."
+        case 4:
+            return "Smooth and soft, snake-like."
+        case 5:
+            return "Soft blobs with clear-cut edges."
+        case 6:
+            return "Fluffy, mushy pieces with ragged edges."
+        default:
+            return "Watery with no solid pieces."
+        }
+    }
+
+    static func severity(for type: Int) -> Int {
+        switch type {
+        case 3...4:
+            return 1
+        case 2, 5:
+            return 2
+        default:
+            return 3
+        }
+    }
+}
+
+struct StoolTypePickerCard: View {
+    let type: Int
+    let isSelected: Bool
+    let tint: Color
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                BristolStoolIcon(type: type)
+                    .frame(width: 92, height: 58)
+
+                Text("Type \(type)")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(AppTheme.text)
+
+                Text(BristolStoolGuide.group(for: type))
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .padding(10)
+            .frame(width: 120, height: 132)
+            .background(isSelected ? tint.opacity(0.18) : AppTheme.fieldBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(isSelected ? tint : Color.clear, lineWidth: 2)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct BristolStoolIcon: View {
+    let type: Int
+
+    var body: some View {
+        BundledPNGImage(name: "BristolStoolType\(type)")
+    }
+}
+
+struct BundledPNGImage: View {
+    let name: String
+
+    var body: some View {
+        if let image = bundledImage {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+        } else {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(AppTheme.fieldBackground)
+        }
+    }
+
+    private var bundledImage: UIImage? {
+        if let url = Bundle.main.url(forResource: name, withExtension: "png"),
+           let image = UIImage(contentsOfFile: url.path) {
+            return image
+        }
+
+        return UIImage(named: name) ?? UIImage(named: "\(name).png")
+    }
+}
+
+struct DigestionYesNoRow: View {
+    let title: String
+    @Binding var value: Bool?
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(LocalizedStringKey(title))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppTheme.text)
+
+            HStack(spacing: 10) {
+                yesNoButton(title: "Yes", option: true)
+                yesNoButton(title: "No", option: false)
+            }
+        }
+    }
+
+    private func yesNoButton(title: String, option: Bool) -> some View {
+        Button {
+            value = value == option ? nil : option
+        } label: {
+            Text(LocalizedStringKey(title))
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(value == option ? .white : AppTheme.text)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(value == option ? tint : AppTheme.fieldBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct BristolStoolInfoSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let tint: Color
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(1...7, id: \.self) { type in
+                        HStack(alignment: .top, spacing: 12) {
+                            BristolStoolIcon(type: type)
+                                .frame(width: 76, height: 48)
+                                .padding(8)
+                                .background(tint.opacity(0.10))
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Type \(type)")
+                                    .font(.headline.weight(.bold))
+                                    .foregroundStyle(AppTheme.text)
+
+                                Text(BristolStoolGuide.group(for: type))
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(tint)
+
+                                Text(BristolStoolGuide.description(for: type))
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(AppTheme.panel)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                }
+                .padding(18)
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle("Bristol Stool Chart")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(AppTheme.accent)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+}
+
 struct HealthLogEntrySheet: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -2299,6 +2927,7 @@ struct CyclicVomitingLogSheet: View {
     @State private var childWeightKg = ""
     @State private var childWeightUnit = "Kg"
     @State private var qualityOfLifeAgeGroup = ""
+    @State private var isQualityOfLifeAssessmentPresented = false
 
     init(option: QuickLogOption, userID: Int, onSave: @escaping (HealthLogEntry) -> Void) {
         self.option = option
@@ -2546,19 +3175,27 @@ struct CyclicVomitingLogSheet: View {
             patternsForm
                 .padding(18)
         }
-            .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle("")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") {
-                        savePatterns()
-                        dismiss()
-                    }
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(AppTheme.accent)
+        .background(AppTheme.background.ignoresSafeArea())
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Save") {
+                    savePatterns()
+                    dismiss()
                 }
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(AppTheme.accent)
             }
+        }
+        .sheet(isPresented: $isQualityOfLifeAssessmentPresented) {
+            CyclicVomitingQualityOfLifeAssessmentSheet(
+                ageRange: qualityOfLifeAgeGroup,
+                tint: option.tint
+            )
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+        }
     }
 
     private var vomitingPatternForm: some View {
@@ -2994,13 +3631,29 @@ struct CyclicVomitingLogSheet: View {
                     tint: option.tint
                 )
 
-                Text(localizedAppString("Quality of life link placeholder"))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                Button {
+                    isQualityOfLifeAssessmentPresented = true
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "heart.text.square.fill")
+                            .font(.headline.weight(.bold))
+
+                        Text(localizedAppString("Assess Quality of Life Here"))
+                            .font(.headline.weight(.bold))
+
+                        Spacer()
+
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.black))
+                    }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
-                    .background(AppTheme.fieldBackground)
+                    .padding(14)
+                    .foregroundStyle(qualityOfLifeAgeGroup.isEmpty ? Color.secondary : Color.white)
+                    .background(qualityOfLifeAgeGroup.isEmpty ? AppTheme.fieldBackground : option.tint)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(qualityOfLifeAgeGroup.isEmpty)
             }
         }
     }
@@ -3251,6 +3904,286 @@ struct CyclicVomitingNavigationCard: View {
         .frame(height: 46)
         .background(tint.opacity(0.16))
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+struct CyclicVomitingQualityOfLifeAssessmentSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let ageRange: String
+    let tint: Color
+    @State private var teenResponses: [String: Int] = [:]
+    @State private var collapsedTeenSections: Set<String> = []
+
+    private let responseOptions = [
+        (label: "Never", value: 0),
+        (label: "Almost Never", value: 1),
+        (label: "Sometimes", value: 2),
+        (label: "Often", value: 3),
+        (label: "Almost Always", value: 4)
+    ]
+
+    private let teenSections: [(title: String, questions: [String])] = [
+        (
+            title: "Physical Functioning",
+            questions: [
+                "Walking more than one block",
+                "Running",
+                "Participating in sports activity or exercise",
+                "Lifting something heavy",
+                "Doing chores around the house"
+            ]
+        ),
+        (
+            title: "Emotional Functioning",
+            questions: [
+                "Feeling afraid or scared",
+                "Feeling sad or blue",
+                "Feeling angry",
+                "Worrying about what will happen to him or her"
+            ]
+        ),
+        (
+            title: "Social Functioning",
+            questions: [
+                "Getting along with other teens",
+                "Other teens not wanting to be his or her friend",
+                "Getting teased by other teens"
+            ]
+        ),
+        (
+            title: "School Functioning",
+            questions: [
+                "Paying attention in class",
+                "Forgetting things",
+                "Keeping up with schoolwork"
+            ]
+        )
+    ]
+
+    private var assessmentTitle: String {
+        switch ageRange {
+        case "13–18 years old":
+            "Teen Quality of Life Assessment"
+        case "8–12 years old":
+            "Child Quality of Life Assessment"
+        case "5–7 years old":
+            "Young Child Quality of Life Assessment"
+        case "2–4 years old":
+            "Toddler Quality of Life Assessment"
+        case "1–12 months":
+            "Infant Quality of Life Assessment"
+        default:
+            "Quality of Life Assessment"
+        }
+    }
+
+    private var assessmentRows: [String] {
+        switch ageRange {
+        case "13–18 years old":
+            ["Physical comfort", "School and daily activities", "Friends and social participation", "Mood, worry, and independence"]
+        case "8–12 years old":
+            ["Physical comfort", "School or learning routines", "Play and peer interaction", "Mood and family routines"]
+        case "5–7 years old":
+            ["Eating and sleep comfort", "Play and movement", "Preschool or school participation", "Caregiver-observed mood"]
+        case "2–4 years old":
+            ["Feeding and sleep routines", "Play and movement", "Communication of discomfort", "Parent-observed daily burden"]
+        case "1–12 months":
+            ["Feeding comfort", "Sleep and soothing", "Vomiting impact on care routines", "Parent-observed distress"]
+        default:
+            ["Daily comfort", "Activity participation", "Family routines", "Mood or distress"]
+        }
+    }
+
+    private var teenAnsweredCount: Int {
+        teenResponses.count
+    }
+
+    private var teenTotalQuestionCount: Int {
+        teenSections.reduce(0) { total, section in total + section.questions.count }
+    }
+
+    private var teenScoreText: String {
+        guard teenAnsweredCount > 0 else { return localizedAppString("No answers yet") }
+        let total = teenResponses.values.reduce(0, +)
+        return "\(total) / \(teenAnsweredCount * 4)"
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if ageRange == "13–18 years old" {
+                        Text(localizedAppString(ageRange))
+                            .font(.title3.weight(.black))
+                            .foregroundStyle(tint)
+                    } else {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(localizedAppString(assessmentTitle))
+                                .font(.title3.weight(.black))
+                                .foregroundStyle(AppTheme.text)
+
+                            Text(localizedAppString(ageRange))
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(tint)
+                        }
+                    }
+
+                    if ageRange == "13–18 years old" {
+                        teenAssessment
+                    } else {
+                        placeholderAssessment
+                    }
+
+                    Spacer(minLength: 0)
+                }
+                .padding(20)
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(localizedAppString("Done")) {
+                        dismiss()
+                    }
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(tint)
+                }
+            }
+        }
+    }
+
+    private var teenAssessment: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(localizedAppString("In the past ONE month, how much of a problem has your teen had with ..."))
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Label("\(teenAnsweredCount)/\(teenTotalQuestionCount)", systemImage: "checkmark.circle.fill")
+                Spacer()
+                Text(localizedAppString("Score") + ": " + teenScoreText)
+            }
+            .font(.caption.weight(.black))
+            .foregroundStyle(tint)
+            .padding(10)
+            .background(tint.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            ForEach(teenSections, id: \.title) { section in
+                teenSectionCard(title: section.title, questions: section.questions)
+            }
+        }
+    }
+
+    private func teenSectionCard(title: String, questions: [String]) -> some View {
+        let isCollapsed = collapsedTeenSections.contains(title)
+
+        return VStack(alignment: .leading, spacing: 10) {
+            Button {
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.86)) {
+                    if isCollapsed {
+                        collapsedTeenSections.remove(title)
+                    } else {
+                        collapsedTeenSections.insert(title)
+                    }
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Text(localizedAppString(title))
+                        .font(.headline.weight(.black))
+                        .foregroundStyle(AppTheme.text)
+
+                    Spacer()
+
+                    Image(systemName: isCollapsed ? "chevron.down" : "chevron.up")
+                        .font(.subheadline.weight(.black))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+
+            if !isCollapsed {
+                ForEach(Array(questions.enumerated()), id: \.element) { index, question in
+                    teenQuestionRow(
+                        number: index + 1,
+                        question: question
+                    )
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(12)
+        .background(.white)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private func teenQuestionRow(number: Int, question: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("\(number). \(localizedAppString(question))")
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(AppTheme.text)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 5) {
+                ForEach(responseOptions, id: \.value) { option in
+                    Button {
+                        teenResponses[question] = option.value
+                    } label: {
+                        VStack(spacing: 3) {
+                            Text(localizedAppString(option.label))
+                                .font(.caption2.weight(.black))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.5)
+                                .multilineTextAlignment(.center)
+
+                            Text("\(option.value)")
+                                .font(.caption.weight(.black))
+                        }
+                        .foregroundStyle(teenResponses[question] == option.value ? .white : tint)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                        .background(teenResponses[question] == option.value ? tint : tint.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(10)
+        .background(AppTheme.fieldBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private var placeholderAssessment: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(localizedAppString("Use this space for the matching quality of life form for the selected age range."))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(spacing: 10) {
+                ForEach(assessmentRows, id: \.self) { row in
+                    HStack(spacing: 10) {
+                        Image(systemName: "checklist")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(tint)
+                            .frame(width: 28, height: 28)
+                            .background(tint.opacity(0.14))
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                        Text(localizedAppString(row))
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+
+                        Spacer()
+                    }
+                    .padding(12)
+                    .background(AppTheme.fieldBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+            }
+        }
     }
 }
 
@@ -3757,22 +4690,156 @@ struct CyclicVomitingNumberPicker: View {
     }
 }
 
+struct NutritionGoals: Codable, Equatable {
+    var calorieGoal = ""
+    var proteinGoal = ""
+    var carbsGoal = ""
+    var fatGoal = ""
+    var calciumGoal = ""
+    var vitaminDGoal = ""
+    var ironGoal = ""
+    var otherSupplements = ""
+    var waterGoal = ""
+    var notes = ""
+    var lastUpdated = Date()
+    var consumedDateKey = MedicationCheckState.todayKey
+    var consumedCalories = 0
+    var consumedProtein = 0
+    var consumedCarbs = 0
+    var consumedFat = 0
+
+    enum CodingKeys: String, CodingKey {
+        case calorieGoal
+        case proteinGoal
+        case carbsGoal
+        case fatGoal
+        case calciumGoal
+        case vitaminDGoal
+        case ironGoal
+        case otherSupplements
+        case waterGoal
+        case notes
+        case lastUpdated
+        case consumedDateKey
+        case consumedCalories
+        case consumedProtein
+        case consumedCarbs
+        case consumedFat
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        calorieGoal = try container.decodeIfPresent(String.self, forKey: .calorieGoal) ?? ""
+        proteinGoal = try container.decodeIfPresent(String.self, forKey: .proteinGoal) ?? ""
+        carbsGoal = try container.decodeIfPresent(String.self, forKey: .carbsGoal) ?? ""
+        fatGoal = try container.decodeIfPresent(String.self, forKey: .fatGoal) ?? ""
+        calciumGoal = try container.decodeIfPresent(String.self, forKey: .calciumGoal) ?? ""
+        vitaminDGoal = try container.decodeIfPresent(String.self, forKey: .vitaminDGoal) ?? ""
+        ironGoal = try container.decodeIfPresent(String.self, forKey: .ironGoal) ?? ""
+        otherSupplements = try container.decodeIfPresent(String.self, forKey: .otherSupplements) ?? ""
+        waterGoal = try container.decodeIfPresent(String.self, forKey: .waterGoal) ?? ""
+        notes = try container.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        lastUpdated = try container.decodeIfPresent(Date.self, forKey: .lastUpdated) ?? Date()
+        consumedDateKey = try container.decodeIfPresent(String.self, forKey: .consumedDateKey) ?? MedicationCheckState.todayKey
+        consumedCalories = try container.decodeIfPresent(Int.self, forKey: .consumedCalories) ?? 0
+        consumedProtein = try container.decodeIfPresent(Int.self, forKey: .consumedProtein) ?? 0
+        consumedCarbs = try container.decodeIfPresent(Int.self, forKey: .consumedCarbs) ?? 0
+        consumedFat = try container.decodeIfPresent(Int.self, forKey: .consumedFat) ?? 0
+    }
+
+    var isEmpty: Bool {
+        [
+            calorieGoal,
+            proteinGoal,
+            carbsGoal,
+            fatGoal,
+            calciumGoal,
+            vitaminDGoal,
+            ironGoal,
+            otherSupplements,
+            waterGoal,
+            notes
+        ]
+        .allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    var summaryLines: [String] {
+        var lines: [String] = []
+        appendProgressLine("Calories", current: consumedCalories, goal: calorieGoal, unit: "kcal", to: &lines)
+        appendProgressLine("Protein", current: consumedProtein, goal: proteinGoal, unit: "g", to: &lines)
+        appendProgressLine("Carbs", current: consumedCarbs, goal: carbsGoal, unit: "g", to: &lines)
+        appendProgressLine("Fats", current: consumedFat, goal: fatGoal, unit: "g", to: &lines)
+        appendLine("Calcium", calciumGoal, "mg", to: &lines)
+        appendLine("Vitamin D", vitaminDGoal, "IU", to: &lines)
+        appendLine("Iron", ironGoal, "mg", to: &lines)
+        appendLine("Water", waterGoal, "", to: &lines)
+
+        let trimmedSupplements = otherSupplements.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedSupplements.isEmpty {
+            lines.append("Other supplements: \(trimmedSupplements)")
+        }
+
+        return lines
+    }
+
+    mutating func applyMealEstimate(_ estimate: MealNutritionEstimate) {
+        resetDailyProgressIfNeeded()
+        consumedCalories += estimate.calories
+        consumedProtein += estimate.protein
+        consumedCarbs += estimate.carbs
+        consumedFat += estimate.fat
+        lastUpdated = Date()
+    }
+
+    mutating func resetDailyProgressIfNeeded() {
+        guard consumedDateKey != MedicationCheckState.todayKey else { return }
+        consumedDateKey = MedicationCheckState.todayKey
+        consumedCalories = 0
+        consumedProtein = 0
+        consumedCarbs = 0
+        consumedFat = 0
+    }
+
+    var hasConsumedNutritionToday: Bool {
+        consumedDateKey == MedicationCheckState.todayKey
+            && [consumedCalories, consumedProtein, consumedCarbs, consumedFat].contains { $0 > 0 }
+    }
+
+    private func appendLine(_ label: String, _ value: String, _ unit: String, to lines: inout [String]) {
+        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedValue.isEmpty else { return }
+        lines.append(unit.isEmpty ? "\(label): \(trimmedValue)" : "\(label): \(trimmedValue) \(unit)")
+    }
+
+    private func appendProgressLine(_ label: String, current: Int, goal: String, unit: String, to lines: inout [String]) {
+        let trimmedGoal = goal.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedGoal.isEmpty {
+            lines.append("\(label): \(current)/\(trimmedGoal) \(unit)")
+        } else if current > 0 {
+            lines.append("\(label): \(current) \(unit)")
+        }
+    }
+}
+
 struct NutritionSnapshotSheet: View {
     @Environment(\.dismiss) private var dismiss
 
+    let userID: Int
     let option: SnapshotOption
     let onSave: (HealthLogEntry) -> Void
 
-    @State private var calorieGoal = ""
-    @State private var proteinGoal = ""
-    @State private var carbsGoal = ""
-    @State private var fatGoal = ""
-    @State private var calciumGoal = ""
-    @State private var vitaminDGoal = ""
-    @State private var ironGoal = ""
-    @State private var otherSupplements = ""
-    @State private var waterGoal = ""
-    @State private var notes = ""
+    @AppStorage private var goalsData: Data
+    @State private var goals = NutritionGoals()
+    @State private var isGoalsExpanded = false
+
+    init(userID: Int, option: SnapshotOption, onSave: @escaping (HealthLogEntry) -> Void) {
+        self.userID = userID
+        self.option = option
+        self.onSave = onSave
+        self._goalsData = AppStorage(wrappedValue: Data(), "nutrient.\(userID).nutritionGoalsData")
+    }
 
     var body: some View {
         NavigationStack {
@@ -3798,44 +4865,20 @@ struct NutritionSnapshotSheet: View {
                     }
 
                     VStack(alignment: .leading, spacing: 16) {
-                        NutritionGoalSection(title: "Calories") {
-                            NutritionGoalField(title: "Daily calorie goal", placeholder: "kcal", text: $calorieGoal)
-                        }
+                        if goals.isEmpty {
+                            NutritionGoalsEditor(goals: $goals)
+                        } else {
+                            NutritionGoalsSummary(goals: goals)
 
-                        NutritionGoalSection(title: "Macronutrients") {
-                            NutritionGoalField(title: "Protein", placeholder: "grams", text: $proteinGoal)
-                            NutritionGoalField(title: "Carbs", placeholder: "grams", text: $carbsGoal)
-                            NutritionGoalField(title: "Fats", placeholder: "grams", text: $fatGoal)
-                        }
-
-                        NutritionGoalSection(title: "Micronutrient Supplementation") {
-                            NutritionGoalField(title: "Calcium", placeholder: "mg", text: $calciumGoal)
-                            NutritionGoalField(title: "Vitamin D", placeholder: "IU", text: $vitaminDGoal)
-                            NutritionGoalField(title: "Iron", placeholder: "mg", text: $ironGoal)
-
-                            TextField("Other supplements or vitamins", text: $otherSupplements, axis: .vertical)
-                                .textInputAutocapitalization(.never)
-                                .lineLimit(2...4)
-                                .padding(12)
-                                .background(AppTheme.fieldBackground)
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        }
-
-                        NutritionGoalSection(title: "Water Hydration") {
-                            NutritionGoalField(title: "Daily water goal", placeholder: "cups or oz", text: $waterGoal)
-                        }
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Notes")
-                                .font(.subheadline.weight(.bold))
-                                .foregroundStyle(AppTheme.text)
-
-                            TextField("Diet restrictions, feeding notes, texture needs, or parent reminders", text: $notes, axis: .vertical)
-                                .textInputAutocapitalization(.never)
-                                .lineLimit(3...6)
-                                .padding(12)
-                                .background(AppTheme.fieldBackground)
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            DisclosureGroup(isExpanded: $isGoalsExpanded) {
+                                NutritionGoalsEditor(goals: $goals)
+                                    .padding(.top, 12)
+                            } label: {
+                                Text("View Nutrition Goals")
+                                    .font(.headline.weight(.bold))
+                                    .foregroundStyle(AppTheme.accent)
+                            }
+                            .tint(AppTheme.accent)
                         }
                     }
                     .authPanel()
@@ -3862,10 +4905,22 @@ struct NutritionSnapshotSheet: View {
             }
         }
         .presentationDetents([.large])
+        .onAppear {
+            goals = storedGoals
+            let previousDateKey = goals.consumedDateKey
+            goals.resetDailyProgressIfNeeded()
+            if previousDateKey != goals.consumedDateKey {
+                saveGoals(goals)
+            }
+            isGoalsExpanded = goals.isEmpty
+        }
     }
 
     private func save() {
-        let summaryLines = nutritionSummaryLines()
+        goals.lastUpdated = Date()
+        saveGoals(goals)
+
+        let summaryLines = goals.summaryLines
         let entry = HealthLogEntry(
             id: UUID(),
             type: .snapshot,
@@ -3874,35 +4929,144 @@ struct NutritionSnapshotSheet: View {
             timestamp: Date(),
             severity: 1,
             value: summaryLines.isEmpty ? "Nutrition goals saved" : summaryLines.joined(separator: "\n"),
-            comments: notes.trimmingCharacters(in: .whitespacesAndNewlines)
+            comments: goals.notes.trimmingCharacters(in: .whitespacesAndNewlines)
         )
         onSave(entry)
         dismiss()
     }
 
-    private func nutritionSummaryLines() -> [String] {
-        var lines: [String] = []
-        appendLine("Calories", calorieGoal, "kcal", to: &lines)
-        appendLine("Protein", proteinGoal, "g", to: &lines)
-        appendLine("Carbs", carbsGoal, "g", to: &lines)
-        appendLine("Fats", fatGoal, "g", to: &lines)
-        appendLine("Calcium", calciumGoal, "mg", to: &lines)
-        appendLine("Vitamin D", vitaminDGoal, "IU", to: &lines)
-        appendLine("Iron", ironGoal, "mg", to: &lines)
-        appendLine("Water", waterGoal, "", to: &lines)
-
-        let trimmedSupplements = otherSupplements.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedSupplements.isEmpty {
-            lines.append("Other supplements: \(trimmedSupplements)")
+    private var storedGoals: NutritionGoals {
+        guard !goalsData.isEmpty,
+              let savedGoals = try? JSONDecoder().decode(NutritionGoals.self, from: goalsData) else {
+            return NutritionGoals()
         }
 
-        return lines
+        return savedGoals
     }
 
-    private func appendLine(_ label: String, _ value: String, _ unit: String, to lines: inout [String]) {
-        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedValue.isEmpty else { return }
-        lines.append(unit.isEmpty ? "\(label): \(trimmedValue)" : "\(label): \(trimmedValue) \(unit)")
+    private func saveGoals(_ goals: NutritionGoals) {
+        if let data = try? JSONEncoder().encode(goals) {
+            goalsData = data
+        }
+    }
+}
+
+struct NutritionGoalsSummary: View {
+    let goals: NutritionGoals
+
+    private var rows: [String] {
+        goals.summaryLines.isEmpty ? [localizedAppString("Nutrition goals saved")] : Array(goals.summaryLines.prefix(4))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Nutrition Goals")
+                .font(.headline.weight(.bold))
+                .foregroundStyle(AppTheme.text)
+
+            ForEach(rows, id: \.self) { row in
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(AppTheme.accent)
+
+                    Text(localizedSavedAIText(row))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(12)
+        .background(AppTheme.fieldBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+struct NutritionGoalsEditor: View {
+    @Binding var goals: NutritionGoals
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            NutritionGoalSection(title: "Calories") {
+                NutritionGoalField(title: "Daily calorie goal", placeholder: "kcal", text: $goals.calorieGoal)
+            }
+
+            NutritionGoalSection(title: "Macronutrients") {
+                NutritionGoalField(title: "Protein", placeholder: "grams", text: $goals.proteinGoal)
+                NutritionGoalField(title: "Carbs", placeholder: "grams", text: $goals.carbsGoal)
+                NutritionGoalField(title: "Fats", placeholder: "grams", text: $goals.fatGoal)
+            }
+
+            NutritionGoalSection(title: "Micronutrient Supplementation") {
+                NutritionGoalField(title: "Calcium", placeholder: "mg", text: $goals.calciumGoal)
+                NutritionGoalField(title: "Vitamin D", placeholder: "IU", text: $goals.vitaminDGoal)
+                NutritionGoalField(title: "Iron", placeholder: "mg", text: $goals.ironGoal)
+
+                TextField("Other supplements or vitamins", text: $goals.otherSupplements, axis: .vertical)
+                    .textInputAutocapitalization(.never)
+                    .lineLimit(2...4)
+                    .padding(12)
+                    .background(AppTheme.fieldBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+
+            NutritionGoalSection(title: "Water Hydration") {
+                NutritionGoalField(title: "Daily water goal", placeholder: "cups or oz", text: $goals.waterGoal)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Notes")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(AppTheme.text)
+
+                TextField("Diet restrictions, feeding notes, texture needs, or parent reminders", text: $goals.notes, axis: .vertical)
+                    .textInputAutocapitalization(.never)
+                    .lineLimit(3...6)
+                    .padding(12)
+                    .background(AppTheme.fieldBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+        }
+    }
+}
+
+struct NutritionGoalsPage: View {
+    @Environment(\.dismiss) private var dismiss
+
+    @Binding var goals: NutritionGoals
+    let onSave: () -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                PageHeader(
+                    icon: "leaf.fill",
+                    title: "Nutrition Goals",
+                    subtitle: "Calories, macros, supplements, and hydration"
+                )
+
+                NutritionGoalsSummary(goals: goals)
+
+                NutritionGoalsEditor(goals: $goals)
+                    .padding(16)
+                    .background(AppTheme.panel)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+            .padding(20)
+        }
+        .background(AppTheme.background.ignoresSafeArea())
+        .navigationTitle("Nutrition Goals")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Save") {
+                    onSave()
+                    dismiss()
+                }
+                .font(.headline.weight(.bold))
+                .foregroundStyle(AppTheme.accent)
+            }
+        }
     }
 }
 
@@ -7199,191 +8363,503 @@ struct SleepTrackerHistoryView: View {
     let option: SnapshotOption
     let entries: [HealthLogEntry]
 
-    private let timelineWidth: CGFloat = 760
-    private let dateColumnWidth: CGFloat = 58
-    private let rowHeight: CGFloat = 42
-    private let timelineStartMinutes = 18 * 60
-    private let timelineEndMinutes = 33 * 60
+    @State private var selectedPeriod: SleepHistoryPeriod = .week
+    @State private var selectedSleepRecordID: UUID?
 
     private var sleepRecords: [SleepTrackerRecord] {
         entries
             .compactMap(SleepTrackerRecord.init(entry:))
-            .sorted { $0.date > $1.date }
+            .sorted { $0.date < $1.date }
     }
 
-    private var hourMarks: [Int] {
-        Array(18...33)
+    private var anchorDate: Date {
+        Date()
     }
 
-    private var chartContentWidth: CGFloat {
-        dateColumnWidth + timelineWidth + 28
+    private var periodRecords: [SleepTrackerRecord] {
+        sleepRecords.filter { selectedPeriod.contains($0.date, relativeTo: anchorDate) }
     }
 
-    private var chartContentHeight: CGFloat {
-        34 + 6 + CGFloat(sleepRecords.count) * rowHeight + 28
+    private var averageMinutes: Int {
+        guard !periodRecords.isEmpty else { return 0 }
+        return periodRecords.reduce(0) { $0 + $1.durationMinutes } / periodRecords.count
+    }
+
+    private var selectedSleepRecord: SleepTrackerRecord? {
+        guard let selectedSleepRecordID else { return nil }
+        return periodRecords.first { $0.id == selectedSleepRecordID }
+    }
+
+    private var dateRangeText: String {
+        selectedPeriod.rangeText(relativeTo: anchorDate)
+    }
+
+    private var headerLabel: String {
+        guard let selectedSleepRecord else {
+            return "AVG. TIME IN BED"
+        }
+
+        let wakeText = selectedSleepRecord.wakingCount == 1 ? "1 wake-up" : "\(selectedSleepRecord.wakingCount) wake-ups"
+        return "\(selectedSleepRecord.qualityTitle.uppercased()) · \(wakeText)"
+    }
+
+    private var headerValue: String {
+        if let selectedSleepRecord {
+            return selectedSleepRecord.durationText
+        }
+
+        return SleepTrackerRecord.durationText(minutes: averageMinutes)
+    }
+
+    private var headerDateText: String {
+        if let selectedSleepRecord {
+            return selectedSleepRecord.date.formatted(.dateTime.month(.abbreviated).day().year())
+        }
+
+        return dateRangeText
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                if sleepRecords.isEmpty {
-                    Text("No Sleep & Rest entries yet.")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .authPanel()
-                } else {
-                    ScrollView([.horizontal, .vertical], showsIndicators: true) {
-                        ZStack {
-                            timelineChart
-                                .frame(width: chartContentWidth, height: chartContentHeight, alignment: .topLeading)
-                                .rotationEffect(.degrees(-90))
-                                .position(x: chartContentHeight / 2, y: chartContentWidth / 2)
-                        }
-                        .frame(width: chartContentHeight, height: chartContentWidth)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(height: min(chartContentWidth, 640))
+        ZStack {
+            AppTheme.background
+                .ignoresSafeArea()
+                .onTapGesture {
+                    clearSleepSelection()
                 }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if sleepRecords.isEmpty {
+                        Text("No Sleep & Rest entries yet.")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .authPanel()
+                    } else {
+                        VStack(alignment: .leading, spacing: 16) {
+                            Picker("Sleep range", selection: $selectedPeriod) {
+                                ForEach(SleepHistoryPeriod.allCases) { period in
+                                    Text(period.shortTitle).tag(period)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .tint(option.tint)
+
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 6) {
+                                    Circle()
+                                        .fill(option.tint)
+                                        .frame(width: 8, height: 8)
+
+                                    Text(headerLabel)
+                                        .font(.caption.weight(.black))
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                Text(headerValue)
+                                    .font(.system(size: 34, weight: .black, design: .rounded))
+                                    .foregroundStyle(AppTheme.text)
+
+                                Text(headerDateText)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            if periodRecords.isEmpty {
+                                Text("No Sleep & Rest entries for this period.")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding()
+                                    .background(AppTheme.fieldBackground)
+                                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            } else {
+                                SleepVerticalBarChart(
+                                    records: periodRecords,
+                                    period: selectedPeriod,
+                                    anchorDate: anchorDate,
+                                    selectedRecordID: selectedSleepRecordID,
+                                    tint: option.tint
+                                ) { item in
+                                    DispatchQueue.main.async {
+                                        selectedSleepRecordID = item.recordID
+                                    }
+                                } onClearSelection: {
+                                    clearSleepSelection()
+                                }
+                                .frame(height: 330)
+                            }
+                        }
+                        .authPanel()
+                    }
+                }
+                .padding(18)
             }
-            .padding(18)
+            .simultaneousGesture(
+                TapGesture().onEnded {
+                    clearSleepSelection()
+                }
+            )
         }
-        .background(AppTheme.background.ignoresSafeArea())
         .navigationTitle("Sleep & Rest")
         .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private var timelineChart: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            timelineHeader
-
-            ForEach(sleepRecords) { record in
-                SleepTrackerTimelineRow(
-                    record: record,
-                    tint: option.tint,
-                    dateColumnWidth: dateColumnWidth,
-                    timelineWidth: timelineWidth,
-                    rowHeight: rowHeight,
-                    startMinutes: timelineStartMinutes,
-                    endMinutes: timelineEndMinutes
-                )
-            }
+        .onChange(of: selectedPeriod) { _, _ in
+            clearSleepSelection()
         }
-        .padding(14)
-        .background(AppTheme.panel)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .shadow(color: Color.black.opacity(0.08), radius: 14, x: 0, y: 8)
     }
 
-    private var timelineHeader: some View {
-        HStack(alignment: .bottom, spacing: 0) {
-            Text("Date")
-                .font(.caption.weight(.black))
-                .foregroundStyle(.secondary)
-                .frame(width: dateColumnWidth, alignment: .leading)
+    private func clearSleepSelection() {
+        selectedSleepRecordID = nil
+    }
+}
 
-            ZStack(alignment: .bottomLeading) {
-                ForEach(hourMarks, id: \.self) { hour in
-                    let x = xPosition(for: hour * 60)
+enum SleepHistoryPeriod: String, CaseIterable, Identifiable {
+    case day
+    case week
+    case month
+    case sixMonths
 
-                    VStack(spacing: 4) {
-                        Text(hourLabel(hour))
-                            .font(.caption2.weight(.black))
-                            .foregroundStyle(AppTheme.text)
+    var id: String { rawValue }
+
+    var shortTitle: String {
+        switch self {
+        case .day:
+            return "D"
+        case .week:
+            return "W"
+        case .month:
+            return "M"
+        case .sixMonths:
+            return "6M"
+        }
+    }
+
+    func contains(_ date: Date, relativeTo anchorDate: Date) -> Bool {
+        let calendar = Calendar.current
+        let anchorEndOfDay = calendar.date(byAdding: DateComponents(day: 1, second: -1), to: calendar.startOfDay(for: anchorDate)) ?? anchorDate
+        switch self {
+        case .day:
+            return calendar.isDate(date, inSameDayAs: anchorDate)
+        case .week:
+            guard let startDate = calendar.date(byAdding: .day, value: -6, to: calendar.startOfDay(for: anchorDate)) else {
+                return false
+            }
+            return date >= startDate && date <= anchorEndOfDay
+        case .month:
+            guard let startDate = calendar.date(byAdding: .day, value: -29, to: calendar.startOfDay(for: anchorDate)) else {
+                return false
+            }
+            return date >= startDate && date <= anchorEndOfDay
+        case .sixMonths:
+            guard let startDate = calendar.date(byAdding: .month, value: -5, to: calendar.startOfDay(for: anchorDate)) else {
+                return false
+            }
+            return date >= startDate && date <= anchorEndOfDay
+        }
+    }
+
+    func rangeText(relativeTo anchorDate: Date) -> String {
+        let calendar = Calendar.current
+        let startDate: Date
+        switch self {
+        case .day:
+            startDate = anchorDate
+        case .week:
+            startDate = calendar.date(byAdding: .day, value: -6, to: anchorDate) ?? anchorDate
+        case .month:
+            startDate = calendar.date(byAdding: .day, value: -29, to: anchorDate) ?? anchorDate
+        case .sixMonths:
+            startDate = calendar.date(byAdding: .month, value: -5, to: anchorDate) ?? anchorDate
+        }
+
+        if calendar.isDate(startDate, inSameDayAs: anchorDate) {
+            return anchorDate.formatted(.dateTime.month(.abbreviated).day().year())
+        }
+
+        return "\(startDate.formatted(.dateTime.month(.abbreviated).day()))–\(anchorDate.formatted(.dateTime.month(.abbreviated).day().year()))"
+    }
+}
+
+struct SleepVerticalBarChart: View {
+    let records: [SleepTrackerRecord]
+    let period: SleepHistoryPeriod
+    let anchorDate: Date
+    let selectedRecordID: UUID?
+    let tint: Color
+    let onSelect: (SleepChartItem) -> Void
+    let onClearSelection: () -> Void
+
+    private let axisWidth: CGFloat = 48
+    private let labelHeight: CGFloat = 28
+
+    private var chartItems: [SleepChartItem] {
+        SleepChartItem.items(from: records, period: period, anchorDate: anchorDate)
+    }
+
+    private var domainStart: Int {
+        let earliest = chartItems.map(\.startMinutes).min() ?? (22 * 60)
+        return min(22 * 60, (earliest / 60) * 60)
+    }
+
+    private var domainEnd: Int {
+        let latest = chartItems.map(\.endMinutes).max() ?? (32 * 60)
+        return max(32 * 60, ((latest + 59) / 60) * 60)
+    }
+
+    private var axisMarks: [Int] {
+        Array(stride(from: domainStart, through: domainEnd, by: 120))
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let chartWidth = max(1, proxy.size.width - axisWidth)
+            let chartHeight = max(1, proxy.size.height - labelHeight)
+
+            HStack(alignment: .top, spacing: 8) {
+                ZStack(alignment: .topLeading) {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            onClearSelection()
+                        }
+
+                    ForEach(axisMarks, id: \.self) { minute in
+                        let y = yPosition(for: minute, height: chartHeight)
 
                         Rectangle()
-                            .fill(Color.secondary.opacity(0.25))
-                            .frame(width: 1, height: 10)
+                            .fill(Color.secondary.opacity(0.10))
+                            .frame(width: chartWidth, height: 1)
+                            .offset(y: y)
                     }
-                    .position(x: x, y: 16)
+
+                    HStack(alignment: .top, spacing: barSpacing(for: chartItems.count)) {
+                        ForEach(chartItems) { item in
+                            SleepVerticalBar(
+                                item: item,
+                                isSelected: item.recordID == selectedRecordID,
+                                tint: tint,
+                                domainStart: domainStart,
+                                domainEnd: domainEnd,
+                                chartHeight: chartHeight,
+                                onSelect: onSelect
+                            )
+                        }
+                    }
+                    .frame(width: chartWidth, height: chartHeight, alignment: .top)
                 }
+                .frame(width: chartWidth, height: chartHeight, alignment: .topLeading)
 
-                Rectangle()
-                    .fill(Color.secondary.opacity(0.22))
-                    .frame(width: timelineWidth, height: 1)
-                    .offset(y: 31)
+                ZStack(alignment: .topLeading) {
+                    ForEach(axisMarks, id: \.self) { minute in
+                        Text(Self.hourLabel(minute))
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.secondary)
+                            .offset(y: yPosition(for: minute, height: chartHeight) - 7)
+                    }
+                }
+                .frame(width: axisWidth, height: chartHeight, alignment: .topLeading)
             }
-            .frame(width: timelineWidth, height: 34, alignment: .leading)
+            .overlay(alignment: .bottomLeading) {
+                HStack(alignment: .top, spacing: barSpacing(for: chartItems.count)) {
+                    ForEach(chartItems) { item in
+                        Text(item.label)
+                            .font(.caption2.weight(.black))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.55)
+                        .frame(maxWidth: .infinity)
+                    }
+                }
+                .frame(width: chartWidth)
+                .offset(y: labelHeight - 2)
+            }
         }
-        .padding(.bottom, 6)
+        .padding(12)
+        .background(AppTheme.fieldBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
-    private func xPosition(for minutes: Int) -> CGFloat {
-        let clamped = min(max(minutes, timelineStartMinutes), timelineEndMinutes)
-        let percentage = CGFloat(clamped - timelineStartMinutes) / CGFloat(timelineEndMinutes - timelineStartMinutes)
-        return timelineWidth * percentage
+    private func yPosition(for minutes: Int, height: CGFloat) -> CGFloat {
+        let clamped = min(max(minutes, domainStart), domainEnd)
+        let percentage = CGFloat(clamped - domainStart) / CGFloat(max(1, domainEnd - domainStart))
+        return height * percentage
     }
 
-    private func hourLabel(_ hour: Int) -> String {
-        let normalized = hour % 24
-        switch normalized {
+    private func barSpacing(for count: Int) -> CGFloat {
+        count > 16 ? 4 : 10
+    }
+
+    static func hourLabel(_ minutes: Int) -> String {
+        let hour = ((minutes / 60) % 24 + 24) % 24
+        switch hour {
         case 0:
-            return "12a"
+            return "12 AM"
         case 1...11:
-            return "\(normalized)a"
+            return "\(hour) AM"
         case 12:
-            return "12p"
+            return "12 PM"
         default:
-            return "\(normalized - 12)p"
+            return "\(hour - 12) PM"
         }
     }
 }
 
-struct SleepTrackerTimelineRow: View {
-    let record: SleepTrackerRecord
+struct SleepVerticalBar: View {
+    let item: SleepChartItem
+    let isSelected: Bool
     let tint: Color
-    let dateColumnWidth: CGFloat
-    let timelineWidth: CGFloat
-    let rowHeight: CGFloat
-    let startMinutes: Int
-    let endMinutes: Int
+    let domainStart: Int
+    let domainEnd: Int
+    let chartHeight: CGFloat
+    let onSelect: (SleepChartItem) -> Void
 
-    private var barStartX: CGFloat {
-        xPosition(for: record.startMinutes)
+    private var topY: CGFloat {
+        yPosition(for: item.startMinutes)
     }
 
-    private var barEndX: CGFloat {
-        xPosition(for: record.endMinutes)
+    private var bottomY: CGFloat {
+        yPosition(for: item.endMinutes)
     }
 
-    private var barWidth: CGFloat {
-        max(10, barEndX - barStartX)
+    private var barHeight: CGFloat {
+        max(8, bottomY - topY)
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            Text(record.dateLabel)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(AppTheme.text)
-                .frame(width: dateColumnWidth, alignment: .leading)
-
-            ZStack(alignment: .leading) {
-                ForEach(Array(stride(from: startMinutes, through: endMinutes, by: 60)), id: \.self) { minute in
-                    Rectangle()
-                        .fill(Color.secondary.opacity(0.09))
-                        .frame(width: 1, height: rowHeight)
-                        .offset(x: xPosition(for: minute))
+        Button {
+            guard item.durationMinutes > 0 else { return }
+            onSelect(item)
+        } label: {
+            ZStack(alignment: .top) {
+                if item.durationMinutes > 0 {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(tint.opacity(isSelected ? 1 : 0.90))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: barHeight)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .stroke(isSelected ? AppTheme.text.opacity(0.25) : Color.clear, lineWidth: 2)
+                        }
+                        .offset(y: topY)
                 }
-
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(tint.opacity(0.30))
-                    .frame(width: barWidth, height: 22)
-                    .overlay(alignment: .center) {
-                        Text(record.durationText)
-                            .font(.caption.weight(.black))
-                            .foregroundStyle(AppTheme.text)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.75)
-                    }
-                    .offset(x: barStartX)
             }
-            .frame(width: timelineWidth, height: rowHeight, alignment: .leading)
+            .frame(maxWidth: .infinity)
+            .frame(height: chartHeight, alignment: .top)
+        }
+        .buttonStyle(.plain)
+        .disabled(item.durationMinutes == 0)
+    }
+
+    private func yPosition(for minutes: Int) -> CGFloat {
+        let clamped = min(max(minutes, domainStart), domainEnd)
+        let percentage = CGFloat(clamped - domainStart) / CGFloat(max(1, domainEnd - domainStart))
+        return chartHeight * percentage
+    }
+}
+
+struct SleepChartItem: Identifiable {
+    let id: String
+    let recordID: UUID?
+    let date: Date
+    let startMinutes: Int
+    let endMinutes: Int
+    let durationMinutes: Int
+    let label: String
+
+    static func items(from records: [SleepTrackerRecord], period: SleepHistoryPeriod, anchorDate: Date) -> [SleepChartItem] {
+        if period == .week {
+            return weeklyItems(from: records, anchorDate: anchorDate)
+        }
+
+        if period == .sixMonths {
+            return monthlyItems(from: records)
+        }
+
+        return records.enumerated().map { index, record in
+            SleepChartItem(
+                id: record.id.uuidString,
+                recordID: record.id,
+                date: record.date,
+                startMinutes: record.startMinutes,
+                endMinutes: record.endMinutes,
+                durationMinutes: record.durationMinutes,
+                label: label(for: record, index: index, total: records.count, period: period)
+            )
         }
     }
 
-    private func xPosition(for minutes: Int) -> CGFloat {
-        let clamped = min(max(minutes, startMinutes), endMinutes)
-        let percentage = CGFloat(clamped - startMinutes) / CGFloat(endMinutes - startMinutes)
-        return timelineWidth * percentage
+    private static func weeklyItems(from records: [SleepTrackerRecord], anchorDate: Date) -> [SleepChartItem] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: anchorDate)
+
+        return (0..<7).compactMap { offset in
+            guard let date = calendar.date(byAdding: .day, value: offset - 6, to: today) else {
+                return nil
+            }
+
+            if let record = records
+                .filter({ calendar.isDate($0.date, inSameDayAs: date) })
+                .sorted(by: { $0.date > $1.date })
+                .first {
+                return SleepChartItem(
+                    id: record.id.uuidString,
+                    recordID: record.id,
+                    date: record.date,
+                    startMinutes: record.startMinutes,
+                    endMinutes: record.endMinutes,
+                    durationMinutes: record.durationMinutes,
+                    label: date.formatted(.dateTime.weekday(.abbreviated))
+                )
+            }
+
+            return SleepChartItem(
+                id: "empty-\(date.timeIntervalSince1970)",
+                recordID: nil,
+                date: date,
+                startMinutes: 22 * 60,
+                endMinutes: 22 * 60,
+                durationMinutes: 0,
+                label: date.formatted(.dateTime.weekday(.abbreviated))
+            )
+        }
+    }
+
+    private static func label(for record: SleepTrackerRecord, index: Int, total: Int, period: SleepHistoryPeriod) -> String {
+        switch period {
+        case .day, .week:
+            return record.date.formatted(.dateTime.weekday(.abbreviated))
+        case .month:
+            guard total <= 10 || index == total / 2 else { return "" }
+            return record.date.formatted(.dateTime.month(.abbreviated))
+        case .sixMonths:
+            return record.date.formatted(.dateTime.month(.abbreviated))
+        }
+    }
+
+    private static func monthlyItems(from records: [SleepTrackerRecord]) -> [SleepChartItem] {
+        let calendar = Calendar.current
+        let groups = Dictionary(grouping: records) { record in
+            let components = calendar.dateComponents([.year, .month], from: record.date)
+            return "\(components.year ?? 0)-\(components.month ?? 0)"
+        }
+
+        return groups.compactMap { key, values in
+            guard let first = values.sorted(by: { $0.date < $1.date }).first else { return nil }
+            let count = max(1, values.count)
+            let start = values.reduce(0) { $0 + $1.startMinutes } / count
+            let end = values.reduce(0) { $0 + $1.endMinutes } / count
+            let duration = values.reduce(0) { $0 + $1.durationMinutes } / count
+
+            return SleepChartItem(
+                id: key,
+                recordID: nil,
+                date: first.date,
+                startMinutes: start,
+                endMinutes: max(end, start + 8),
+                durationMinutes: duration,
+                label: first.date.formatted(.dateTime.month(.abbreviated))
+            )
+        }
+        .sorted { $0.date < $1.date }
     }
 }
 
@@ -7393,6 +8869,9 @@ struct SleepTrackerRecord: Identifiable {
     let startMinutes: Int
     let endMinutes: Int
     let durationText: String
+    let durationMinutes: Int
+    let qualityTitle: String
+    let wakingCount: Int
 
     var dateLabel: String {
         date.formatted(.dateTime.month(.abbreviated).day())
@@ -7404,6 +8883,8 @@ struct SleepTrackerRecord: Identifiable {
         self.id = entry.id
         self.date = entry.timestamp
         self.durationText = Self.durationText(from: entry.value)
+        self.qualityTitle = Self.qualityTitle(from: entry.value)
+        self.wakingCount = Self.wakingCount(from: entry.value)
 
         let lines = entry.comments
             .components(separatedBy: .newlines)
@@ -7423,6 +8904,7 @@ struct SleepTrackerRecord: Identifiable {
             ? normalizedWakeMinutes + 24 * 60
             : normalizedWakeMinutes
         self.endMinutes = wakeMinutes
+        self.durationMinutes = max(0, wakeMinutes - self.startMinutes)
     }
 
     private static func timelineMinutes(_ minutes: Int) -> Int {
@@ -7434,6 +8916,38 @@ struct SleepTrackerRecord: Identifiable {
             .components(separatedBy: "·")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty } ?? "Sleep"
+    }
+
+    private static func qualityTitle(from value: String) -> String {
+        let parts = value
+            .components(separatedBy: "·")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        return parts.dropFirst().first ?? "Sleep"
+    }
+
+    private static func wakingCount(from value: String) -> Int {
+        value
+            .components(separatedBy: "·")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { $0.localizedCaseInsensitiveContains("wake") }
+            .flatMap { Int($0.filter(\.isNumber)) } ?? 0
+    }
+
+    static func durationText(minutes: Int) -> String {
+        let hours = minutes / 60
+        let remainingMinutes = minutes % 60
+
+        if hours == 0 {
+            return "\(remainingMinutes) min"
+        }
+
+        if remainingMinutes == 0 {
+            return "\(hours) hr"
+        }
+
+        return "\(hours) hr \(remainingMinutes) min"
     }
 
     private static func minutesFromLine(_ line: String, prefix: String) -> Int? {
@@ -8611,14 +10125,13 @@ struct TherapyMilestoneSheet: View {
 struct NutrientView: View {
     let user: CarePortalUser
 
-    private static let photoDailyLimit = 3
-
     @AppStorage(AppLanguage.storageKey) private var languageCode = AppLanguage.english.rawValue
     @AppStorage private var mealPhotoData: Data
     @AppStorage private var mealEstimateData: Data
     @AppStorage private var savedMealHistoryData: Data
     @AppStorage private var dailyUsageData: Data
     @AppStorage private var dailyEstimateLimit: Int
+    @AppStorage private var nutritionGoalsData: Data
     @State private var selectedMealPhoto: PhotosPickerItem?
     @State private var isMealPhotoSourcePresented = false
     @State private var isCameraPickerPresented = false
@@ -8627,6 +10140,7 @@ struct NutrientView: View {
     @State private var saveMessage = ""
     @State private var hasSavedCurrentMeal = false
     @State private var activeMealPDF: MealPDFShareItem?
+    @State private var nutritionGoals = NutritionGoals()
 
     init(user: CarePortalUser) {
         self.user = user
@@ -8635,6 +10149,7 @@ struct NutrientView: View {
         self._savedMealHistoryData = AppStorage(wrappedValue: Data(), "nutrient.\(user.id).savedMealHistoryData")
         self._dailyUsageData = AppStorage(wrappedValue: Data(), "nutrient.\(user.id).dailyUsageData")
         self._dailyEstimateLimit = AppStorage(wrappedValue: 3, "nutrient.\(user.id).dailyEstimateLimit")
+        self._nutritionGoalsData = AppStorage(wrappedValue: Data(), "nutrient.\(user.id).nutritionGoalsData")
     }
 
     var body: some View {
@@ -8667,6 +10182,28 @@ struct NutrientView: View {
                             estimateCount: dailyUsage.estimateCount,
                             limit: dailyEstimateLimit
                         )
+
+                        NavigationLink {
+                            NutritionGoalsPage(goals: $nutritionGoals) {
+                                saveNutritionGoals()
+                            }
+                        } label: {
+                            HStack(spacing: 12) {
+                                Text(nutritionGoals.isEmpty ? "Set Nutrition Goals" : "View Nutrition Goals")
+                                    .font(.headline.weight(.bold))
+                                    .foregroundStyle(AppTheme.accent)
+
+                                Spacer()
+
+                                Image(systemName: "chevron.right")
+                                    .font(.headline.weight(.bold))
+                                    .foregroundStyle(AppTheme.text.opacity(0.75))
+                            }
+                            .padding(16)
+                            .background(AppTheme.panel)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
 
                         Button {
                             openMealPhotoSource()
@@ -8756,6 +10293,7 @@ struct NutrientView: View {
             .navigationTitle("Nutrient")
             .onAppear {
                 resetCurrentMealForNextImage()
+                loadStoredNutritionGoals()
                 syncSavedMealHistoryIfNeeded()
                 syncNutrientDailyUsage(dailyUsage)
             }
@@ -8830,7 +10368,7 @@ struct NutrientView: View {
     }
 
     private var canUploadMealPhoto: Bool {
-        dailyUsage.uploadCount < Self.photoDailyLimit
+        canEstimateMeal
     }
 
     private var canEstimateMeal: Bool {
@@ -8839,7 +10377,10 @@ struct NutrientView: View {
 
     private func openMealPhotoSource() {
         guard canUploadMealPhoto else {
-            saveMessage = localizedAppString("Daily nutrient photo limit reached.")
+            saveMessage = String(
+                format: localizedAppString("Daily nutrient estimate limit reached with limit %@."),
+                "\(dailyEstimateLimit)"
+            )
             return
         }
 
@@ -8862,7 +10403,10 @@ struct NutrientView: View {
 
     private func openMealCamera() {
         guard canUploadMealPhoto else {
-            saveMessage = localizedAppString("Daily nutrient photo limit reached.")
+            saveMessage = String(
+                format: localizedAppString("Daily nutrient estimate limit reached with limit %@."),
+                "\(dailyEstimateLimit)"
+            )
             return
         }
 
@@ -8874,11 +10418,13 @@ struct NutrientView: View {
     private func applyMealPhotoData(_ data: Data) {
         guard canUploadMealPhoto else {
             selectedMealPhoto = nil
-            saveMessage = localizedAppString("Daily nutrient photo limit reached.")
+            saveMessage = String(
+                format: localizedAppString("Daily nutrient estimate limit reached with limit %@."),
+                "\(dailyEstimateLimit)"
+            )
             return
         }
 
-        incrementDailyUsage(upload: 1)
         mealPhotoData = data
         mealEstimateData = Data()
         selectedMealPhoto = nil
@@ -8913,6 +10459,7 @@ struct NutrientView: View {
                     if let data = try? JSONEncoder().encode(estimate) {
                         mealEstimateData = data
                     }
+                    applyMealEstimateToNutritionGoals(estimate)
                     isEstimating = false
                 }
             } catch {
@@ -8926,7 +10473,7 @@ struct NutrientView: View {
 
     private func incrementDailyUsage(upload: Int = 0, estimate: Int = 0) {
         var usage = dailyUsage
-        usage.uploadCount = min(Self.photoDailyLimit, usage.uploadCount + upload)
+        usage.uploadCount += upload
         usage.estimateCount += estimate
 
         if let data = try? JSONEncoder().encode(usage) {
@@ -9031,6 +10578,42 @@ struct NutrientView: View {
                 print("Saved nutrient meals sync failed for user \(user.id): \(error.localizedDescription)")
             }
         }
+    }
+
+    private var storedNutritionGoals: NutritionGoals {
+        guard !nutritionGoalsData.isEmpty,
+              let savedGoals = try? JSONDecoder().decode(NutritionGoals.self, from: nutritionGoalsData) else {
+            return NutritionGoals()
+        }
+
+        return savedGoals
+    }
+
+    private func loadStoredNutritionGoals() {
+        nutritionGoals = storedNutritionGoals
+        let previousDateKey = nutritionGoals.consumedDateKey
+        nutritionGoals.resetDailyProgressIfNeeded()
+        if previousDateKey != nutritionGoals.consumedDateKey {
+            saveNutritionGoals(showMessage: false)
+        }
+    }
+
+    private func saveNutritionGoals(showMessage: Bool = true) {
+        nutritionGoals.lastUpdated = Date()
+        if let data = try? JSONEncoder().encode(nutritionGoals) {
+            nutritionGoalsData = data
+            if showMessage {
+                saveMessage = localizedAppString("Nutrition goals saved")
+            }
+        }
+    }
+
+    private func applyMealEstimateToNutritionGoals(_ estimate: MealNutritionEstimate) {
+        nutritionGoals.applyMealEstimate(estimate)
+        if nutritionGoals.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            nutritionGoals.notes = localizedAppString("Auto-filled from latest AI meal estimate.")
+        }
+        saveNutritionGoals(showMessage: false)
     }
 
     private func savedMealImageData() -> Data {

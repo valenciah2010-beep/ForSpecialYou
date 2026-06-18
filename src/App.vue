@@ -1,6 +1,6 @@
 <script setup>
 import { Ban, ChevronLeft, ChevronRight, Flower, Palette, Pencil, Plus, ShieldCheck, Trash2 } from '@lucide/vue';
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
 
 const currentPath = ref(window.location.pathname);
 const loginForm = ref({ username: '', password: '' });
@@ -52,6 +52,13 @@ const isEditUserOpen = ref(false);
 const isDeleteUserOpen = ref(false);
 const isBlockUserOpen = ref(false);
 const isParentDetailOpen = ref(false);
+const isParentExportOpen = ref(false);
+const isParentExportPreviewOpen = ref(false);
+const isPrintingParentReport = ref(false);
+const isParentAIReportOpen = ref(false);
+const isParentAIReportPreviewOpen = ref(false);
+const isGeneratingParentAIReport = ref(false);
+const isPrintingParentAIReport = ref(false);
 const isCropperOpen = ref(false);
 const isCropDragging = ref(false);
 const isCreatingUser = ref(false);
@@ -70,7 +77,29 @@ const isLoadingParentDetail = ref(false);
 const parentHistoryDateFilter = ref('');
 const parentHistoryPageFilter = ref('health');
 const parentHistorySectionFilter = ref('all');
+const parentExportMessage = ref('');
+const parentExportFilters = ref({
+  startDate: '',
+  endDate: '',
+  includeHealth: true,
+  includeTherapy: true,
+  includeNutrient: true,
+  healthSections: []
+});
+const parentAIReportMessage = ref('');
+const parentAIReport = ref(null);
+const parentAIReportMeta = ref(null);
+const parentAIReportFilters = ref({
+  startDate: '',
+  endDate: '',
+  language: 'english',
+  includeHealth: true,
+  includeTherapy: true,
+  includeNutrient: true,
+  healthSections: []
+});
 const isSavingNutrientLimit = ref(false);
+const nutrientLimitDraft = ref('3');
 const nutrientLimitMessage = ref('');
 const isBusy = ref(false);
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || '';
@@ -201,7 +230,6 @@ const nutrientUsageSummary = computed(() => {
 
   return {
     used,
-    left: Math.max(0, limit - used),
     limit
   };
 });
@@ -211,6 +239,166 @@ const visibleParentHistorySections = computed(() => {
   }
 
   return activeParentHistorySections.value.filter((section) => section.key === parentHistorySectionFilter.value);
+});
+const availableParentExportHealthSections = computed(() => {
+  const sectionMap = new Map();
+  const logs = parentDetail.value?.healthLogs || [];
+
+  logs
+    .filter((log) => historyPageKey(log) === 'health')
+    .filter((log) => timestampInDateRange(log.timestamp, parentExportFilters.value.startDate, parentExportFilters.value.endDate))
+    .forEach((log) => {
+      const key = historySectionKey(log);
+      if (!sectionMap.has(key)) {
+        sectionMap.set(key, {
+          key,
+          title: historySectionTitle(log),
+          icon: historySectionIcon(key)
+        });
+      }
+    });
+
+  return Array.from(sectionMap.values()).sort((left, right) => left.title.localeCompare(right.title));
+});
+const availableParentAIReportHealthSections = computed(() => {
+  const sectionMap = new Map();
+  const logs = parentDetail.value?.healthLogs || [];
+
+  logs
+    .filter((log) => historyPageKey(log) === 'health')
+    .filter((log) => timestampInDateRange(log.timestamp, parentAIReportFilters.value.startDate, parentAIReportFilters.value.endDate))
+    .forEach((log) => {
+      const key = historySectionKey(log);
+      if (!sectionMap.has(key)) {
+        sectionMap.set(key, {
+          key,
+          title: historySectionTitle(log),
+          icon: historySectionIcon(key)
+        });
+      }
+    });
+
+  return Array.from(sectionMap.values()).sort((left, right) => left.title.localeCompare(right.title));
+});
+const parentExportHistorySections = computed(() => {
+  if (!parentDetail.value) return [];
+
+  const filters = parentExportFilters.value;
+  const healthSectionKeys = new Set(filters.healthSections || []);
+  const allHealthSectionsSelected = healthSectionKeys.size === 0;
+  const logs = (parentDetail.value.healthLogs || [])
+    .filter((log) => timestampInDateRange(log.timestamp, filters.startDate, filters.endDate))
+    .filter((log) => {
+      const pageKey = historyPageKey(log);
+      if (pageKey === 'therapy') return filters.includeTherapy;
+      if (!filters.includeHealth) return false;
+      return allHealthSectionsSelected || healthSectionKeys.has(historySectionKey(log));
+    });
+  const meals = filters.includeNutrient
+    ? (parentDetail.value.savedMeals || []).filter((meal) => timestampInDateRange(meal.savedAt, filters.startDate, filters.endDate))
+    : [];
+
+  return buildParentHistorySections(logs, meals);
+});
+const parentExportItemCount = computed(() => (
+  parentExportHistorySections.value.reduce((total, section) => total + historySectionCount(section), 0)
+));
+const parentExportDateRangeLabel = computed(() => {
+  const start = parentExportFilters.value.startDate;
+  const end = parentExportFilters.value.endDate;
+
+  if (start && end && start !== end) {
+    return `${formatDateInputLabel(start)} - ${formatDateInputLabel(end)}`;
+  }
+
+  return formatDateInputLabel(start || end || dateInputValue(new Date()));
+});
+const parentAIReportHistorySections = computed(() => {
+  if (!parentDetail.value) return [];
+
+  const filters = parentAIReportFilters.value;
+  const healthSectionKeys = new Set(filters.healthSections || []);
+  const allHealthSectionsSelected = healthSectionKeys.size === 0;
+  const logs = (parentDetail.value.healthLogs || [])
+    .filter((log) => timestampInDateRange(log.timestamp, filters.startDate, filters.endDate))
+    .filter((log) => {
+      const pageKey = historyPageKey(log);
+      if (pageKey === 'therapy') return filters.includeTherapy;
+      if (!filters.includeHealth) return false;
+      return allHealthSectionsSelected || healthSectionKeys.has(historySectionKey(log));
+    });
+  const meals = filters.includeNutrient
+    ? (parentDetail.value.savedMeals || []).filter((meal) => timestampInDateRange(meal.savedAt, filters.startDate, filters.endDate))
+    : [];
+
+  return buildParentHistorySections(logs, meals);
+});
+const parentAIReportItemCount = computed(() => (
+  parentAIReportHistorySections.value.reduce((total, section) => total + historySectionCount(section), 0)
+));
+const parentAIReportDateRangeLabel = computed(() => {
+  const start = parentAIReportFilters.value.startDate;
+  const end = parentAIReportFilters.value.endDate;
+
+  if (start && end && start !== end) {
+    return `${formatDateInputLabel(start)} - ${formatDateInputLabel(end)}`;
+  }
+
+  return formatDateInputLabel(start || end || dateInputValue(new Date()));
+});
+const parentAIReportLabels = computed(() => {
+  const language = String(parentAIReport.value?.language || parentAIReportFilters.value.language || '').toLowerCase();
+  const isChinese = language.includes('chinese') || language.includes('zh') || language.includes('中文');
+
+  return isChinese
+    ? {
+        reportEyebrow: 'Care Portal AI 报告',
+        parentAccount: '家长账号',
+        username: '用户名',
+        email: '邮箱',
+        lastAppSync: '最后同步',
+        reportDetails: '报告详情',
+        recordsAnalyzed: '分析记录数',
+        generated: '生成时间',
+        summary: '总结',
+        highlights: '重点发现',
+        patterns: '深入模式分析',
+        concerns: '需要关注',
+        recommendations: '建议',
+        dataQualityNotes: '数据质量说明',
+        followUpQuestions: '后续问题',
+        noHighlights: '没有返回明显重点发现。',
+        noPatterns: '没有返回明确模式。',
+        noConcerns: '没有返回具体关注点。',
+        noRecommendations: '没有返回建议。',
+        noDataQualityNotes: '没有返回数据质量说明。',
+        noFollowUpQuestions: '没有返回后续问题。',
+        disclaimer: 'AI 生成报告仅供管理员审核和整理信息使用，不是医疗建议、诊断或治疗。'
+      }
+    : {
+        reportEyebrow: 'Care Portal AI Report',
+        parentAccount: 'Parent Account',
+        username: 'Username',
+        email: 'Email',
+        lastAppSync: 'Last App Sync',
+        reportDetails: 'Report Details',
+        recordsAnalyzed: 'Records Analyzed',
+        generated: 'Generated',
+        summary: 'Summary',
+        highlights: 'Highlights',
+        patterns: 'In-Depth Pattern Analysis',
+        concerns: 'Concerns',
+        recommendations: 'Recommendations',
+        dataQualityNotes: 'Data Quality Notes',
+        followUpQuestions: 'Follow-Up Questions',
+        noHighlights: 'No major highlights returned.',
+        noPatterns: 'No clear patterns returned.',
+        noConcerns: 'No specific concerns returned.',
+        noRecommendations: 'No recommendations returned.',
+        noDataQualityNotes: 'No data quality notes returned.',
+        noFollowUpQuestions: 'No follow-up questions returned.',
+        disclaimer: 'AI-generated report for administrative review only. It is not medical advice, diagnosis, or treatment.'
+      };
 });
 let cropImageElement;
 let cropDragStart = {
@@ -370,6 +558,16 @@ function logDateInputValue(timestamp) {
   if (!date) return '';
 
   return dateInputValue(date);
+}
+
+function timestampInDateRange(timestamp, startDate, endDate) {
+  const dateValue = logDateInputValue(timestamp);
+  if (!dateValue) return false;
+
+  if (startDate && dateValue < startDate) return false;
+  if (endDate && dateValue > endDate) return false;
+
+  return true;
 }
 
 function dateInputValue(date) {
@@ -581,24 +779,36 @@ function summarizedMedicineRows(logs) {
     medicineRows(log).forEach((row) => {
       const key = `${row.name.toLowerCase()}|${row.time.toLowerCase()}`;
       const editTime = formatLogTime(log.timestamp);
+      const editTimestamp = logTimestampMs(log.timestamp);
 
       if (!rowsByMedication.has(key)) {
         rowsByMedication.set(key, {
           name: row.name,
           time: row.time,
           checked: row.checked,
+          latestTimestamp: editTimestamp,
           editTimes: []
         });
       }
 
       const savedRow = rowsByMedication.get(key);
-      if (!savedRow.editTimes.includes(editTime)) {
+      if (editTimestamp >= savedRow.latestTimestamp) {
+        savedRow.checked = row.checked;
+        savedRow.latestTimestamp = editTimestamp;
+      }
+
+      if (row.checked && !savedRow.editTimes.includes(editTime)) {
         savedRow.editTimes.push(editTime);
       }
     });
   });
 
-  return Array.from(rowsByMedication.values()).sort((left, right) => {
+  return Array.from(rowsByMedication.values())
+    .map((row) => ({
+      ...row,
+      editTimes: row.checked ? row.editTimes : []
+    }))
+    .sort((left, right) => {
     const doseOrder = {
       morning: 0,
       noon: 1,
@@ -678,11 +888,15 @@ let clockTimer;
 onMounted(() => {
   updateClock();
   clockTimer = window.setInterval(updateClock, 1000);
+  window.addEventListener('afterprint', finishParentReportPrint);
+  window.addEventListener('afterprint', finishParentAIReportPrint);
   loadAdminSession();
 });
 
 onUnmounted(() => {
   window.clearInterval(clockTimer);
+  window.removeEventListener('afterprint', finishParentReportPrint);
+  window.removeEventListener('afterprint', finishParentAIReportPrint);
 });
 
 async function submitLogin() {
@@ -873,6 +1087,215 @@ async function openParentDetail(user) {
   await loadParentDetail(user.id);
 }
 
+function resetParentExportFilters() {
+  const defaultDate = parentHistoryDateFilter.value || dateInputValue(new Date());
+  parentExportFilters.value = {
+    startDate: defaultDate,
+    endDate: defaultDate,
+    includeHealth: true,
+    includeTherapy: true,
+    includeNutrient: true,
+    healthSections: []
+  };
+}
+
+function openParentExportPanel() {
+  resetParentExportFilters();
+  parentExportMessage.value = '';
+  isParentExportOpen.value = true;
+}
+
+function closeParentExportPanel() {
+  isParentExportOpen.value = false;
+  parentExportMessage.value = '';
+}
+
+function closeParentExportPreview() {
+  isParentExportPreviewOpen.value = false;
+  parentExportMessage.value = '';
+}
+
+function resetParentAIReportFilters() {
+  const defaultDate = parentHistoryDateFilter.value || dateInputValue(new Date());
+  parentAIReportFilters.value = {
+    startDate: defaultDate,
+    endDate: defaultDate,
+    language: 'english',
+    includeHealth: true,
+    includeTherapy: true,
+    includeNutrient: true,
+    healthSections: []
+  };
+}
+
+function openParentAIReportPanel() {
+  resetParentAIReportFilters();
+  parentAIReportMessage.value = '';
+  parentAIReport.value = null;
+  parentAIReportMeta.value = null;
+  isParentAIReportOpen.value = true;
+}
+
+function closeParentAIReportPanel() {
+  isParentAIReportOpen.value = false;
+  parentAIReportMessage.value = '';
+}
+
+function closeParentAIReportPreview() {
+  isParentAIReportPreviewOpen.value = false;
+  parentAIReportMessage.value = '';
+}
+
+function backToParentAIReportOptions() {
+  isParentAIReportPreviewOpen.value = false;
+  isParentAIReportOpen.value = true;
+}
+
+function backToParentExportOptions() {
+  isParentExportPreviewOpen.value = false;
+  isParentExportOpen.value = true;
+}
+
+function selectAllParentExportHealthSections() {
+  parentExportFilters.value.healthSections = availableParentExportHealthSections.value.map((section) => section.key);
+}
+
+function clearParentExportHealthSections() {
+  parentExportFilters.value.healthSections = [];
+}
+
+function selectAllParentAIReportHealthSections() {
+  parentAIReportFilters.value.healthSections = availableParentAIReportHealthSections.value.map((section) => section.key);
+}
+
+function clearParentAIReportHealthSections() {
+  parentAIReportFilters.value.healthSections = [];
+}
+
+function hasValidParentExportRange() {
+  const { startDate, endDate } = parentExportFilters.value;
+  return Boolean(startDate && endDate && startDate <= endDate);
+}
+
+function validateParentExportSelection() {
+  const filters = parentExportFilters.value;
+
+  if (!hasValidParentExportRange()) {
+    return 'Choose a valid start and end date.';
+  }
+
+  if (!filters.includeHealth && !filters.includeTherapy && !filters.includeNutrient) {
+    return 'Choose at least one page to include.';
+  }
+
+  if (!parentExportItemCount.value) {
+    return 'No selected history is available for this date range.';
+  }
+
+  return '';
+}
+
+function validateParentAIReportSelection() {
+  const filters = parentAIReportFilters.value;
+
+  if (!filters.startDate || !filters.endDate || filters.startDate > filters.endDate) {
+    return 'Choose a valid start and end date.';
+  }
+
+  if (!filters.includeHealth && !filters.includeTherapy && !filters.includeNutrient) {
+    return 'Choose at least one page to analyze.';
+  }
+
+  if (!parentAIReportItemCount.value) {
+    return 'No selected history is available for this date range.';
+  }
+
+  return '';
+}
+
+function openParentExportPreview() {
+  const validationMessage = validateParentExportSelection();
+  if (validationMessage) {
+    parentExportMessage.value = validationMessage;
+    return;
+  }
+
+  parentExportMessage.value = '';
+  isParentExportOpen.value = false;
+  isParentExportPreviewOpen.value = true;
+}
+
+async function printParentReport() {
+  const validationMessage = validateParentExportSelection();
+  if (validationMessage) {
+    parentExportMessage.value = validationMessage;
+    return;
+  }
+
+  parentExportMessage.value = '';
+  isPrintingParentReport.value = true;
+  await nextTick();
+  window.print();
+}
+
+function finishParentReportPrint() {
+  isPrintingParentReport.value = false;
+}
+
+async function generateParentAIReport() {
+  const validationMessage = validateParentAIReportSelection();
+  const userId = parentDetail.value?.user?.id || selectedParentUser.value?.id;
+
+  if (validationMessage) {
+    parentAIReportMessage.value = validationMessage;
+    return;
+  }
+
+  if (!userId) return;
+
+  parentAIReportMessage.value = '';
+  isGeneratingParentAIReport.value = true;
+
+  try {
+    const response = await apiFetch(`/api/admin/app-users/${userId}/ai-report`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(parentAIReportFilters.value)
+    });
+    const data = await response.json();
+
+    if (!response.ok) {
+      parentAIReportMessage.value = data.message || 'Could not create the AI report.';
+      return;
+    }
+
+    parentAIReport.value = data.report;
+    parentAIReportMeta.value = {
+      recordCount: data.recordCount,
+      generatedAt: data.generatedAt,
+      language: parentAIReportFilters.value.language
+    };
+    isParentAIReportOpen.value = false;
+    isParentAIReportPreviewOpen.value = true;
+  } catch {
+    parentAIReportMessage.value = 'Unable to reach the server.';
+  } finally {
+    isGeneratingParentAIReport.value = false;
+  }
+}
+
+async function printParentAIReport() {
+  if (!parentAIReport.value) return;
+
+  isPrintingParentAIReport.value = true;
+  await nextTick();
+  window.print();
+}
+
+function finishParentAIReportPrint() {
+  isPrintingParentAIReport.value = false;
+}
+
 async function refreshParentDetail() {
   if (!selectedParentUser.value?.id) return;
   parentDetailMessage.value = '';
@@ -892,6 +1315,7 @@ async function loadParentDetail(userId) {
     }
 
     parentDetail.value = data;
+    nutrientLimitDraft.value = String(clamp(Number(data.nutrientDailyLimit ?? 3) || 0, 0, 20));
   } catch {
     parentDetailMessage.value = 'Unable to load parent details.';
   } finally {
@@ -907,15 +1331,42 @@ function closeParentDetail() {
   parentHistoryDateFilter.value = '';
   parentHistoryPageFilter.value = 'health';
   parentHistorySectionFilter.value = 'all';
+  closeParentExportPanel();
+  closeParentExportPreview();
+  closeParentAIReportPanel();
+  closeParentAIReportPreview();
+  resetParentExportFilters();
+  resetParentAIReportFilters();
+  parentAIReport.value = null;
+  parentAIReportMeta.value = null;
+  parentAIReportMessage.value = '';
   nutrientLimitMessage.value = '';
+  nutrientLimitDraft.value = '3';
   isSavingNutrientLimit.value = false;
 }
 
-async function saveParentNutrientLimit(nextLimit) {
+async function saveParentNutrientLimit() {
   const userId = parentDetail.value?.user?.id || selectedParentUser.value?.id;
   if (!userId) return;
 
-  const dailyLimit = clamp(Number(nextLimit) || 0, 0, 20);
+  const typedLimit = Number(nutrientLimitDraft.value);
+  if (!Number.isInteger(typedLimit) || typedLimit < 0 || typedLimit > 20) {
+    nutrientLimitMessage.value = 'Enter a whole number from 0 to 20.';
+    return;
+  }
+
+  const dailyLimit = clamp(typedLimit, 0, 20);
+  if (dailyLimit === nutrientDailyLimit.value) {
+    nutrientLimitMessage.value = 'This quota is already saved.';
+    return;
+  }
+
+  const confirmed = window.confirm(`Are you sure you want to change this account to ${dailyLimit} estimates per day?`);
+  if (!confirmed) {
+    nutrientLimitDraft.value = String(nutrientDailyLimit.value);
+    return;
+  }
+
   nutrientLimitMessage.value = '';
   isSavingNutrientLimit.value = true;
 
@@ -936,6 +1387,7 @@ async function saveParentNutrientLimit(nextLimit) {
       ...parentDetail.value,
       nutrientDailyLimit: data.nutrientDailyLimit
     };
+    nutrientLimitDraft.value = String(data.nutrientDailyLimit);
     nutrientLimitMessage.value = data.message;
   } catch {
     nutrientLimitMessage.value = 'Unable to reach the server.';
@@ -1412,7 +1864,16 @@ async function submitSignup() {
 </script>
 
 <template>
-  <main class="shell" :data-theme="currentTheme">
+  <main
+    class="shell"
+    :class="{
+      'printing-parent-report': isPrintingParentReport,
+      'previewing-parent-report': isParentExportPreviewOpen,
+      'printing-ai-report': isPrintingParentAIReport,
+      'previewing-ai-report': isParentAIReportPreviewOpen
+    }"
+    :data-theme="currentTheme"
+  >
     <div class="theme-switcher">
       <button
         class="theme-toggle"
@@ -1829,6 +2290,14 @@ async function submitSignup() {
                 </div>
 
                 <div class="history-controls">
+                  <button class="refresh-detail-button export-detail-button" type="button" @click="openParentExportPanel">
+                    Export PDF
+                  </button>
+
+                  <button class="refresh-detail-button export-detail-button" type="button" @click="openParentAIReportPanel">
+                    AI Report
+                  </button>
+
                   <button class="refresh-detail-button" type="button" :disabled="isLoadingParentDetail" @click="refreshParentDetail">
                     Refresh
                   </button>
@@ -1866,29 +2335,28 @@ async function submitSignup() {
               <div v-if="parentHistoryPageFilter === 'nutrient'" class="nutrient-quota-card">
                 <div>
                   <p class="eyebrow">Daily Estimate Quota</p>
-                  <h4>{{ nutrientUsageSummary.used }} used · {{ nutrientUsageSummary.left }} left</h4>
+                  <h4>{{ nutrientUsageSummary.used }} used · {{ nutrientUsageSummary.limit }} per day</h4>
                   <span>{{ formatDateInputLabel(parentHistoryDateFilter) }}</span>
                 </div>
 
                 <div class="nutrient-quota-control" aria-label="Nutrient estimate daily limit">
-                  <button
-                    type="button"
-                    :disabled="isSavingNutrientLimit || nutrientDailyLimit <= 0"
-                    aria-label="Decrease daily estimate limit"
-                    @click="saveParentNutrientLimit(nutrientDailyLimit - 1)"
-                  >
-                    −
-                  </button>
-                  <strong>{{ nutrientDailyLimit }}</strong>
-                  <button
-                    type="button"
-                    :disabled="isSavingNutrientLimit || nutrientDailyLimit >= 20"
-                    aria-label="Increase daily estimate limit"
-                    @click="saveParentNutrientLimit(nutrientDailyLimit + 1)"
-                  >
-                    +
-                  </button>
+                  <input
+                    v-model.number="nutrientLimitDraft"
+                    type="number"
+                    min="0"
+                    max="20"
+                    step="1"
+                    aria-label="Daily nutrient estimate quota"
+                    @keyup.enter="saveParentNutrientLimit"
+                  />
                   <span>per day</span>
+                  <button
+                    type="button"
+                    :disabled="isSavingNutrientLimit || String(nutrientLimitDraft) === String(nutrientDailyLimit)"
+                    @click="saveParentNutrientLimit"
+                  >
+                    Save
+                  </button>
                 </div>
 
                 <p v-if="nutrientLimitMessage" class="quota-message">{{ nutrientLimitMessage }}</p>
@@ -1987,6 +2455,423 @@ async function submitSignup() {
           </div>
         </section>
       </div>
+
+      <div v-if="isParentExportOpen" class="modal-backdrop" @click.self="closeParentExportPanel">
+        <section class="modal-panel export-panel" role="dialog" aria-modal="true" aria-labelledby="export-parent-title">
+          <div class="modal-header">
+            <div>
+              <p class="eyebrow">PDF Export</p>
+              <h2 id="export-parent-title">Export Parent History</h2>
+            </div>
+            <button class="icon-button" type="button" aria-label="Close export options" @click="closeParentExportPanel">
+              X
+            </button>
+          </div>
+
+          <div class="export-form">
+            <div class="export-date-grid">
+              <label>
+                Start Date
+                <input v-model="parentExportFilters.startDate" type="date" />
+              </label>
+              <label>
+                End Date
+                <input v-model="parentExportFilters.endDate" type="date" />
+              </label>
+            </div>
+
+            <section class="export-option-group">
+              <h3>Pages to Include</h3>
+              <div class="export-checkbox-grid">
+                <label>
+                  <input v-model="parentExportFilters.includeHealth" type="checkbox" />
+                  <span>Health</span>
+                </label>
+                <label>
+                  <input v-model="parentExportFilters.includeTherapy" type="checkbox" />
+                  <span>Therapy</span>
+                </label>
+                <label>
+                  <input v-model="parentExportFilters.includeNutrient" type="checkbox" />
+                  <span>Nutrient</span>
+                </label>
+              </div>
+            </section>
+
+            <section v-if="parentExportFilters.includeHealth" class="export-option-group">
+              <div class="export-group-heading">
+                <h3>Health History</h3>
+                <div>
+                  <button type="button" @click="selectAllParentExportHealthSections">Select all</button>
+                  <button type="button" @click="clearParentExportHealthSections">Clear filters</button>
+                </div>
+              </div>
+              <p class="export-help">
+                Leave all categories unselected to include every health category in the date range.
+              </p>
+              <div v-if="availableParentExportHealthSections.length" class="export-checkbox-grid">
+                <label v-for="section in availableParentExportHealthSections" :key="section.key">
+                  <input v-model="parentExportFilters.healthSections" type="checkbox" :value="section.key" />
+                  <span>{{ section.icon }} {{ section.title }}</span>
+                </label>
+              </div>
+              <p v-else class="empty-note">No health categories found for this date range.</p>
+            </section>
+
+            <section class="export-summary-card">
+              <strong>{{ parentExportItemCount }}</strong>
+              <span>selected records</span>
+              <small>{{ parentExportDateRangeLabel }}</small>
+            </section>
+          </div>
+
+          <p v-if="parentExportMessage" class="message error">{{ parentExportMessage }}</p>
+
+          <div class="confirm-actions">
+            <button class="secondary-button compact" type="button" @click="closeParentExportPanel">Cancel</button>
+            <button class="primary-button compact" type="button" @click="openParentExportPreview">
+              Next: Preview
+            </button>
+          </div>
+        </section>
+      </div>
+
+      <div v-if="isParentExportPreviewOpen" class="pdf-preview-backdrop">
+        <div class="pdf-preview-toolbar">
+          <div>
+            <p class="eyebrow">Preview</p>
+            <h2>PDF Export Preview</h2>
+            <span>{{ parentExportDateRangeLabel }} · {{ parentExportItemCount }} records</span>
+          </div>
+          <div class="pdf-preview-actions">
+            <button class="secondary-button compact" type="button" @click="backToParentExportOptions">Back</button>
+            <button class="primary-button compact" type="button" @click="printParentReport">Export / Save PDF</button>
+            <button class="icon-button" type="button" aria-label="Close PDF preview" @click="closeParentExportPreview">
+              X
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="isParentAIReportOpen" class="modal-backdrop" @click.self="closeParentAIReportPanel">
+        <section class="modal-panel export-panel" role="dialog" aria-modal="true" aria-labelledby="ai-report-title">
+          <div class="modal-header">
+            <div>
+              <p class="eyebrow">AI Analysis</p>
+              <h2 id="ai-report-title">Create Admin Report</h2>
+            </div>
+            <button class="icon-button" type="button" aria-label="Close AI report options" @click="closeParentAIReportPanel">
+              X
+            </button>
+          </div>
+
+          <div class="export-form">
+            <div class="export-date-grid">
+              <label>
+                Start Date
+                <input v-model="parentAIReportFilters.startDate" type="date" />
+              </label>
+              <label>
+                End Date
+                <input v-model="parentAIReportFilters.endDate" type="date" />
+              </label>
+            </div>
+
+            <section class="export-option-group">
+              <h3>Report Language</h3>
+              <div class="report-language-control" role="group" aria-label="AI report language">
+                <button
+                  type="button"
+                  :class="{ active: parentAIReportFilters.language === 'english' }"
+                  @click="parentAIReportFilters.language = 'english'"
+                >
+                  English PDF
+                </button>
+                <button
+                  type="button"
+                  :class="{ active: parentAIReportFilters.language === 'chinese' }"
+                  @click="parentAIReportFilters.language = 'chinese'"
+                >
+                  中文 PDF
+                </button>
+              </div>
+            </section>
+
+            <section class="export-option-group">
+              <h3>Pages to Analyze</h3>
+              <div class="export-checkbox-grid">
+                <label>
+                  <input v-model="parentAIReportFilters.includeHealth" type="checkbox" />
+                  <span>Health</span>
+                </label>
+                <label>
+                  <input v-model="parentAIReportFilters.includeTherapy" type="checkbox" />
+                  <span>Therapy</span>
+                </label>
+                <label>
+                  <input v-model="parentAIReportFilters.includeNutrient" type="checkbox" />
+                  <span>Nutrient</span>
+                </label>
+              </div>
+            </section>
+
+            <section v-if="parentAIReportFilters.includeHealth" class="export-option-group">
+              <div class="export-group-heading">
+                <h3>Health History</h3>
+                <div>
+                  <button type="button" @click="selectAllParentAIReportHealthSections">Select all</button>
+                  <button type="button" @click="clearParentAIReportHealthSections">Clear filters</button>
+                </div>
+              </div>
+              <p class="export-help">
+                Leave all categories unselected to analyze every health category in the date range.
+              </p>
+              <div v-if="availableParentAIReportHealthSections.length" class="export-checkbox-grid">
+                <label v-for="section in availableParentAIReportHealthSections" :key="section.key">
+                  <input v-model="parentAIReportFilters.healthSections" type="checkbox" :value="section.key" />
+                  <span>{{ section.icon }} {{ section.title }}</span>
+                </label>
+              </div>
+              <p v-else class="empty-note">No health categories found for this date range.</p>
+            </section>
+
+            <section class="export-summary-card">
+              <strong>{{ parentAIReportItemCount }}</strong>
+              <span>records for AI analysis</span>
+              <small>{{ parentAIReportDateRangeLabel }}</small>
+            </section>
+          </div>
+
+          <p v-if="parentAIReportMessage" class="message error">{{ parentAIReportMessage }}</p>
+
+          <div class="confirm-actions">
+            <button class="secondary-button compact" type="button" @click="closeParentAIReportPanel">Cancel</button>
+            <button class="primary-button compact" type="button" :disabled="isGeneratingParentAIReport" @click="generateParentAIReport">
+              {{ isGeneratingParentAIReport ? 'Creating report...' : 'Next: Preview' }}
+            </button>
+          </div>
+        </section>
+      </div>
+
+      <div v-if="isParentAIReportPreviewOpen" class="pdf-preview-backdrop">
+        <div class="pdf-preview-toolbar">
+          <div>
+            <p class="eyebrow">Preview</p>
+            <h2>AI Report Preview</h2>
+            <span>{{ parentAIReport?.dateRange || parentAIReportDateRangeLabel }} · {{ parentAIReportMeta?.recordCount || 0 }} records</span>
+          </div>
+          <div class="pdf-preview-actions">
+            <button class="secondary-button compact" type="button" @click="backToParentAIReportOptions">Back</button>
+            <button class="primary-button compact" type="button" @click="printParentAIReport">Export / Save PDF</button>
+            <button class="icon-button" type="button" aria-label="Close AI report preview" @click="closeParentAIReportPreview">
+              X
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <section v-if="parentDetail" class="pdf-export-document" aria-label="Parent history PDF report">
+        <header class="pdf-report-header">
+          <p class="eyebrow">Care Portal Report</p>
+          <h1>{{ parentDetail.user.nickname }}</h1>
+          <p>{{ parentExportDateRangeLabel }}</p>
+        </header>
+
+        <div class="pdf-report-grid">
+          <section class="pdf-report-card">
+            <h2>Parent Account</h2>
+            <dl>
+              <div>
+                <dt>Username</dt>
+                <dd>{{ parentDetail.user.nickname }}</dd>
+              </div>
+              <div>
+                <dt>Email</dt>
+                <dd>{{ parentDetail.user.email }}</dd>
+              </div>
+              <div>
+                <dt>Created</dt>
+                <dd>{{ parentDetail.user.createdAt }}</dd>
+              </div>
+              <div>
+                <dt>Last App Sync</dt>
+                <dd>{{ parentDetail.appDataUpdatedAt || 'Not synced yet' }}</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section class="pdf-report-card">
+            <h2>Child Information</h2>
+            <dl v-if="hasChildInfo(parentDetail.childProfile)">
+              <div v-for="row in childInfoRows(parentDetail.childProfile)" :key="row.label">
+                <dt>{{ row.label }}</dt>
+                <dd>{{ row.value || '' }}</dd>
+              </div>
+            </dl>
+            <p v-else>No child information synced yet.</p>
+          </section>
+        </div>
+
+        <section class="pdf-report-history">
+          <h2>History</h2>
+          <p>{{ parentExportItemCount }} selected records</p>
+
+          <article v-for="section in parentExportHistorySections" :key="`pdf-${section.key}`" class="pdf-history-section">
+            <h3>{{ section.icon }} {{ section.title }} <span>{{ historySectionCount(section) }}</span></h3>
+
+            <div v-if="section.key === 'medicine'" class="medicine-check-grid">
+              <div v-for="row in summarizedMedicineRows(section.logs)" :key="`pdf-${row.time}-${row.name}`" class="medicine-check-row">
+                <span class="medicine-check-emoji">{{ row.checked ? '✅' : '⬜' }}</span>
+                <span class="medicine-check-name">
+                  {{ row.name }}
+                  <span class="medicine-edit-times">
+                    <span v-for="editTime in row.editTimes" :key="`pdf-${row.name}-${editTime}`">({{ editTime }})</span>
+                  </span>
+                </span>
+                <time>{{ row.time }}</time>
+              </div>
+            </div>
+
+            <div v-else-if="section.key === 'nutrition'" class="saved-meal-grid">
+              <article v-for="meal in section.meals" :key="`pdf-${meal.id || meal.savedAt}`" class="saved-meal-card">
+                <div class="saved-meal-body">
+                  <div>
+                    <strong>{{ formatLogTimestamp(meal.savedAt) }}</strong>
+                    <span>AI meal estimate</span>
+                  </div>
+                  <p class="saved-meal-metrics">{{ savedMealMetricText(meal) }}</p>
+                  <p v-if="meal.estimate?.summary">{{ meal.estimate.summary }}</p>
+                  <div v-if="savedMealList(meal.estimate?.recommendations).length" class="saved-meal-list">
+                    <span>Recommendations</span>
+                    <ul>
+                      <li v-for="item in savedMealList(meal.estimate.recommendations)" :key="`pdf-rec-${item}`">{{ item }}</li>
+                    </ul>
+                  </div>
+                  <div v-if="savedMealList(meal.estimate?.notes).length" class="saved-meal-list">
+                    <span>Notes</span>
+                    <ul>
+                      <li v-for="item in savedMealList(meal.estimate.notes)" :key="`pdf-note-${item}`">{{ item }}</li>
+                    </ul>
+                  </div>
+                </div>
+              </article>
+            </div>
+
+            <div v-else class="compact-history-list">
+              <div v-for="log in section.logs" :key="`pdf-${log.id}`" class="compact-history-item">
+                <div>
+                  <strong>{{ formatLogTimestamp(log.timestamp) }}</strong>
+                  <span>{{ logTypeLabel(log) }}</span>
+                </div>
+                <span v-if="logHasIntensityBar(log)" class="severity-pill">{{ log.severity }}/5</span>
+                <p v-if="log.value">{{ log.value }}</p>
+                <p v-if="log.comments">{{ log.comments }}</p>
+              </div>
+            </div>
+          </article>
+        </section>
+      </section>
+
+      <section v-if="parentDetail && parentAIReport" class="ai-report-document" aria-label="Admin AI report">
+        <header class="pdf-report-header">
+          <p class="eyebrow">{{ parentAIReportLabels.reportEyebrow }}</p>
+          <h1>{{ parentAIReport.title }}</h1>
+          <p>{{ parentAIReport.dateRange }}</p>
+        </header>
+
+        <div class="pdf-report-grid">
+          <section class="pdf-report-card">
+            <h2>{{ parentAIReportLabels.parentAccount }}</h2>
+            <dl>
+              <div>
+                <dt>{{ parentAIReportLabels.username }}</dt>
+                <dd>{{ parentDetail.user.nickname }}</dd>
+              </div>
+              <div>
+                <dt>{{ parentAIReportLabels.email }}</dt>
+                <dd>{{ parentDetail.user.email }}</dd>
+              </div>
+              <div>
+                <dt>{{ parentAIReportLabels.lastAppSync }}</dt>
+                <dd>{{ parentDetail.appDataUpdatedAt || 'Not synced yet' }}</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section class="pdf-report-card">
+            <h2>{{ parentAIReportLabels.reportDetails }}</h2>
+            <dl>
+              <div>
+                <dt>{{ parentAIReportLabels.recordsAnalyzed }}</dt>
+                <dd>{{ parentAIReportMeta?.recordCount || 0 }}</dd>
+              </div>
+              <div>
+                <dt>{{ parentAIReportLabels.generated }}</dt>
+                <dd>{{ formatLogTimestamp(parentAIReportMeta?.generatedAt) }}</dd>
+              </div>
+            </dl>
+          </section>
+        </div>
+
+        <section class="ai-report-card">
+          <h2>{{ parentAIReportLabels.summary }}</h2>
+          <p>{{ parentAIReport.summary }}</p>
+        </section>
+
+        <section class="ai-report-grid">
+          <article class="ai-report-card">
+            <h2>{{ parentAIReportLabels.highlights }}</h2>
+            <ul v-if="parentAIReport.highlights?.length">
+              <li v-for="item in parentAIReport.highlights" :key="`highlight-${item}`">{{ item }}</li>
+            </ul>
+            <p v-else>{{ parentAIReportLabels.noHighlights }}</p>
+          </article>
+
+          <article class="ai-report-card">
+            <h2>{{ parentAIReportLabels.patterns }}</h2>
+            <ul v-if="parentAIReport.patterns?.length">
+              <li v-for="item in parentAIReport.patterns" :key="`pattern-${item}`">{{ item }}</li>
+            </ul>
+            <p v-else>{{ parentAIReportLabels.noPatterns }}</p>
+          </article>
+
+          <article class="ai-report-card">
+            <h2>{{ parentAIReportLabels.concerns }}</h2>
+            <ul v-if="parentAIReport.concerns?.length">
+              <li v-for="item in parentAIReport.concerns" :key="`concern-${item}`">{{ item }}</li>
+            </ul>
+            <p v-else>{{ parentAIReportLabels.noConcerns }}</p>
+          </article>
+
+          <article class="ai-report-card">
+            <h2>{{ parentAIReportLabels.recommendations }}</h2>
+            <ul v-if="parentAIReport.recommendations?.length">
+              <li v-for="item in parentAIReport.recommendations" :key="`recommendation-${item}`">{{ item }}</li>
+            </ul>
+            <p v-else>{{ parentAIReportLabels.noRecommendations }}</p>
+          </article>
+
+          <article class="ai-report-card">
+            <h2>{{ parentAIReportLabels.dataQualityNotes }}</h2>
+            <ul v-if="parentAIReport.dataQualityNotes?.length">
+              <li v-for="item in parentAIReport.dataQualityNotes" :key="`data-quality-${item}`">{{ item }}</li>
+            </ul>
+            <p v-else>{{ parentAIReportLabels.noDataQualityNotes }}</p>
+          </article>
+
+          <article class="ai-report-card">
+            <h2>{{ parentAIReportLabels.followUpQuestions }}</h2>
+            <ul v-if="parentAIReport.followUpQuestions?.length">
+              <li v-for="item in parentAIReport.followUpQuestions" :key="`question-${item}`">{{ item }}</li>
+            </ul>
+            <p v-else>{{ parentAIReportLabels.noFollowUpQuestions }}</p>
+          </article>
+        </section>
+
+        <p class="ai-report-disclaimer">
+          {{ parentAIReportLabels.disclaimer }}
+        </p>
+      </section>
 
       <div v-if="isCreateUserOpen" class="modal-backdrop" @click.self="closeCreateUserModal">
         <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="create-user-title">

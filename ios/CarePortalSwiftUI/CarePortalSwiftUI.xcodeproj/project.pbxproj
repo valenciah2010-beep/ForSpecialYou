@@ -20,6 +20,14 @@
 		5C000001000000000000000B /* PainLocationBody.jpg in Resources */ = {isa = PBXBuildFile; fileRef = 5C0000010000000000000112 /* PainLocationBody.jpg */; };
 		5C000001000000000000000C /* AppLanguage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C000001000000000000010A /* AppLanguage.swift */; };
 		5C000001000000000000000D /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = 5C0000010000000000000115 /* Localizable.strings */; };
+		5C000001000000000000000E /* BristolStoolChart.png in Resources */ = {isa = PBXBuildFile; fileRef = 5C0000010000000000000116 /* BristolStoolChart.png */; };
+		5C000001000000000000000F /* BristolStoolType1.png in Resources */ = {isa = PBXBuildFile; fileRef = 5C0000010000000000000117 /* BristolStoolType1.png */; };
+		5C0000010000000000000010 /* BristolStoolType2.png in Resources */ = {isa = PBXBuildFile; fileRef = 5C0000010000000000000118 /* BristolStoolType2.png */; };
+		5C0000010000000000000011 /* BristolStoolType3.png in Resources */ = {isa = PBXBuildFile; fileRef = 5C0000010000000000000119 /* BristolStoolType3.png */; };
+		5C0000010000000000000012 /* BristolStoolType4.png in Resources */ = {isa = PBXBuildFile; fileRef = 5C000001000000000000011A /* BristolStoolType4.png */; };
+		5C0000010000000000000013 /* BristolStoolType5.png in Resources */ = {isa = PBXBuildFile; fileRef = 5C000001000000000000011B /* BristolStoolType5.png */; };
+		5C0000010000000000000014 /* BristolStoolType6.png in Resources */ = {isa = PBXBuildFile; fileRef = 5C000001000000000000011C /* BristolStoolType6.png */; };
+		5C0000010000000000000015 /* BristolStoolType7.png in Resources */ = {isa = PBXBuildFile; fileRef = 5C000001000000000000011D /* BristolStoolType7.png */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -39,6 +47,14 @@
 		5C0000010000000000000112 /* PainLocationBody.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = PainLocationBody.jpg; sourceTree = "<group>"; };
 		5C0000010000000000000113 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
 		5C0000010000000000000114 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
+		5C0000010000000000000116 /* BristolStoolChart.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = BristolStoolChart.png; sourceTree = "<group>"; };
+		5C0000010000000000000117 /* BristolStoolType1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = BristolStoolType1.png; sourceTree = "<group>"; };
+		5C0000010000000000000118 /* BristolStoolType2.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = BristolStoolType2.png; sourceTree = "<group>"; };
+		5C0000010000000000000119 /* BristolStoolType3.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = BristolStoolType3.png; sourceTree = "<group>"; };
+		5C000001000000000000011A /* BristolStoolType4.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = BristolStoolType4.png; sourceTree = "<group>"; };
+		5C000001000000000000011B /* BristolStoolType5.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = BristolStoolType5.png; sourceTree = "<group>"; };
+		5C000001000000000000011C /* BristolStoolType6.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = BristolStoolType6.png; sourceTree = "<group>"; };
+		5C000001000000000000011D /* BristolStoolType7.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = BristolStoolType7.png; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -76,6 +92,14 @@
 				5C0000010000000000000110 /* Info.plist */,
 				5C0000010000000000000111 /* CarePortalLogo.png */,
 				5C0000010000000000000112 /* PainLocationBody.jpg */,
+				5C0000010000000000000116 /* BristolStoolChart.png */,
+				5C0000010000000000000117 /* BristolStoolType1.png */,
+				5C0000010000000000000118 /* BristolStoolType2.png */,
+				5C0000010000000000000119 /* BristolStoolType3.png */,
+				5C000001000000000000011A /* BristolStoolType4.png */,
+				5C000001000000000000011B /* BristolStoolType5.png */,
+				5C000001000000000000011C /* BristolStoolType6.png */,
+				5C000001000000000000011D /* BristolStoolType7.png */,
 				5C0000010000000000000115 /* Localizable.strings */,
 			);
 			path = CarePortalSwiftUI;
@@ -151,6 +175,14 @@
 				5C000001000000000000000A /* CarePortalLogo.png in Resources */,
 				5C000001000000000000000B /* PainLocationBody.jpg in Resources */,
 				5C000001000000000000000D /* Localizable.strings in Resources */,
+				5C000001000000000000000E /* BristolStoolChart.png in Resources */,
+				5C000001000000000000000F /* BristolStoolType1.png in Resources */,
+				5C0000010000000000000010 /* BristolStoolType2.png in Resources */,
+				5C0000010000000000000011 /* BristolStoolType3.png in Resources */,
+				5C0000010000000000000012 /* BristolStoolType4.png in Resources */,
+				5C0000010000000000000013 /* BristolStoolType5.png in Resources */,
+				5C0000010000000000000014 /* BristolStoolType6.png in Resources */,
+				5C0000010000000000000015 /* BristolStoolType7.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

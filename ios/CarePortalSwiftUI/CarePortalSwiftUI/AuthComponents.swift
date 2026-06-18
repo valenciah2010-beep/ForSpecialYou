@@ -88,12 +88,24 @@ struct MessageBanner: View {
 
 struct TermsDetailsSheet: View {
     @Environment(\.dismiss) private var dismiss
+    private let sections = [
+        ("1. Acceptance of Terms", "TermsAcceptanceBody"),
+        ("2. Service Description", "TermsServiceDescriptionBody"),
+        ("3. User Responsibilities", "TermsUserResponsibilitiesBody"),
+        ("4. Medical Disclaimer", "TermsMedicalDisclaimerBody"),
+        ("5. AI Feature Disclaimer", "TermsAIDisclaimerBody"),
+        ("6. Privacy and Data", "TermsPrivacyDataBody"),
+        ("7. Intellectual Property", "TermsIntellectualPropertyBody"),
+        ("8. Limitation of Liability", "TermsLiabilityBody"),
+        ("9. Changes to Terms", "TermsChangesBody"),
+        ("10. Contact Information", "TermsContactBody")
+    ]
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Terms and Conditions")
+                    Text("Terms of Use")
                         .font(.title2.weight(.black))
                         .foregroundStyle(AppTheme.text)
 
@@ -102,10 +114,9 @@ struct TermsDetailsSheet: View {
                         .foregroundStyle(.secondary)
                         .lineSpacing(3)
 
-                    termsSection(title: "Privacy and care data", body: "TermsPrivacyBody")
-                    termsSection(title: "Parent responsibility", body: "TermsParentBody")
-                    termsSection(title: "Not medical advice", body: "TermsMedicalBody")
-                    termsSection(title: "Emergency use", body: "TermsEmergencyBody")
+                    ForEach(sections, id: \.0) { section in
+                        termsSection(title: section.0, body: section.1)
+                    }
                 }
                 .padding(20)
             }
