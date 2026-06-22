@@ -241,6 +241,13 @@ h1 {
   padding: 0 16px;
 }
 
+.form-submit-button {
+  box-shadow: 0 12px 24px rgba(39, 105, 93, 0.18);
+  font-size: 1rem;
+  margin-top: 6px;
+  width: 100%;
+}
+
 .primary-button.dangerish {
   background: #b42318;
 }

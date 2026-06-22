@@ -32,7 +32,7 @@ defineEmits(['submit']);
           <input v-model="signupForm.verifyPassword" type="password" autocomplete="new-password" />
         </label>
       </div>
-      <button type="submit" :disabled="isBusy">
+      <button class="primary-button form-submit-button" type="submit" :disabled="isBusy">
         {{ isBusy ? 'Creating...' : 'Create Account' }}
       </button>
     </form>

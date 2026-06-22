@@ -22,7 +22,7 @@ defineEmits(['submit']);
         Password
         <input v-model="loginForm.password" type="password" autocomplete="current-password" />
       </label>
-      <button type="submit" :disabled="isBusy">
+      <button class="primary-button form-submit-button" type="submit" :disabled="isBusy">
         {{ isBusy ? 'Logging in...' : 'Log In' }}
       </button>
     </form>
