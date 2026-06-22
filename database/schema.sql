@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS parent_app_data (
   child_profile LONGTEXT NULL,
   health_logs LONGTEXT NULL,
   saved_meals LONGTEXT NULL,
+  nutrient_daily_usage LONGTEXT NULL,
+  nutrient_daily_limit INT NOT NULL DEFAULT 3,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT parent_app_data_user_fk
     FOREIGN KEY (user_id) REFERENCES users(id)

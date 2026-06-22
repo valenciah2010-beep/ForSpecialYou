@@ -28,6 +28,7 @@
 		5C0000010000000000000013 /* BristolStoolType5.png in Resources */ = {isa = PBXBuildFile; fileRef = 5C000001000000000000011B /* BristolStoolType5.png */; };
 		5C0000010000000000000014 /* BristolStoolType6.png in Resources */ = {isa = PBXBuildFile; fileRef = 5C000001000000000000011C /* BristolStoolType6.png */; };
 		5C0000010000000000000015 /* BristolStoolType7.png in Resources */ = {isa = PBXBuildFile; fileRef = 5C000001000000000000011D /* BristolStoolType7.png */; };
+		5C0000010000000000000016 /* APIConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C000001000000000000011E /* APIConfig.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -55,6 +56,7 @@
 		5C000001000000000000011B /* BristolStoolType5.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = BristolStoolType5.png; sourceTree = "<group>"; };
 		5C000001000000000000011C /* BristolStoolType6.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = BristolStoolType6.png; sourceTree = "<group>"; };
 		5C000001000000000000011D /* BristolStoolType7.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = BristolStoolType7.png; sourceTree = "<group>"; };
+		5C000001000000000000011E /* APIConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIConfig.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -81,6 +83,7 @@
 			children = (
 				5C0000010000000000000101 /* CarePortalSwiftUIApp.swift */,
 				5C0000010000000000000102 /* Models.swift */,
+				5C000001000000000000011E /* APIConfig.swift */,
 				5C0000010000000000000103 /* AuthAPI.swift */,
 				5C0000010000000000000104 /* AuthViewModel.swift */,
 				5C0000010000000000000105 /* AuthRootView.swift */,
@@ -195,6 +198,7 @@
 			files = (
 				5C0000010000000000000001 /* CarePortalSwiftUIApp.swift in Sources */,
 				5C0000010000000000000002 /* Models.swift in Sources */,
+				5C0000010000000000000016 /* APIConfig.swift in Sources */,
 				5C0000010000000000000003 /* AuthAPI.swift in Sources */,
 				5C0000010000000000000004 /* AuthViewModel.swift in Sources */,
 				5C0000010000000000000005 /* AuthRootView.swift in Sources */,

@@ -1,6 +1,6 @@
 # Care Portal Auth App
 
-This project has a Vue + Vite frontend, a Node.js + Express backend, and a MySQL users table for sign up and log in.
+This project has a Vue + Vite frontend, a Node.js + Koa2 backend, and a MySQL users table for sign up and log in.
 
 ## Setup
 
@@ -65,6 +65,7 @@ npm run server
 ```
 
 The backend uses port `3002` by default so it does not conflict with older servers on `3000` or `3001`.
+If you do not create a `.env` file, the backend still defaults to `3002`.
 
 In another terminal, start the frontend:
 
@@ -81,3 +82,12 @@ http://localhost:5173/
 The frontend is now an admin-only portal. Log in with a user whose role is `admin` to view simulator app users. Vite proxies `/api` to the backend during local development.
 
 Simulator app parent sign-up and log-in still use the backend API, but website user-list and user-management routes require an admin session.
+
+## Structure
+
+- `server/app.js` creates the Koa app and mounts middleware/routes.
+- `server/routes/` contains admin, app, and user API route groups.
+- `server/services/` contains database shape checks, admin sessions, OpenAI response handling, and report record shaping.
+- `src/composables/` contains portal state and UI state helpers.
+- `src/components/` contains reusable page panels, layout, and parent-history presentation.
+- `src/utils/` contains date, validation, and history formatting helpers.

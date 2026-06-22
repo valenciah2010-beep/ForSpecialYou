@@ -18,7 +18,7 @@ enum AuthAPIError: LocalizedError {
 }
 
 struct AuthAPI {
-    var baseURL = URL(string: "http://127.0.0.1:3002")
+    var baseURL = APIConfig.baseURL
 
     func login(username: String, password: String) async throws -> CarePortalUser {
         let body = LoginRequest(username: username, password: password)
@@ -124,7 +124,7 @@ struct AuthAPI {
 }
 
 struct NutritionAPI {
-    var baseURL = URL(string: "http://127.0.0.1:3002")
+    var baseURL = APIConfig.baseURL
 
     func analyzeMeal(imageData: String, language: String) async throws -> MealNutritionEstimate {
         guard let url = baseURL?.appending(path: "/api/analyze-meal") else {
