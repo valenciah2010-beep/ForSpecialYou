@@ -11193,6 +11193,38 @@ struct TherapyTrackingView: View {
                         subtitle: "Log milestones and therapy wins to see your child's progress over time."
                     )
 
+                    Button {
+                        activeCategory = .therapySession
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: TherapyCategory.therapySession.icon)
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(TherapyCategory.therapySession.tint)
+                                .frame(width: 40, height: 40)
+                                .background(TherapyCategory.therapySession.tint.opacity(0.14))
+                                .clipShape(Circle())
+
+                            Text(localizedAppString("Therapy Session"))
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            Spacer()
+
+                            Image(systemName: "plus")
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.accent)
+                        }
+                        .padding(14)
+                        .frame(maxWidth: .infinity)
+                        .background(AppTheme.panel)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(TherapyCategory.therapySession.tint.opacity(0.18), lineWidth: 1)
+                        }
+                    }
+                    .buttonStyle(.plain)
+
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                         ForEach(TherapyCategory.all) { category in
                             TherapyCategoryCard(
@@ -11272,6 +11304,14 @@ struct TherapyCategory: Identifiable {
     let tint: Color
     let examples: String
 
+    static let therapySession = TherapyCategory(
+        id: "therapySession",
+        title: "Therapy Session",
+        icon: "figure.mind.and.body",
+        tint: Color(red: 0.60, green: 0.78, blue: 0.92),
+        examples: "Appointments, exercises, notes"
+    )
+
     static let all: [TherapyCategory] = [
         TherapyCategory(
             id: "physical",
@@ -11318,7 +11358,7 @@ struct TherapyCategory: Identifiable {
     ]
 
     static func category(id: String) -> TherapyCategory? {
-        all.first { $0.id == id }
+        ([therapySession] + all).first { $0.id == id }
     }
 }
 
