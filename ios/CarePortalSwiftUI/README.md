@@ -13,23 +13,20 @@ Native SwiftUI login and sign-up screens for the Care Portal app.
 - `AuthAPI.swift`: `URLSession` client for the existing backend.
 - `Models.swift`: request, response, user, and role models.
 - `AuthComponents.swift`: shared fields, buttons, message banner, and colors.
-- `Info.plist`: local-development HTTP permission for the backend.
+- `APIConfig.swift`: backend API base URL.
+- `Info.plist`: local-development HTTP permission for optional local backend testing.
 
 ## Backend
 
 The app is pointed at:
 
 ```text
-http://127.0.0.1:3002
+https://fsyadmin.top
 ```
 
-That matches this project's Express backend when it is running with:
+That matches the deployed Koa backend for the admin/site API.
 
-```bash
-npm run server
-```
-
-For a real iPhone device, replace the API base URL in `AuthAPI.swift` with the Mac's local network IP address, such as:
+For local backend testing, temporarily change `APIConfig.swift` to your local or LAN backend URL, such as:
 
 ```swift
 URL(string: "http://192.168.1.20:3002")

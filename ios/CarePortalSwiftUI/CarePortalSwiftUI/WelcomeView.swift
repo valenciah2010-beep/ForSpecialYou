@@ -12208,7 +12208,7 @@ struct NutrientView: View {
             } catch {
                 if showFailure {
                     await MainActor.run {
-                        saveMessage = localizedAppString("Meal saved on this phone, but backend sync failed. Make sure the server is running on port 3002.")
+                        saveMessage = localizedAppString("Meal saved on this phone, but backend sync failed. Make sure the server is reachable at https://fsyadmin.top.")
                     }
                 }
                 print("Saved nutrient meals sync failed for user \(user.id): \(error.localizedDescription)")

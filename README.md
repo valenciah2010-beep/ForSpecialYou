@@ -54,7 +54,9 @@ This project has a Vue + Vite frontend, a Node.js + Koa2 backend, and a MySQL us
    cp .env.example .env
    ```
 
-4. Update `.env` with your MySQL username and password. Keep `HOST=127.0.0.1` for local development.
+4. Update `.env` with your MySQL username and password.
+   - For local backend development, keep `HOST=127.0.0.1`.
+   - For server deployment behind Nginx, use `HOST=127.0.0.1`, `PORT=3002`, `PUBLIC_ORIGIN=https://fsyadmin.top`, and `COOKIE_SECURE=true`.
 
 ## Run
 
@@ -79,9 +81,22 @@ Open the frontend at:
 http://localhost:5173/
 ```
 
-The frontend is now an admin-only portal. Log in with a user whose role is `admin` to view simulator app users. Vite proxies `/api` to the backend during local development.
+The frontend is now an admin-only portal. Log in with a user whose role is `admin` to view simulator app users.
+By default, the web frontend calls `https://fsyadmin.top` for API requests, including during local Vite development. Override `VITE_API_BASE_URL` only if you intentionally want a different backend.
 
 Simulator app parent sign-up and log-in still use the backend API, but website user-list and user-management routes require an admin session.
+
+## fsyadmin.top Deployment
+
+Build the admin site and run the Koa backend on the server:
+
+```bash
+npm install
+npm run build
+PORT=3002 HOST=127.0.0.1 PUBLIC_ORIGIN=https://fsyadmin.top COOKIE_SECURE=true npm run server
+```
+
+Point Nginx for `fsyadmin.top` to the Koa backend on `127.0.0.1:3002`. The backend serves the built admin site from `dist` and all `/api/*` routes from the same origin.
 
 ## Structure
 

@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { serverConfig } from '../config.js';
 import { pool } from '../db.js';
 import { parseStoredJSON, publicUser } from '../utils/users.js';
 import { ensureDatabaseShapeReady } from './databaseShape.js';
@@ -24,22 +25,40 @@ export function parseCookies(cookieHeader = '') {
 }
 
 export function setAdminSessionCookie(ctx, token) {
+  const cookieParts = [
+    `${adminSessionCookieName}=${encodeURIComponent(token)}`,
+    'Path=/',
+    'HttpOnly',
+    `SameSite=${serverConfig.cookieSecure ? 'None' : 'Lax'}`,
+    `Max-Age=${adminSessionMaxAgeMs / 1000}`
+  ];
+
+  if (serverConfig.cookieSecure) {
+    cookieParts.push('Secure');
+  }
+
   ctx.set(
     'Set-Cookie',
-    [
-      `${adminSessionCookieName}=${encodeURIComponent(token)}`,
-      'Path=/',
-      'HttpOnly',
-      'SameSite=Lax',
-      `Max-Age=${adminSessionMaxAgeMs / 1000}`
-    ].join('; ')
+    cookieParts.join('; ')
   );
 }
 
 export function clearAdminSessionCookie(ctx) {
+  const cookieParts = [
+    `${adminSessionCookieName}=`,
+    'Path=/',
+    'HttpOnly',
+    `SameSite=${serverConfig.cookieSecure ? 'None' : 'Lax'}`,
+    'Max-Age=0'
+  ];
+
+  if (serverConfig.cookieSecure) {
+    cookieParts.push('Secure');
+  }
+
   ctx.set(
     'Set-Cookie',
-    `${adminSessionCookieName}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`
+    cookieParts.join('; ')
   );
 }
 
