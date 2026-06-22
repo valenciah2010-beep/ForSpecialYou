@@ -72,9 +72,42 @@ func localizedDateString(
     return formatter.string(from: date)
 }
 
+func localizedDateFormatString(_ date: Date, format: String) -> String {
+    let code = UserDefaults.standard.string(forKey: AppLanguage.storageKey) ?? AppLanguage.english.rawValue
+    let formatter = DateFormatter()
+    formatter.locale = AppLanguage(code: code).locale
+    formatter.dateFormat = format
+    return formatter.string(from: date)
+}
+
 func localizedSavedAIText(_ text: String) -> String {
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return trimmed }
+
+    let localizedExact = localizedAppString(trimmed)
+    let languageCode = UserDefaults.standard.string(forKey: AppLanguage.storageKey) ?? AppLanguage.english.rawValue
+    guard AppLanguage(code: languageCode) == .chinese else {
+        return localizedExact
+    }
+
+    let structuredPrefixes = [
+        "Calories:": "热量：",
+        "Protein:": "蛋白质：",
+        "Carbs:": "碳水：",
+        "Fats:": "脂肪：",
+        "Fat:": "脂肪：",
+        "Calcium:": "钙：",
+        "Vitamin D:": "维生素 D：",
+        "Iron:": "铁：",
+        "Water:": "饮水：",
+        "Other supplements:": "其他补充剂："
+    ]
+
+    for (prefix, localizedPrefix) in structuredPrefixes {
+        if trimmed.hasPrefix(prefix) {
+            return localizedPrefix + trimmed.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)
+        }
+    }
 
     let translations = [
         "This meal offers a balanced mix of protein, fiber, and fresh fruit for a nutritious start.": "这份餐食含有蛋白质、膳食纤维和新鲜水果，整体搭配较均衡。",
@@ -87,5 +120,5 @@ func localizedSavedAIText(_ text: String) -> String {
         "Sugar content includes natural fruit sugars and honey from yogurt.": "糖含量包括水果中的天然糖分，以及酸奶中的蜂蜜。"
     ]
 
-    return localizedAppString(trimmed) == trimmed ? translations[trimmed] ?? trimmed : localizedAppString(trimmed)
+    return localizedExact == trimmed ? translations[trimmed] ?? trimmed : localizedExact
 }

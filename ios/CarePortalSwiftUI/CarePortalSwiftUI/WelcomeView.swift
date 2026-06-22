@@ -8,28 +8,35 @@ import UserNotifications
 struct WelcomeView: View {
     let user: CarePortalUser
     let logout: () -> Void
+    @State private var selectedTab = 0
 
     var body: some View {
-        TabView {
-            BasicHealthView(user: user)
+        TabView(selection: $selectedTab) {
+            BasicHealthView(user: user) {
+                selectedTab = 3
+            }
                 .tabItem {
                     Label(localizedAppString("Health"), systemImage: "heart.text.square")
                 }
+                .tag(0)
 
             TherapyTrackingView(user: user)
                 .tabItem {
                     Label(localizedAppString("Therapy"), systemImage: "figure.mind.and.body")
                 }
+                .tag(1)
 
             NutrientView(user: user)
                 .tabItem {
                     Label(localizedAppString("Nutrient"), systemImage: "leaf")
                 }
+                .tag(2)
 
             ProfileView(user: user, logout: logout)
                 .tabItem {
                     Label(localizedAppString("Profile"), systemImage: "person.crop.circle")
                 }
+                .tag(3)
         }
         .tint(AppTheme.accent)
     }
@@ -37,6 +44,7 @@ struct WelcomeView: View {
 
 struct BasicHealthView: View {
     let user: CarePortalUser
+    let openProfile: () -> Void
     @AppStorage(AppLanguage.storageKey) private var languageCode = AppLanguage.english.rawValue
     @AppStorage private var childName: String
     @AppStorage private var birthDate: String
@@ -49,11 +57,14 @@ struct BasicHealthView: View {
     @AppStorage private var healthLogData: Data
     @AppStorage private var medicationData: Data
     @AppStorage private var medicationCheckData: Data
+    @AppStorage private var clearedNotificationData: Data
     @AppStorage private var healthInsightCacheData: Data
     @AppStorage private var nutritionGoalsData: Data
     @State private var isQuickLogEditorPresented = false
     @State private var activeLogInput: HealthLogInputTarget?
     @State private var activeSeizureTimer: QuickLogOption?
+    @State private var activeMeltdownLog: QuickLogOption?
+    @State private var activeStimmingLog: QuickLogOption?
     @State private var activePainLog: QuickLogOption?
     @State private var activeMedicineLog: QuickLogOption?
     @State private var activeMoodLog: QuickLogOption?
@@ -67,9 +78,12 @@ struct BasicHealthView: View {
     @State private var isLoadingHealthInsights = false
     @State private var areHealthInsightsUnavailable = false
     @State private var lastHealthInsightRequestKey: String?
+    @State private var isDailyNotificationsPresented = false
+    @State private var dailyNotifications: [DailyNotificationItem] = []
 
-    init(user: CarePortalUser) {
+    init(user: CarePortalUser, openProfile: @escaping () -> Void = {}) {
         self.user = user
+        self.openProfile = openProfile
         self._childName = AppStorage(wrappedValue: "", "profile.\(user.id).fullName")
         self._birthDate = AppStorage(wrappedValue: "", "profile.\(user.id).birthDate")
         self._supportNeeds = AppStorage(wrappedValue: "", "profile.\(user.id).phone")
@@ -84,6 +98,7 @@ struct BasicHealthView: View {
         self._healthLogData = AppStorage(wrappedValue: Data(), "health.\(user.id).logData")
         self._medicationData = AppStorage(wrappedValue: Data(), "health.\(user.id).medicationData")
         self._medicationCheckData = AppStorage(wrappedValue: Data(), "health.\(user.id).medicationCheckData")
+        self._clearedNotificationData = AppStorage(wrappedValue: Data(), "health.\(user.id).clearedNotificationData")
         self._healthInsightCacheData = AppStorage(wrappedValue: Data(), "health.\(user.id).insightCacheData")
         self._nutritionGoalsData = AppStorage(wrappedValue: Data(), "nutrient.\(user.id).nutritionGoalsData")
     }
@@ -95,7 +110,9 @@ struct BasicHealthView: View {
                     HealthDashboardHeader(
                         childName: displayChildName,
                         parentName: user.nickname,
-                        imageData: profileImageData
+                        imageData: profileImageData,
+                        onProfileTap: openProfile,
+                        onNotificationTap: showDailyNotifications
                     )
 
                     HStack {
@@ -146,6 +163,10 @@ struct BasicHealthView: View {
                                 QuickLogCard(option: option) {
                                     if option.id == "seizure" {
                                         activeSeizureTimer = option
+                                    } else if option.id == "meltdown" {
+                                        activeMeltdownLog = option
+                                    } else if option.id == "stimming" {
+                                        activeStimmingLog = option
                                     } else if option.id == "pain" {
                                         activePainLog = option
                                     } else if option.id == "medsFood" {
@@ -267,6 +288,16 @@ struct BasicHealthView: View {
                     saveLogEntry(entry)
                 }
             }
+            .sheet(item: $activeMeltdownLog) { option in
+                MeltdownLogEntrySheet(option: option) { entry in
+                    saveLogEntry(entry)
+                }
+            }
+            .sheet(item: $activeStimmingLog) { option in
+                StimmingTicsLogEntrySheet(option: option) { entry in
+                    saveLogEntry(entry)
+                }
+            }
             .sheet(item: $activePainLog) { option in
                 PainLogEntrySheet(option: option) { entry in
                     saveLogEntry(entry)
@@ -290,6 +321,14 @@ struct BasicHealthView: View {
                 CyclicVomitingLogSheet(option: option, userID: user.id) { entry in
                     saveLogEntry(entry)
                 }
+            }
+            .sheet(isPresented: $isDailyNotificationsPresented) {
+                DailyNotificationsSheet(
+                    notifications: dailyNotifications,
+                    onClear: clearDailyNotification,
+                    onMarkTaken: markNotificationMedicationTaken
+                )
+                .presentationDetents([.medium, .large])
             }
             .onAppear {
                 syncParentAppData()
@@ -576,6 +615,231 @@ struct BasicHealthView: View {
         }
     }
 
+    private func showDailyNotifications() {
+        UNUserNotificationCenter.current().getDeliveredNotifications { notifications in
+            let calendar = Calendar.current
+            let clearedIDs = clearedDailyNotificationIDs
+            let deliveredItems = notifications
+                .filter { calendar.isDateInToday($0.date) }
+                .map { notification in
+                    let isMedicineReminder = isMedicationReminderNotification(notification)
+                    let checklistID = medicationChecklistID(for: notification)
+                    return DailyNotificationItem(
+                        notificationIdentifier: notification.request.identifier,
+                        date: notification.date,
+                        title: notification.request.content.title,
+                        body: notification.request.content.body,
+                        isMedicineReminder: isMedicineReminder,
+                        medicationChecklistID: checklistID
+                    )
+                }
+                .filter { !clearedIDs.contains($0.clearKey) }
+
+            let deliveredChecklistIDs = Set(deliveredItems.compactMap(\.medicationChecklistID))
+            let scheduledItems = scheduledMedicineNotificationItems()
+                .filter { !clearedIDs.contains($0.clearKey) }
+                .filter { !deliveredChecklistIDs.contains($0.medicationChecklistID ?? "") }
+
+            let items = (deliveredItems + scheduledItems)
+                .sorted { $0.date > $1.date }
+
+            DispatchQueue.main.async {
+                dailyNotifications = items
+                isDailyNotificationsPresented = true
+            }
+        }
+    }
+
+    private func clearDailyNotification(_ notification: DailyNotificationItem) {
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [notification.notificationIdentifier])
+        saveClearedDailyNotificationID(notification.clearKey)
+        dailyNotifications.removeAll { $0.id == notification.id }
+    }
+
+    private func markNotificationMedicationTaken(_ notification: DailyNotificationItem) {
+        guard let checklistID = notification.medicationChecklistID else {
+            clearDailyNotification(notification)
+            return
+        }
+
+        var updatedState = medicationCheckState
+        if updatedState.dateKey != MedicationCheckState.todayKey {
+            updatedState = MedicationCheckState.today()
+        }
+
+        if !updatedState.checkedIDs.contains(checklistID) {
+            updatedState.checkedIDs.append(checklistID)
+            updatedState.checkedIDs.sort()
+        }
+
+        saveMedicationCheckState(updatedState)
+        clearDailyNotification(notification)
+    }
+
+    private func medicationChecklistID(for notification: UNNotification) -> String? {
+        if let checklistID = notification.request.content.userInfo["medicationChecklistID"] as? String {
+            return checklistID
+        }
+
+        guard isMedicationReminderNotification(notification) else {
+            return nil
+        }
+
+        let body = notification.request.content.body.lowercased()
+        let calendar = Calendar.current
+        let reminderMinutes = calendar.component(.hour, from: notification.date) * 60
+            + calendar.component(.minute, from: notification.date)
+        let candidates = todayMedicationChecklistRows.filter { row in
+            abs(row.sortMinutes - reminderMinutes) <= 2
+        }
+
+        return candidates.first { row in
+            let name = row.medication.displayName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let dose = row.dose.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let matchesName = name.isEmpty || body.contains(name)
+            let matchesDose = dose.isEmpty || body.contains(dose)
+            return matchesName && matchesDose
+        }?.id ?? candidates.first?.id
+    }
+
+    private func isMedicationReminderNotification(_ notification: UNNotification) -> Bool {
+        let userInfo = notification.request.content.userInfo
+        if let kind = userInfo["kind"] as? String, kind == "medicineReminder" {
+            return true
+        }
+
+        let title = notification.request.content.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let knownTitles = [
+            "Medicine Reminder",
+            localizedAppString("Medicine Reminder", languageCode: "en"),
+            localizedAppString("Medicine Reminder", languageCode: "zh-Hans")
+        ]
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+
+        if knownTitles.contains(title) {
+            return true
+        }
+
+        let body = notification.request.content.body.lowercased()
+        return body.contains("time to take")
+    }
+
+    private var clearedDailyNotificationIDs: Set<String> {
+        guard !clearedNotificationData.isEmpty,
+              let savedState = try? JSONDecoder().decode(DailyNotificationDismissState.self, from: clearedNotificationData),
+              savedState.dateKey == MedicationCheckState.todayKey else {
+            return []
+        }
+
+        return Set(savedState.clearedIDs)
+    }
+
+    private func saveClearedDailyNotificationID(_ id: String) {
+        guard !id.isEmpty else { return }
+
+        var state = DailyNotificationDismissState(dateKey: MedicationCheckState.todayKey, clearedIDs: Array(clearedDailyNotificationIDs))
+        if !state.clearedIDs.contains(id) {
+            state.clearedIDs.append(id)
+            state.clearedIDs.sort()
+        }
+
+        if let encoded = try? JSONEncoder().encode(state) {
+            clearedNotificationData = encoded
+        }
+    }
+
+    private func scheduledMedicineNotificationItems(calendar: Calendar = .current) -> [DailyNotificationItem] {
+        let currentMinutes = calendar.component(.hour, from: Date()) * 60 + calendar.component(.minute, from: Date())
+        let checkedIDs = medicationCheckState.dateKey == MedicationCheckState.todayKey
+            ? Set(medicationCheckState.checkedIDs)
+            : []
+
+        return todayMedicationChecklistRows
+            .filter { $0.sortMinutes <= currentMinutes }
+            .filter { !checkedIDs.contains($0.id) }
+            .map { row in
+                DailyNotificationItem(
+                    notificationIdentifier: "scheduled-medicine.\(MedicationCheckState.todayKey).\(row.id)",
+                    date: dateForToday(minutes: row.sortMinutes, calendar: calendar),
+                    title: localizedAppString("Medicine Reminder"),
+                    body: medicineReminderBody(for: row),
+                    isMedicineReminder: true,
+                    medicationChecklistID: row.id
+                )
+            }
+    }
+
+    private func dateForToday(minutes: Int, calendar: Calendar = .current) -> Date {
+        calendar.date(
+            bySettingHour: max(0, min(23, minutes / 60)),
+            minute: max(0, min(59, minutes % 60)),
+            second: 0,
+            of: Date()
+        ) ?? Date()
+    }
+
+    private func medicineReminderBody(for row: MedicationChecklistItem) -> String {
+        let name = row.medication.displayName.isEmpty ? localizedAppString("medicine") : row.medication.displayName
+        let dose = row.dose.trimmingCharacters(in: .whitespacesAndNewlines)
+        return dose.isEmpty ? "Time to take \(name)." : "Time to take \(name) \(dose)."
+    }
+
+    private var todayMedicationChecklistRows: [MedicationChecklistItem] {
+        let today = MedicationWeekday.today()
+
+        return medications.flatMap { medication -> [MedicationChecklistItem] in
+            switch medication.mode {
+            case .daily:
+                return medication.dailyTimes.map { time in
+                    medicationChecklistItem(for: medication, day: nil, time: time)
+                }
+            case .intervalDays:
+                guard isMedicationDueToday(medication) else { return [] }
+                return medication.dailyTimes.map { time in
+                    medicationChecklistItem(for: medication, day: nil, time: time)
+                }
+            case .weekly:
+                guard medication.weeklyDays.contains(today) else { return [] }
+                return medication.weeklyTimes.map { time in
+                    medicationChecklistItem(for: medication, day: today, time: time)
+                }
+            }
+        }
+        .sorted { first, second in
+            if first.sortMinutes == second.sortMinutes {
+                return first.medication.displayName.localizedCaseInsensitiveCompare(second.medication.displayName) == .orderedAscending
+            }
+
+            return first.sortMinutes < second.sortMinutes
+        }
+    }
+
+    private func medicationChecklistItem(
+        for medication: MedicationSchedule,
+        day: MedicationWeekday?,
+        time: MedicationDayTime
+    ) -> MedicationChecklistItem {
+        MedicationChecklistItem(
+            id: MedicationChecklistIdentifier.id(for: medication, day: day, time: time),
+            medication: medication,
+            time: time,
+            dose: medication.dose(for: day, time: time),
+            timeText: medication.clockTimeText(for: day, time: time),
+            sortMinutes: medication.clockTimeMinutes(for: day, time: time)
+        )
+    }
+
+    private func isMedicationDueToday(_ medication: MedicationSchedule, calendar: Calendar = .current) -> Bool {
+        let interval = max(1, medication.intervalDays)
+        let start = calendar.startOfDay(for: medication.startDate)
+        let today = calendar.startOfDay(for: Date())
+        guard let days = calendar.dateComponents([.day], from: start, to: today).day, days >= 0 else {
+            return false
+        }
+
+        return days % interval == 0
+    }
+
     private func seizureType(from entry: HealthLogEntry) -> String? {
         let parts = entry.value
             .components(separatedBy: "·")
@@ -823,26 +1087,32 @@ struct HealthDashboardHeader: View {
     let childName: String
     let parentName: String
     let imageData: Data
+    let onProfileTap: () -> Void
+    let onNotificationTap: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(Color.white.opacity(0.75))
-                    .frame(width: 52, height: 52)
+            Button(action: onProfileTap) {
+                ZStack {
+                    Circle()
+                        .fill(Color.white.opacity(0.75))
+                        .frame(width: 52, height: 52)
 
-                if let image = profileImage {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: 48, height: 48)
-                        .clipShape(Circle())
-                } else {
-                    Text(initials)
-                        .font(.headline.weight(.black))
-                        .foregroundStyle(AppTheme.accent)
+                    if let image = profileImage {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 48, height: 48)
+                            .clipShape(Circle())
+                    } else {
+                        Text(initials)
+                            .font(.headline.weight(.black))
+                            .foregroundStyle(AppTheme.accent)
+                    }
                 }
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel(localizedAppString("Open profile"))
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(String(format: localizedAppString("%@'s Day"), childName))
@@ -858,9 +1128,14 @@ struct HealthDashboardHeader: View {
 
             Spacer()
 
-            Image(systemName: "bell.badge")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(AppTheme.text)
+            Button(action: onNotificationTap) {
+                Image(systemName: "bell.badge")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(AppTheme.text)
+                    .frame(width: 38, height: 38)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(localizedAppString("Open notifications"))
         }
         .padding(14)
         .background(Color(red: 0.82, green: 0.94, blue: 0.94))
@@ -879,6 +1154,123 @@ struct HealthDashboardHeader: View {
     private var profileImage: UIImage? {
         guard !imageData.isEmpty else { return nil }
         return UIImage(data: imageData)
+    }
+}
+
+struct DailyNotificationItem: Identifiable {
+    let id = UUID()
+    let notificationIdentifier: String
+    let date: Date
+    let title: String
+    let body: String
+    let isMedicineReminder: Bool
+    let medicationChecklistID: String?
+
+    var canMarkTaken: Bool {
+        isMedicineReminder
+    }
+
+    var clearKey: String {
+        medicationChecklistID ?? notificationIdentifier
+    }
+}
+
+struct DailyNotificationsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let notifications: [DailyNotificationItem]
+    let onClear: (DailyNotificationItem) -> Void
+    let onMarkTaken: (DailyNotificationItem) -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if notifications.isEmpty {
+                    VStack(spacing: 10) {
+                        Image(systemName: "bell.slash.fill")
+                            .font(.title2.weight(.bold))
+                            .foregroundStyle(AppTheme.accent)
+
+                        Text(localizedAppString("No notifications received today."))
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(28)
+                    .background(AppTheme.panel)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .listRowInsets(EdgeInsets(top: 18, leading: 18, bottom: 18, trailing: 18))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+                } else {
+                    ForEach(notifications) { notification in
+                        DailyNotificationRow(notification: notification)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button {
+                                    onClear(notification)
+                                } label: {
+                                    Label(localizedAppString("Clear"), systemImage: "xmark.circle.fill")
+                                }
+                                .tint(.red)
+
+                                if notification.canMarkTaken {
+                                    Button {
+                                        onMarkTaken(notification)
+                                    } label: {
+                                        Label(localizedAppString("Done"), systemImage: "checkmark.circle.fill")
+                                    }
+                                    .tint(AppTheme.accent)
+                                }
+                            }
+                            .listRowInsets(EdgeInsets(top: 6, leading: 18, bottom: 6, trailing: 18))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle(localizedAppString("Notifications Today"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(localizedAppString("Done")) {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct DailyNotificationRow: View {
+    let notification: DailyNotificationItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(notification.title.isEmpty ? localizedAppString("Notification") : localizedAppString(notification.title))
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(AppTheme.text)
+
+                Spacer()
+
+                Text(localizedDateString(notification.date, dateStyle: .none, timeStyle: .short))
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.secondary)
+            }
+
+            if !notification.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(localizedAppString(notification.body))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .background(AppTheme.panel)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
 
@@ -908,9 +1300,7 @@ struct QuickLogOption: Identifiable {
         QuickLogOption(id: "meltdown", title: "Meltdown", icon: "exclamationmark.triangle.fill", tint: Color(red: 0.96, green: 0.74, blue: 0.24)),
         QuickLogOption(id: "mood", title: "Mood", icon: "face.smiling", tint: Color(red: 0.95, green: 0.52, blue: 0.61)),
         QuickLogOption(id: "stimming", title: "Stimming/Tics", icon: "waveform.path.ecg", tint: Color(red: 0.51, green: 0.69, blue: 0.96)),
-        QuickLogOption(id: "bowel", title: "Bowel Movement", icon: "figure.core.training", tint: Color(red: 0.45, green: 0.75, blue: 0.52)),
         QuickLogOption(id: "accident", title: "Accident", icon: "drop.triangle.fill", tint: Color(red: 0.69, green: 0.61, blue: 0.91)),
-        QuickLogOption(id: "therapy", title: "Therapy Session", icon: "figure.mind.and.body", tint: Color(red: 0.60, green: 0.78, blue: 0.92)),
         QuickLogOption(id: "deescalation", title: "De-escalation", icon: "hand.raised.fill", tint: Color(red: 0.43, green: 0.77, blue: 0.62)),
         QuickLogOption(id: "allergy", title: "Allergic Reaction", icon: "allergens.fill", tint: Color(red: 0.96, green: 0.58, blue: 0.43)),
         QuickLogOption(id: "pain", title: "Pain", icon: "cross.case.fill", tint: Color(red: 0.92, green: 0.41, blue: 0.47)),
@@ -1127,6 +1517,86 @@ struct CyclicVomitingPatternsData: Codable {
     var weightKg = ""
     var weightUnit: String? = "Kg"
     var qualityOfLifeAgeGroup = ""
+    var qualityOfLifeResponses: [String: Int] = [:]
+
+    enum CodingKeys: String, CodingKey {
+        case episodesPastYear
+        case episodeInterval
+        case episodeDuration
+        case historicalTriggers
+        case otherHistoricalTriggers
+        case prodromalSymptoms
+        case otherProdromalSymptoms
+        case episodeSymptoms
+        case otherEpisodeSymptoms
+        case postdromalSymptoms
+        case otherPostdromalSymptoms
+        case heightCm
+        case heightUnit
+        case weightKg
+        case weightUnit
+        case qualityOfLifeAgeGroup
+        case qualityOfLifeResponses
+    }
+
+    init(
+        episodesPastYear: String = "",
+        episodeInterval: String = "",
+        episodeDuration: String = "",
+        historicalTriggers: [String] = [],
+        otherHistoricalTriggers: String = "",
+        prodromalSymptoms: [String] = [],
+        otherProdromalSymptoms: String = "",
+        episodeSymptoms: [String] = [],
+        otherEpisodeSymptoms: String = "",
+        postdromalSymptoms: [String] = [],
+        otherPostdromalSymptoms: String = "",
+        heightCm: String = "",
+        heightUnit: String? = "cm",
+        weightKg: String = "",
+        weightUnit: String? = "Kg",
+        qualityOfLifeAgeGroup: String = "",
+        qualityOfLifeResponses: [String: Int] = [:]
+    ) {
+        self.episodesPastYear = episodesPastYear
+        self.episodeInterval = episodeInterval
+        self.episodeDuration = episodeDuration
+        self.historicalTriggers = historicalTriggers
+        self.otherHistoricalTriggers = otherHistoricalTriggers
+        self.prodromalSymptoms = prodromalSymptoms
+        self.otherProdromalSymptoms = otherProdromalSymptoms
+        self.episodeSymptoms = episodeSymptoms
+        self.otherEpisodeSymptoms = otherEpisodeSymptoms
+        self.postdromalSymptoms = postdromalSymptoms
+        self.otherPostdromalSymptoms = otherPostdromalSymptoms
+        self.heightCm = heightCm
+        self.heightUnit = heightUnit
+        self.weightKg = weightKg
+        self.weightUnit = weightUnit
+        self.qualityOfLifeAgeGroup = qualityOfLifeAgeGroup
+        self.qualityOfLifeResponses = qualityOfLifeResponses
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        episodesPastYear = try container.decodeIfPresent(String.self, forKey: .episodesPastYear) ?? ""
+        episodeInterval = try container.decodeIfPresent(String.self, forKey: .episodeInterval) ?? ""
+        episodeDuration = try container.decodeIfPresent(String.self, forKey: .episodeDuration) ?? ""
+        historicalTriggers = try container.decodeIfPresent([String].self, forKey: .historicalTriggers) ?? []
+        otherHistoricalTriggers = try container.decodeIfPresent(String.self, forKey: .otherHistoricalTriggers) ?? ""
+        prodromalSymptoms = try container.decodeIfPresent([String].self, forKey: .prodromalSymptoms) ?? []
+        otherProdromalSymptoms = try container.decodeIfPresent(String.self, forKey: .otherProdromalSymptoms) ?? ""
+        episodeSymptoms = try container.decodeIfPresent([String].self, forKey: .episodeSymptoms) ?? []
+        otherEpisodeSymptoms = try container.decodeIfPresent(String.self, forKey: .otherEpisodeSymptoms) ?? ""
+        postdromalSymptoms = try container.decodeIfPresent([String].self, forKey: .postdromalSymptoms) ?? []
+        otherPostdromalSymptoms = try container.decodeIfPresent(String.self, forKey: .otherPostdromalSymptoms) ?? ""
+        heightCm = try container.decodeIfPresent(String.self, forKey: .heightCm) ?? ""
+        heightUnit = try container.decodeIfPresent(String.self, forKey: .heightUnit) ?? "cm"
+        weightKg = try container.decodeIfPresent(String.self, forKey: .weightKg) ?? ""
+        weightUnit = try container.decodeIfPresent(String.self, forKey: .weightUnit) ?? "Kg"
+        qualityOfLifeAgeGroup = try container.decodeIfPresent(String.self, forKey: .qualityOfLifeAgeGroup) ?? ""
+        qualityOfLifeResponses = try container.decodeIfPresent([String: Int].self, forKey: .qualityOfLifeResponses) ?? [:]
+    }
 }
 
 struct SleepSnapshotSummary {
@@ -1427,6 +1897,11 @@ enum MedicationTimeFormatting {
         let minutes = minutes(for: storedTime)
         let hour = minutes / 60
         let minute = minutes % 60
+        let languageCode = UserDefaults.standard.string(forKey: AppLanguage.storageKey) ?? AppLanguage.english.rawValue
+        if AppLanguage(code: languageCode) == .chinese {
+            return String(format: "%02d:%02d", hour, minute)
+        }
+
         let period = hour >= 12 ? "PM" : "AM"
         let displayHour = hour % 12 == 0 ? 12 : hour % 12
         return String(format: "%d:%02d %@", displayHour, minute, period)
@@ -1454,6 +1929,20 @@ enum MedicationTimeFormatting {
             second: 0,
             of: Date()
         ) ?? Date()
+    }
+}
+
+enum MedicationChecklistIdentifier {
+    static func id(for medication: MedicationSchedule, day: MedicationWeekday?, time: MedicationDayTime) -> String {
+        switch medication.mode {
+        case .daily:
+            return "\(medication.id.uuidString).\(time.rawValue)"
+        case .intervalDays:
+            return "\(medication.id.uuidString).interval.\(time.rawValue)"
+        case .weekly:
+            let dayKey = day?.rawValue ?? MedicationWeekday.today().rawValue
+            return "\(medication.id.uuidString).\(dayKey).\(time.rawValue)"
+        }
     }
 }
 
@@ -1499,6 +1988,10 @@ enum MedicationReminderScheduler {
                 content.title = localizedAppString("Medicine Reminder")
                 content.body = dose.bodyText
                 content.sound = .default
+                content.userInfo = [
+                    "kind": "medicineReminder",
+                    "medicationChecklistID": dose.checklistID
+                ]
 
                 let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: dose.fireDate)
                 let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
@@ -1545,7 +2038,8 @@ enum MedicationReminderScheduler {
                     ScheduledMedicationDose(
                         identifier: "\(identifierPrefix)\(medication.id.uuidString).\(dateKey(day, calendar: calendar)).\(medication.doseKey(day: doseDay, time: dayTime))",
                         fireDate: fireDate,
-                        bodyText: reminderBody(for: medication, day: doseDay, time: dayTime)
+                        bodyText: reminderBody(for: medication, day: doseDay, time: dayTime),
+                        checklistID: MedicationChecklistIdentifier.id(for: medication, day: doseDay, time: dayTime)
                     )
                 )
             }
@@ -1605,6 +2099,7 @@ struct ScheduledMedicationDose {
     let identifier: String
     let fireDate: Date
     let bodyText: String
+    let checklistID: String
 }
 
 struct MedicationCheckState: Codable, Equatable {
@@ -1626,6 +2121,11 @@ struct MedicationCheckState: Codable, Equatable {
         let day = components.day ?? 0
         return String(format: "%04d-%02d-%02d", year, month, day)
     }
+}
+
+struct DailyNotificationDismissState: Codable, Equatable {
+    var dateKey: String
+    var clearedIDs: [String]
 }
 
 struct QuickLogCard: View {
@@ -1870,6 +2370,29 @@ struct SnapshotCard: View {
     }
 }
 
+struct ModalToolbarTitle: View {
+    let icon: String?
+    let title: String
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let icon, !icon.isEmpty {
+                Image(systemName: icon)
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(tint)
+            }
+
+            Text(localizedAppString(title))
+                .font(.headline.weight(.bold))
+                .foregroundStyle(AppTheme.text)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
 struct SleepRestSnapshotSheet: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -1947,7 +2470,7 @@ struct SleepRestSnapshotSheet: View {
                                 .font(.title3.weight(.bold))
                                 .foregroundStyle(AppTheme.text)
 
-                            Text("\(durationText) tracked")
+                            Text(String(format: localizedAppString("%@ tracked"), durationText))
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
                         }
@@ -2054,12 +2577,17 @@ struct SleepRestSnapshotSheet: View {
                 .padding(18)
             }
             .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle(localizedAppString("Sleep & Rest"))
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(localizedAppString("Cancel")) {
                         dismiss()
                     }
+                }
+
+                ToolbarItem(placement: .principal) {
+                    ModalToolbarTitle(icon: option.icon, title: option.title, tint: option.tint)
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
@@ -2095,7 +2623,7 @@ struct SleepRestSnapshotSheet: View {
     }
 
     private func formattedTime(_ date: Date) -> String {
-        date.formatted(date: .omitted, time: .shortened)
+        localizedDateString(date, dateStyle: .none, timeStyle: .short)
     }
 
     private static func prefill(from entry: HealthLogEntry?) -> SleepSnapshotPrefill {
@@ -2438,13 +2966,17 @@ struct DigestionSnapshotSheet: View {
                 .padding(18)
             }
             .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle(localizedAppString("Gut & Digestion"))
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(localizedAppString("Cancel")) {
                         dismiss()
                     }
+                }
+
+                ToolbarItem(placement: .principal) {
+                    ModalToolbarTitle(icon: option.icon, title: option.title, tint: option.tint)
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
@@ -2752,23 +3284,6 @@ struct HealthLogEntrySheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    HStack(spacing: 12) {
-                        Image(systemName: target.icon)
-                            .font(.title2.weight(.bold))
-                            .foregroundStyle(target.tint)
-                            .frame(width: 42, height: 42)
-                            .background(target.tint.opacity(0.16))
-                            .clipShape(Circle())
-
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(LocalizedStringKey(target.title))
-                                .font(.title3.weight(.bold))
-                            Text(LocalizedStringKey(target.logType == .quickLog ? "Quick log entry" : "Daily snapshot entry"))
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
                     VStack(alignment: .leading, spacing: 14) {
                         Toggle("Use current time", isOn: $useCurrentTime)
                             .font(.subheadline.weight(.semibold))
@@ -2835,6 +3350,10 @@ struct HealthLogEntrySheet: View {
                     }
                 }
 
+                ToolbarItem(placement: .principal) {
+                    ModalToolbarTitle(icon: target.icon, title: target.title, tint: target.tint)
+                }
+
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(localizedAppString("Save")) {
                         save()
@@ -2861,6 +3380,463 @@ struct HealthLogEntrySheet: View {
             value: value.trimmingCharacters(in: .whitespacesAndNewlines),
             comments: comments.trimmingCharacters(in: .whitespacesAndNewlines)
         )
+        onSave(entry)
+        dismiss()
+    }
+}
+
+struct MeltdownLogEntrySheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let option: QuickLogOption
+    let onSave: (HealthLogEntry) -> Void
+
+    @State private var timestamp = Date()
+    @State private var intensity = 3.0
+    @State private var selectedTriggers: Set<String> = []
+    @State private var selectedDuration = ""
+    @State private var selectedCalmingTools: Set<String> = []
+
+    private let triggerOptions = [
+        "Loud Noise",
+        "Crowds",
+        "Transitioning",
+        "Hunger",
+        "Fatigue",
+        "Unknown"
+    ]
+
+    private let durationOptions = [
+        "<5 mins",
+        "5-15 mins",
+        "15-30 mins",
+        "30+ mins"
+    ]
+
+    private let calmingToolOptions = [
+        "Deep Pressure",
+        "Headphones",
+        "Dim Lights",
+        "Weighted Blanket",
+        "Redirection"
+    ]
+
+    private var intensityDescription: String {
+        switch Int(intensity) {
+        case 1:
+            return "Mild Agitation/Crying"
+        case 2:
+            return "Low Distress"
+        case 3:
+            return "Moderate Meltdown"
+        case 4:
+            return "High Distress"
+        default:
+            return "Severe Meltdown/Safety Risk"
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        DatePicker(
+                            localizedAppString("Timestamp"),
+                            selection: $timestamp,
+                            displayedComponents: [.date, .hourAndMinute]
+                        )
+                        .font(.subheadline.weight(.semibold))
+
+                        VStack(alignment: .leading, spacing: 9) {
+                            HStack(alignment: .firstTextBaseline) {
+                                Text(localizedAppString("Intensity"))
+                                    .font(.subheadline.weight(.bold))
+                                    .foregroundStyle(AppTheme.text)
+
+                                Spacer()
+
+                                Text("\(Int(intensity))/5")
+                                    .font(.caption.weight(.black))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(option.tint)
+                                    .clipShape(Capsule())
+                            }
+
+                            Slider(value: $intensity, in: 1...5, step: 1)
+                                .tint(option.tint)
+
+                            HStack {
+                                Text(localizedAppString("1 = Mild Agitation/Crying"))
+                                Spacer()
+                                Text(localizedAppString("5 = Severe Meltdown/Safety Risk"))
+                            }
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.secondary)
+
+                            Text(localizedAppString(intensityDescription))
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(option.tint)
+                        }
+
+                        meltdownMultiSelectSection(
+                            title: "Triggers",
+                            options: triggerOptions,
+                            selection: $selectedTriggers
+                        )
+
+                        meltdownSingleSelectSection(
+                            title: "Duration",
+                            options: durationOptions,
+                            selection: $selectedDuration
+                        )
+
+                        meltdownMultiSelectSection(
+                            title: "Calming Tools Tried",
+                            options: calmingToolOptions,
+                            selection: $selectedCalmingTools
+                        )
+                    }
+                    .authPanel()
+                }
+                .padding(18)
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(localizedAppString("Cancel")) {
+                        dismiss()
+                    }
+                }
+
+                ToolbarItem(placement: .principal) {
+                    ModalToolbarTitle(icon: option.icon, title: option.title, tint: option.tint)
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(localizedAppString("Save")) {
+                        save()
+                    }
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(AppTheme.accent)
+                }
+            }
+        }
+        .presentationDetents([.large])
+    }
+
+    private func meltdownMultiSelectSection(
+        title: String,
+        options: [String],
+        selection: Binding<Set<String>>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(localizedAppString(title))
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(AppTheme.text)
+
+            FlowLayout(spacing: 8, rowSpacing: 8) {
+                ForEach(options, id: \.self) { chip in
+                    CyclicVomitingOptionChip(
+                        title: chip,
+                        isSelected: selection.wrappedValue.contains(chip),
+                        tint: option.tint
+                    ) {
+                        if selection.wrappedValue.contains(chip) {
+                            selection.wrappedValue.remove(chip)
+                        } else {
+                            selection.wrappedValue.insert(chip)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func meltdownSingleSelectSection(
+        title: String,
+        options: [String],
+        selection: Binding<String>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(localizedAppString(title))
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(AppTheme.text)
+
+            FlowLayout(spacing: 8, rowSpacing: 8) {
+                ForEach(options, id: \.self) { chip in
+                    CyclicVomitingOptionChip(
+                        title: chip,
+                        isSelected: selection.wrappedValue == chip,
+                        tint: option.tint
+                    ) {
+                        selection.wrappedValue = selection.wrappedValue == chip ? "" : chip
+                    }
+                }
+            }
+        }
+    }
+
+    private func save() {
+        let durationText = selectedDuration.isEmpty ? localizedAppString("Not selected") : localizedAppString(selectedDuration)
+        let triggersText = selectedTriggers.isEmpty
+            ? localizedAppString("Not selected")
+            : selectedTriggers.sorted().map { localizedAppString($0) }.joined(separator: ", ")
+        let toolsText = selectedCalmingTools.isEmpty
+            ? localizedAppString("Not selected")
+            : selectedCalmingTools.sorted().map { localizedAppString($0) }.joined(separator: ", ")
+        let intensityText = "\(Int(intensity))/5 - \(localizedAppString(intensityDescription))"
+        let comments = [
+            "Timestamp: \(localizedDateString(timestamp, dateStyle: .medium, timeStyle: .short))",
+            "Intensity: \(intensityText)",
+            "Triggers: \(triggersText)",
+            "Duration: \(durationText)",
+            "Calming Tools Tried: \(toolsText)"
+        ].joined(separator: "\n")
+
+        let entry = HealthLogEntry(
+            id: UUID(),
+            type: .quickLog,
+            categoryID: option.id,
+            title: option.title,
+            timestamp: timestamp,
+            severity: Int(intensity),
+            value: "\(localizedAppString("Meltdown")) · \(durationText)",
+            comments: comments
+        )
+
+        onSave(entry)
+        dismiss()
+    }
+}
+
+struct StimmingTicsLogEntrySheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let option: QuickLogOption
+    let onSave: (HealthLogEntry) -> Void
+
+    @State private var timestamp = Date()
+    @State private var selectedBehaviorTypes: Set<String> = []
+    @State private var selectedFrequency = ""
+    @State private var stateValue = 0.0
+    @State private var selectedContexts: Set<String> = []
+
+    private let behaviorOptions = [
+        "Hand Flapping",
+        "Vocal Tics/Sounds",
+        "Rocking",
+        "Pacing",
+        "Eye Blinking",
+        "Head Shaking",
+        "Repetitive Phrases"
+    ]
+
+    private let frequencyOptions = [
+        "Low (Occasional)",
+        "Medium (Frequent)",
+        "High (Constant)"
+    ]
+
+    private let contextOptions = [
+        "School/Therapy",
+        "Screen Time",
+        "Transitioning",
+        "Public Place",
+        "Relaxing at Home"
+    ]
+
+    private var apparentStateText: String {
+        stateValue < 0.5 ? "Joyful/Regulating (Happy)" : "Anxious/Stressed"
+    }
+
+    private var severityFromFrequency: Int {
+        switch selectedFrequency {
+        case "High (Constant)":
+            return 5
+        case "Medium (Frequent)":
+            return 3
+        case "Low (Occasional)":
+            return 1
+        default:
+            return stateValue < 0.5 ? 2 : 4
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        DatePicker(
+                            localizedAppString("Timestamp"),
+                            selection: $timestamp,
+                            displayedComponents: [.date, .hourAndMinute]
+                        )
+                        .font(.subheadline.weight(.semibold))
+
+                        stimmingMultiSelectSection(
+                            title: "Behavior Type",
+                            options: behaviorOptions,
+                            selection: $selectedBehaviorTypes
+                        )
+
+                        stimmingFrequencySection
+
+                        apparentStateSection
+
+                        stimmingMultiSelectSection(
+                            title: "Context/Setting",
+                            options: contextOptions,
+                            selection: $selectedContexts
+                        )
+                    }
+                    .authPanel()
+                }
+                .padding(18)
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(localizedAppString("Cancel")) {
+                        dismiss()
+                    }
+                }
+
+                ToolbarItem(placement: .principal) {
+                    ModalToolbarTitle(icon: option.icon, title: option.title, tint: option.tint)
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(localizedAppString("Save Log")) {
+                        save()
+                    }
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(AppTheme.accent)
+                }
+            }
+        }
+        .presentationDetents([.large])
+    }
+
+    private var stimmingFrequencySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(localizedAppString("Frequency"))
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(AppTheme.text)
+
+            VStack(spacing: 8) {
+                ForEach(frequencyOptions, id: \.self) { frequency in
+                    Button {
+                        selectedFrequency = selectedFrequency == frequency ? "" : frequency
+                    } label: {
+                        HStack {
+                            Text(localizedAppString(frequency))
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(selectedFrequency == frequency ? .white : AppTheme.text)
+
+                            Spacer()
+
+                            Image(systemName: selectedFrequency == frequency ? "checkmark.circle.fill" : "circle")
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(selectedFrequency == frequency ? .white : .secondary.opacity(0.65))
+                        }
+                        .padding(14)
+                        .frame(maxWidth: .infinity)
+                        .background(selectedFrequency == frequency ? option.tint : AppTheme.fieldBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private var apparentStateSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(localizedAppString("Apparent State"))
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(AppTheme.text)
+
+                Spacer()
+
+                Text(localizedAppString(apparentStateText))
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(option.tint)
+            }
+
+            Picker(localizedAppString("Apparent State"), selection: $stateValue) {
+                Text(localizedAppString("Joyful/Regulating (Happy)")).tag(0.0)
+                Text(localizedAppString("Anxious/Stressed")).tag(1.0)
+            }
+            .pickerStyle(.segmented)
+        }
+    }
+
+    private func stimmingMultiSelectSection(
+        title: String,
+        options: [String],
+        selection: Binding<Set<String>>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(localizedAppString(title))
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(AppTheme.text)
+
+            FlowLayout(spacing: 8, rowSpacing: 8) {
+                ForEach(options, id: \.self) { chip in
+                    CyclicVomitingOptionChip(
+                        title: chip,
+                        isSelected: selection.wrappedValue.contains(chip),
+                        tint: option.tint
+                    ) {
+                        if selection.wrappedValue.contains(chip) {
+                            selection.wrappedValue.remove(chip)
+                        } else {
+                            selection.wrappedValue.insert(chip)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func save() {
+        let behaviorText = selectedBehaviorTypes.isEmpty
+            ? localizedAppString("Not selected")
+            : selectedBehaviorTypes.sorted().map { localizedAppString($0) }.joined(separator: ", ")
+        let frequencyText = selectedFrequency.isEmpty ? localizedAppString("Not selected") : localizedAppString(selectedFrequency)
+        let contextText = selectedContexts.isEmpty
+            ? localizedAppString("Not selected")
+            : selectedContexts.sorted().map { localizedAppString($0) }.joined(separator: ", ")
+        let apparentState = localizedAppString(apparentStateText)
+
+        let comments = [
+            "Timestamp: \(localizedDateString(timestamp, dateStyle: .medium, timeStyle: .short))",
+            "Behavior Type: \(behaviorText)",
+            "Frequency: \(frequencyText)",
+            "Apparent State: \(apparentState)",
+            "Context/Setting: \(contextText)"
+        ].joined(separator: "\n")
+
+        let entry = HealthLogEntry(
+            id: UUID(),
+            type: .quickLog,
+            categoryID: option.id,
+            title: option.title,
+            timestamp: timestamp,
+            severity: severityFromFrequency,
+            value: "\(localizedAppString("Stimming/Tics")) · \(frequencyText)",
+            comments: comments
+        )
+
         onSave(entry)
         dismiss()
     }
@@ -2927,7 +3903,9 @@ struct CyclicVomitingLogSheet: View {
     @State private var childWeightKg = ""
     @State private var childWeightUnit = "Kg"
     @State private var qualityOfLifeAgeGroup = ""
+    @State private var qualityOfLifeResponses: [String: Int] = [:]
     @State private var isQualityOfLifeAssessmentPresented = false
+    @State private var isQualityOfLifeInfoPresented = false
 
     init(option: QuickLogOption, userID: Int, onSave: @escaping (HealthLogEntry) -> Void) {
         self.option = option
@@ -3085,6 +4063,17 @@ struct CyclicVomitingLogSheet: View {
         "1–12 months"
     ]
 
+    private var isQualityOfLifeAssessmentAvailable: Bool {
+        CyclicVomitingQualityOfLifeScoring.isAssessmentAvailable(for: qualityOfLifeAgeGroup)
+    }
+
+    private var qualityOfLifeScoreSummary: QualityOfLifeScoreSummary? {
+        CyclicVomitingQualityOfLifeScoring.summary(
+            for: qualityOfLifeAgeGroup,
+            responses: qualityOfLifeResponses
+        )
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -3125,6 +4114,10 @@ struct CyclicVomitingLogSheet: View {
                     Button(localizedAppString("Cancel")) {
                         dismiss()
                     }
+                }
+
+                ToolbarItem(placement: .principal) {
+                    ModalToolbarTitle(icon: option.icon, title: option.title, tint: option.tint)
                 }
 
                 ToolbarItemGroup(placement: .topBarTrailing) {
@@ -3191,10 +4184,19 @@ struct CyclicVomitingLogSheet: View {
         .sheet(isPresented: $isQualityOfLifeAssessmentPresented) {
             CyclicVomitingQualityOfLifeAssessmentSheet(
                 ageRange: qualityOfLifeAgeGroup,
-                tint: option.tint
-            )
+                tint: option.tint,
+                savedResponses: qualityOfLifeResponses
+            ) { responses in
+                qualityOfLifeResponses = responses
+                savePatterns(message: "Quality of life assessment saved.")
+            }
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
+        }
+        .alert(localizedAppString("About PedsQL"), isPresented: $isQualityOfLifeInfoPresented) {
+            Button(localizedAppString("OK"), role: .cancel) {}
+        } message: {
+            Text(localizedAppString("PedsQL is a pediatric quality-of-life questionnaire. It helps caregivers summarize how often a child has had problems with physical, emotional, social, and school activities during the past month. Scores are for tracking and discussion only, not a medical diagnosis."))
         }
     }
 
@@ -3630,32 +4632,87 @@ struct CyclicVomitingLogSheet: View {
                     selection: $qualityOfLifeAgeGroup,
                     tint: option.tint
                 )
-
-                Button {
-                    isQualityOfLifeAssessmentPresented = true
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "heart.text.square.fill")
-                            .font(.headline.weight(.bold))
-
-                        Text(localizedAppString("Assess Quality of Life Here"))
-                            .font(.headline.weight(.bold))
-
-                        Spacer()
-
-                        Image(systemName: "chevron.right")
-                            .font(.caption.weight(.black))
+                .onChange(of: qualityOfLifeAgeGroup) { oldValue, newValue in
+                    if oldValue != newValue {
+                        qualityOfLifeResponses = [:]
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(14)
-                    .foregroundStyle(qualityOfLifeAgeGroup.isEmpty ? Color.secondary : Color.white)
-                    .background(qualityOfLifeAgeGroup.isEmpty ? AppTheme.fieldBackground : option.tint)
+                }
+
+                if isQualityOfLifeAssessmentAvailable {
+                    HStack(spacing: 8) {
+                        Button {
+                            isQualityOfLifeAssessmentPresented = true
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "heart.text.square.fill")
+                                    .font(.subheadline.weight(.bold))
+
+                                Text(localizedAppString(qualityOfLifeResponses.isEmpty ? "Assess Quality of Life Here" : "Edit Quality of Life Assessment"))
+                                    .font(.subheadline.weight(.bold))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.72)
+
+                                Spacer(minLength: 6)
+
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.black))
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 11)
+                            .foregroundStyle(.white)
+                            .background(option.tint)
+                            .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+
+                        Button {
+                            isQualityOfLifeInfoPresented = true
+                        } label: {
+                            Image(systemName: "info.circle.fill")
+                                .font(.title3.weight(.bold))
+                                .foregroundStyle(option.tint)
+                                .frame(width: 44, height: 44)
+                                .background(option.tint.opacity(0.12))
+                                .clipShape(Circle())
+                                .accessibilityLabel(localizedAppString("About PedsQL"))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                if let qualityOfLifeScoreSummary {
+                    HStack(spacing: 8) {
+                        qualityOfLifeSummaryPill(title: "Total Score", value: qualityOfLifeScoreSummary.total)
+                        qualityOfLifeSummaryPill(title: "Physical Health", value: qualityOfLifeScoreSummary.physical)
+                        qualityOfLifeSummaryPill(title: "Psychosocial", value: qualityOfLifeScoreSummary.psychosocial)
+                    }
+                    .padding(10)
+                    .background(option.tint.opacity(0.12))
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
-                .buttonStyle(.plain)
-                .disabled(qualityOfLifeAgeGroup.isEmpty)
             }
         }
+    }
+
+    private func qualityOfLifeSummaryPill(title: String, value: String) -> some View {
+        VStack(spacing: 3) {
+            Text(localizedAppString(title))
+                .font(.caption2.weight(.black))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+
+            Text(value)
+                .font(.subheadline.weight(.black))
+                .foregroundStyle(AppTheme.text)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .background(.white.opacity(0.78))
+        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
     }
 
     private func saveVomitingLog() {
@@ -3774,6 +4831,7 @@ struct CyclicVomitingLogSheet: View {
         childWeightKg = data.weightKg
         childWeightUnit = data.weightUnit ?? "Kg"
         qualityOfLifeAgeGroup = data.qualityOfLifeAgeGroup
+        qualityOfLifeResponses = data.qualityOfLifeResponses
     }
 
     private func clearProgress() {
@@ -3836,7 +4894,7 @@ struct CyclicVomitingLogSheet: View {
         }
     }
 
-    private func savePatterns() {
+    private func savePatterns(message: String = "Patterns saved.") {
         let data = CyclicVomitingPatternsData(
             episodesPastYear: episodesPastYear,
             episodeInterval: episodeInterval,
@@ -3853,12 +4911,13 @@ struct CyclicVomitingLogSheet: View {
             heightUnit: childHeightUnit,
             weightKg: childWeightKg.trimmingCharacters(in: .whitespacesAndNewlines),
             weightUnit: childWeightUnit,
-            qualityOfLifeAgeGroup: qualityOfLifeAgeGroup
+            qualityOfLifeAgeGroup: qualityOfLifeAgeGroup,
+            qualityOfLifeResponses: qualityOfLifeResponses
         )
 
         if let encoded = try? JSONEncoder().encode(data) {
             patternsData = encoded
-            patternsMessage = "Patterns saved."
+            patternsMessage = message
         }
     }
 
@@ -3907,13 +4966,247 @@ struct CyclicVomitingNavigationCard: View {
     }
 }
 
+struct QualityOfLifeScoreSummary {
+    let total: String
+    let physical: String
+    let psychosocial: String
+}
+
+enum CyclicVomitingQualityOfLifeScoring {
+    static func isAssessmentAvailable(for ageRange: String) -> Bool {
+        ageRange == "13–18 years old"
+            || ageRange == "8–12 years old"
+            || ageRange == "5–7 years old"
+            || ageRange == "2–4 years old"
+    }
+
+    static func sections(for ageRange: String) -> [(title: String, questions: [String])] {
+        switch ageRange {
+        case "8–12 years old":
+            return childSections
+        case "5–7 years old":
+            return youngChildSections
+        case "2–4 years old":
+            return toddlerSections
+        default:
+            return teenSections
+        }
+    }
+
+    static func summary(for ageRange: String, responses: [String: Int]) -> QualityOfLifeScoreSummary? {
+        guard isAssessmentAvailable(for: ageRange), !responses.isEmpty else { return nil }
+        let activeSections = sections(for: ageRange)
+        let total = meanConvertedScore(for: activeSections.flatMap(\.questions), responses: responses)
+        let physical = activeSections
+            .first(where: { $0.title == "Physical Functioning" })
+            .flatMap { meanConvertedScore(for: $0.questions, responses: responses) }
+        let psychosocial = meanConvertedScore(
+            for: activeSections.filter { $0.title != "Physical Functioning" }.flatMap(\.questions),
+            responses: responses
+        )
+
+        return QualityOfLifeScoreSummary(
+            total: scoreText(total),
+            physical: scoreText(physical),
+            psychosocial: scoreText(psychosocial)
+        )
+    }
+
+    static func meanConvertedScore(for questions: [String], responses: [String: Int]) -> Double? {
+        let scores = questions.compactMap { question -> Double? in
+            guard let rawScore = responses[question] else { return nil }
+            return convertedScaleScore(for: rawScore)
+        }
+
+        guard !scores.isEmpty else { return nil }
+        return scores.reduce(0, +) / Double(scores.count)
+    }
+
+    static func convertedScaleScore(for rawScore: Int) -> Double {
+        Double(4 - rawScore) * 25
+    }
+
+    static func scoreText(_ score: Double?) -> String {
+        guard let score else { return "--" }
+        if score.rounded() == score {
+            return "\(Int(score))"
+        }
+        return String(format: "%.1f", score)
+    }
+
+    private static let teenSections: [(title: String, questions: [String])] = [
+        (
+            title: "Physical Functioning",
+            questions: [
+                "Walking more than one block",
+                "Running",
+                "Participating in sports activity or exercise",
+                "Lifting something heavy",
+                "Doing chores around the house"
+            ]
+        ),
+        (
+            title: "Emotional Functioning",
+            questions: [
+                "Feeling afraid or scared",
+                "Feeling sad or blue",
+                "Feeling angry",
+                "Worrying about what will happen to him or her"
+            ]
+        ),
+        (
+            title: "Social Functioning",
+            questions: [
+                "Getting along with other teens",
+                "Other teens not wanting to be his or her friend",
+                "Getting teased by other teens"
+            ]
+        ),
+        (
+            title: "School Functioning",
+            questions: [
+                "Paying attention in class",
+                "Forgetting things",
+                "Keeping up with schoolwork"
+            ]
+        )
+    ]
+
+    private static let childSections: [(title: String, questions: [String])] = [
+        (
+            title: "Physical Functioning",
+            questions: [
+                "Walking more than one block",
+                "Running",
+                "Participating in sports activity or exercise",
+                "Lifting something heavy",
+                "Doing chores around the house"
+            ]
+        ),
+        (
+            title: "Emotional Functioning",
+            questions: [
+                "Feeling afraid or scared",
+                "Feeling sad or blue",
+                "Feeling angry",
+                "Worrying about what will happen to him or her"
+            ]
+        ),
+        (
+            title: "Social Functioning",
+            questions: [
+                "Getting along with other children",
+                "Other kids not wanting to be his or her friend",
+                "Getting teased by other children"
+            ]
+        ),
+        (
+            title: "School Functioning",
+            questions: [
+                "Paying attention in class",
+                "Forgetting things",
+                "Keeping up with schoolwork"
+            ]
+        )
+    ]
+
+    private static let youngChildSections: [(title: String, questions: [String])] = [
+        (
+            title: "Physical Functioning",
+            questions: [
+                "Walking more than one block",
+                "Running",
+                "Participating in sports activity or exercise",
+                "Lifting something heavy",
+                "Doing chores, like picking up his or her toys"
+            ]
+        ),
+        (
+            title: "Emotional Functioning",
+            questions: [
+                "Feeling afraid or scared",
+                "Feeling sad or blue",
+                "Feeling angry",
+                "Worrying about what will happen to him or her"
+            ]
+        ),
+        (
+            title: "Social Functioning",
+            questions: [
+                "Getting along with other children",
+                "Other kids not wanting to be his or her friend",
+                "Getting teased by other children"
+            ]
+        ),
+        (
+            title: "School Functioning",
+            questions: [
+                "Paying attention in class",
+                "Forgetting things",
+                "Keeping up with school activities"
+            ]
+        )
+    ]
+
+    private static let toddlerSections: [(title: String, questions: [String])] = [
+        (
+            title: "Physical Functioning",
+            questions: [
+                "Walking",
+                "Running",
+                "Participating in active play or exercise",
+                "Lifting something heavy",
+                "Helping to pick up his or her toys"
+            ]
+        ),
+        (
+            title: "Emotional Functioning",
+            questions: [
+                "Feeling afraid or scared",
+                "Feeling sad or blue",
+                "Feeling angry",
+                "Worrying"
+            ]
+        ),
+        (
+            title: "Social Functioning",
+            questions: [
+                "Playing with other children",
+                "Other kids not wanting to play with him or her",
+                "Getting teased by other children"
+            ]
+        ),
+        (
+            title: "School Functioning",
+            questions: [
+                "Doing the same school activities as peers",
+                "Missing school/daycare because of not feeling well",
+                "Missing school/daycare to go to the doctor or hospital"
+            ]
+        )
+    ]
+}
+
 struct CyclicVomitingQualityOfLifeAssessmentSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     let ageRange: String
     let tint: Color
+    let onSave: ([String: Int]) -> Void
     @State private var teenResponses: [String: Int] = [:]
     @State private var collapsedTeenSections: Set<String> = []
+
+    init(
+        ageRange: String,
+        tint: Color,
+        savedResponses: [String: Int],
+        onSave: @escaping ([String: Int]) -> Void
+    ) {
+        self.ageRange = ageRange
+        self.tint = tint
+        self.onSave = onSave
+        self._teenResponses = State(initialValue: savedResponses)
+    }
 
     private let responseOptions = [
         (label: "Never", value: 0),
@@ -4076,23 +5369,11 @@ struct CyclicVomitingQualityOfLifeAssessmentSheet: View {
     ]
 
     private var isClickableQualityAssessment: Bool {
-        ageRange == "13–18 years old"
-            || ageRange == "8–12 years old"
-            || ageRange == "5–7 years old"
-            || ageRange == "2–4 years old"
+        CyclicVomitingQualityOfLifeScoring.isAssessmentAvailable(for: ageRange)
     }
 
     private var activeAssessmentSections: [(title: String, questions: [String])] {
-        switch ageRange {
-        case "8–12 years old":
-            return childSections
-        case "5–7 years old":
-            return youngChildSections
-        case "2–4 years old":
-            return toddlerSections
-        default:
-            return teenSections
-        }
+        CyclicVomitingQualityOfLifeScoring.sections(for: ageRange)
     }
 
     private var activeAssessmentInstruction: String {
@@ -4206,6 +5487,7 @@ struct CyclicVomitingQualityOfLifeAssessmentSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(localizedAppString("Done")) {
+                        onSave(teenResponses)
                         dismiss()
                     }
                     .font(.headline.weight(.semibold))
@@ -4232,8 +5514,8 @@ struct CyclicVomitingQualityOfLifeAssessmentSheet: View {
                 .foregroundStyle(tint)
 
                 HStack(spacing: 8) {
-                    qualityScorePill(title: "Total", value: teenScoreText)
-                    qualityScorePill(title: "Physical", value: scoreText(physicalHealthScore))
+                    qualityScorePill(title: "Total Score", value: teenScoreText)
+                    qualityScorePill(title: "Physical Health", value: scoreText(physicalHealthScore))
                     qualityScorePill(title: "Psychosocial", value: scoreText(psychosocialHealthScore))
                 }
             }
@@ -4355,27 +5637,15 @@ struct CyclicVomitingQualityOfLifeAssessmentSheet: View {
     }
 
     private func meanConvertedScore(for questions: [String]) -> Double? {
-        let scores = questions.compactMap { question -> Double? in
-            guard let rawScore = teenResponses[question] else { return nil }
-            return convertedScaleScore(for: rawScore)
-        }
-
-        guard !scores.isEmpty else { return nil }
-        return scores.reduce(0, +) / Double(scores.count)
+        CyclicVomitingQualityOfLifeScoring.meanConvertedScore(for: questions, responses: teenResponses)
     }
 
     private func convertedScaleScore(for rawScore: Int) -> Double {
-        Double(4 - rawScore) * 25
+        CyclicVomitingQualityOfLifeScoring.convertedScaleScore(for: rawScore)
     }
 
     private func scoreText(_ score: Double?) -> String {
-        guard let score else { return "--" }
-
-        if score.rounded() == score {
-            return "\(Int(score))"
-        }
-
-        return String(format: "%.1f", score)
+        CyclicVomitingQualityOfLifeScoring.scoreText(score)
     }
 
     private var placeholderAssessment: some View {
@@ -5068,25 +6338,6 @@ struct NutritionSnapshotSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    HStack(spacing: 12) {
-                        Image(systemName: option.icon)
-                            .font(.title2.weight(.bold))
-                            .foregroundStyle(option.tint)
-                            .frame(width: 44, height: 44)
-                            .background(option.tint.opacity(0.16))
-                            .clipShape(Circle())
-
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(localizedAppString("Nutrition Goals"))
-                                .font(.title3.weight(.bold))
-                                .foregroundStyle(AppTheme.text)
-
-                            Text(localizedAppString("Calories, macros, supplements, and hydration"))
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
                     VStack(alignment: .leading, spacing: 16) {
                         if goals.isEmpty {
                             NutritionGoalsEditor(goals: $goals)
@@ -5109,13 +6360,17 @@ struct NutritionSnapshotSheet: View {
                 .padding(18)
             }
             .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle(localizedAppString("Nutrition"))
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(localizedAppString("Cancel")) {
                         dismiss()
                     }
+                }
+
+                ToolbarItem(placement: .principal) {
+                    ModalToolbarTitle(icon: option.icon, title: option.title, tint: option.tint)
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
@@ -5437,8 +6692,6 @@ struct MoodLogSheet: View {
             VStack(spacing: 0) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
-                        header
-
                         switch step {
                         case .kind:
                             kindStep
@@ -5480,30 +6733,13 @@ struct MoodLogSheet: View {
                     }
                     .foregroundStyle(AppTheme.accent)
                 }
+
+                ToolbarItem(placement: .principal) {
+                    ModalToolbarTitle(icon: option.icon, title: option.title, tint: option.tint)
+                }
             }
         }
         .presentationDetents([.large])
-    }
-
-    private var header: some View {
-        HStack(spacing: 12) {
-            Image(systemName: option.icon)
-                .font(.title2.weight(.bold))
-                .foregroundStyle(option.tint)
-                .frame(width: 44, height: 44)
-                .background(option.tint.opacity(0.16))
-                .clipShape(Circle())
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(localizedAppString("Track Emotion or Mood"))
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(AppTheme.text)
-
-                Text(LocalizedStringKey(MoodValence.title(for: valence)))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-        }
     }
 
     private var kindStep: some View {
@@ -5596,7 +6832,7 @@ struct MoodLogSheet: View {
     }
 
     private var currentTimeText: String {
-        Date().formatted(date: .omitted, time: .shortened)
+        localizedDateString(Date(), dateStyle: .none, timeStyle: .short)
     }
 
     private func toggleWord(_ word: String) {
@@ -5844,33 +7080,26 @@ struct MedicineLogSheet: View {
                     }
                 }
 
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .principal) {
+                    ModalToolbarTitle(icon: option.icon, title: option.title, tint: option.tint)
+                }
+
+                ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {
                         isMedicineManagerPresented = true
                     } label: {
                         Text(localizedAppString("Edit"))
-                            .font(.headline.weight(.semibold))
+                            .font(.subheadline.weight(.semibold))
                             .foregroundStyle(AppTheme.accent)
                     }
-                }
 
-                ToolbarItem(placement: .bottomBar) {
                     Button {
                         save()
                     } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "checkmark.circle.fill")
-                            Text(localizedAppString("Save"))
-                        }
-                            .font(.headline.weight(.bold))
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 13)
-                            .background(AppTheme.accent)
-                            .clipShape(Capsule())
-                            .shadow(color: AppTheme.accent.opacity(0.18), radius: 10, x: 0, y: 5)
+                        Text(localizedAppString("Save"))
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(AppTheme.accent)
                     }
-                    .buttonStyle(.plain)
                 }
             }
         }
@@ -5901,7 +7130,7 @@ struct MedicineLogSheet: View {
     }
 
     private var todayDateTitle: String {
-        Date().formatted(.dateTime.weekday(.wide).month(.wide).day().year())
+        localizedDateString(Date(), dateStyle: .full, timeStyle: .none)
     }
 
     private var medicationChecklistSection: some View {
@@ -5943,7 +7172,7 @@ struct MedicineLogSheet: View {
             case .daily:
                 return medication.dailyTimes.map { time in
                     MedicationChecklistItem(
-                        id: "\(medication.id.uuidString).\(time.rawValue)",
+                        id: MedicationChecklistIdentifier.id(for: medication, day: nil, time: time),
                         medication: medication,
                         time: time,
                         dose: medication.dose(for: nil, time: time),
@@ -5955,7 +7184,7 @@ struct MedicineLogSheet: View {
                 guard isMedicationDueToday(medication) else { return [] }
                 return medication.dailyTimes.map { time in
                     MedicationChecklistItem(
-                        id: "\(medication.id.uuidString).interval.\(time.rawValue)",
+                        id: MedicationChecklistIdentifier.id(for: medication, day: nil, time: time),
                         medication: medication,
                         time: time,
                         dose: medication.dose(for: nil, time: time),
@@ -5967,7 +7196,7 @@ struct MedicineLogSheet: View {
                 guard medication.weeklyDays.contains(today) else { return [] }
                 return medication.weeklyTimes.map { time in
                     MedicationChecklistItem(
-                        id: "\(medication.id.uuidString).\(today.rawValue).\(time.rawValue)",
+                        id: MedicationChecklistIdentifier.id(for: medication, day: today, time: time),
                         medication: medication,
                         time: time,
                         dose: medication.dose(for: today, time: time),
@@ -6093,6 +7322,28 @@ struct MedicationChecklistItem: Identifiable {
     let sortMinutes: Int
 }
 
+func localizedMedicineDoseText(_ text: String) -> String {
+    var localizedText = text
+    let terms = [
+        "Tablet(s)",
+        "Capsule(s)",
+        "Drop(s)",
+        "Dose",
+        "Round Tablet",
+        "Capsule",
+        "Liquid",
+        "Injection",
+        "Drops",
+        "Other"
+    ]
+
+    for term in terms {
+        localizedText = localizedText.replacingOccurrences(of: term, with: localizedAppString(term))
+    }
+
+    return localizedText
+}
+
 struct MedicineChecklistRow: View {
     let row: MedicationChecklistItem
     let isChecked: Bool
@@ -6119,7 +7370,7 @@ struct MedicineChecklistRow: View {
                         .foregroundStyle(AppTheme.text)
 
                     if !row.dose.isEmpty {
-                        Text(row.dose)
+                        Text(localizedMedicineDoseText(row.dose))
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                     }
@@ -6259,22 +7510,37 @@ struct MedicationEditorSheet: View {
     private var doseInputs: [MedicationDoseInput] {
         switch draft.mode {
         case .daily, .intervalDays:
-            return sortedTimes(draft.dailyTimes).map { time in
+            return sortedTimes(draft.dailyTimes).enumerated().map { index, time in
                 MedicationDoseInput(
                     id: draft.doseKey(day: nil, time: time),
-                    label: time.title,
+                    label: "Dose \(index + 1)",
                     time: time
                 )
             }
         case .weekly:
             return sortedDays(draft.weeklyDays).flatMap { day in
-                sortedTimes(draft.weeklyTimes).map { time in
+                sortedTimes(draft.weeklyTimes).enumerated().map { index, time in
                     MedicationDoseInput(
                         id: draft.doseKey(day: day, time: time),
-                        label: "\(day.shortTitle) \(time.title)",
+                        label: "\(day.shortTitle) Dose \(index + 1)",
                         time: time
                     )
                 }
+            }
+        }
+    }
+
+    private var timePickerInputs: [MedicationDoseInput] {
+        switch draft.mode {
+        case .daily, .intervalDays:
+            return doseInputs
+        case .weekly:
+            return sortedTimes(draft.weeklyTimes).enumerated().map { index, time in
+                MedicationDoseInput(
+                    id: weeklyTemplateKey(for: time),
+                    label: "Dose \(index + 1)",
+                    time: time
+                )
             }
         }
     }
@@ -6326,8 +7592,6 @@ struct MedicationEditorSheet: View {
         "Three times a day",
         "Multiple times a day"
     ]
-
-    private let intervalDayOptions = [2, 3, 4, 5, 6, 7, 14, 30]
 
     private var selectedDoseSlots: [MedicationDayTime] {
         switch draft.mode {
@@ -6401,7 +7665,7 @@ struct MedicationEditorSheet: View {
             }
         }
         .padding(12)
-        .background(MedicationFormStyle.background)
+        .background(MedicationFormStyle.detailBackground)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
@@ -6415,10 +7679,10 @@ struct MedicationEditorSheet: View {
                 applyDoseFrequency(frequency)
             }
 
-            if doseInputs.isEmpty {
+            if timePickerInputs.isEmpty {
                 EmptyView()
             } else {
-                ForEach(doseInputs) { input in
+                ForEach(timePickerInputs) { input in
                     HStack {
                         Text(LocalizedStringKey(input.label))
                             .font(.subheadline.weight(.semibold))
@@ -6428,13 +7692,13 @@ struct MedicationEditorSheet: View {
 
                         DatePicker(
                             input.label,
-                            selection: timeBinding(for: input.id, fallback: input.time),
+                            selection: medicationTimeBinding(for: input),
                             displayedComponents: .hourAndMinute
                         )
                         .labelsHidden()
                     }
                     .padding(12)
-                    .background(MedicationFormStyle.background)
+                    .background(MedicationFormStyle.detailBackground)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
             }
@@ -6463,7 +7727,7 @@ struct MedicationEditorSheet: View {
     private var howOftenTitle: String {
         switch draft.mode {
         case .intervalDays:
-            return "Every \(draft.intervalDays) days"
+            return "Every X days"
         default:
             return draft.mode.title
         }
@@ -6515,10 +7779,17 @@ struct MedicationEditorSheet: View {
             let removedTimes = draft.weeklyTimes.filter { !times.contains($0) }
             draft.weeklyTimes = times
 
+            for time in times {
+                let templateKey = weeklyTemplateKey(for: time)
+                draft.clockTimes[templateKey] = draft.clockTimes[templateKey, default: time.defaultClockTime]
+            }
+
             for day in draft.weeklyDays {
                 for time in times {
                     let key = draft.doseKey(day: day, time: time)
-                    draft.clockTimes[key] = draft.clockTimes[key, default: time.defaultClockTime]
+                    draft.clockTimes[key] = draft.clockTimes[key]
+                        ?? draft.clockTimes[weeklyTemplateKey(for: time)]
+                        ?? time.defaultClockTime
                 }
             }
 
@@ -6528,6 +7799,10 @@ struct MedicationEditorSheet: View {
                     draft.doses.removeValue(forKey: key)
                     draft.clockTimes.removeValue(forKey: key)
                 }
+            }
+
+            for time in removedTimes {
+                draft.clockTimes.removeValue(forKey: weeklyTemplateKey(for: time))
             }
         }
     }
@@ -6574,15 +7849,7 @@ struct MedicationEditorSheet: View {
                     }
 
                     if draft.mode == .intervalDays {
-                        MedicationFormMenu(
-                            title: "Every how many days?",
-                            value: "Every \(draft.intervalDays) days",
-                            options: intervalDayOptions.map { "Every \($0) days" }
-                        ) { title in
-                            if let days = intervalDayOptions.first(where: { title == "Every \($0) days" }) {
-                                draft.intervalDays = days
-                            }
-                        }
+                        MedicationIntervalDaysField(days: intervalDaysBinding)
                     }
 
                     if draft.mode == .weekly {
@@ -6603,7 +7870,7 @@ struct MedicationEditorSheet: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(AppTheme.text)
                         .padding(12)
-                        .background(MedicationFormStyle.background)
+                        .background(MedicationFormStyle.detailBackground)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                     ZStack(alignment: .topLeading) {
@@ -6621,7 +7888,7 @@ struct MedicationEditorSheet: View {
                             .scrollContentBackground(.hidden)
                             .padding(8)
                     }
-                    .background(MedicationFormStyle.background)
+                    .background(MedicationFormStyle.detailBackground)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
                 .padding(18)
@@ -6673,6 +7940,15 @@ struct MedicationEditorSheet: View {
         }
     }
 
+    private var intervalDaysBinding: Binding<String> {
+        Binding {
+            "\(max(1, draft.intervalDays))"
+        } set: { newValue in
+            let digits = newValue.filter(\.isNumber)
+            draft.intervalDays = max(1, min(365, Int(digits) ?? 1))
+        }
+    }
+
     private func doseBinding(for key: String) -> Binding<String> {
         Binding {
             draft.doses[key, default: ""]
@@ -6686,6 +7962,38 @@ struct MedicationEditorSheet: View {
             MedicationTimeFormatting.date(from: draft.clockTimes[key, default: fallback.defaultClockTime])
         } set: { newValue in
             draft.clockTimes[key] = MedicationTimeFormatting.storedTime(from: newValue)
+        }
+    }
+
+    private func medicationTimeBinding(for input: MedicationDoseInput) -> Binding<Date> {
+        switch draft.mode {
+        case .daily, .intervalDays:
+            return timeBinding(for: input.id, fallback: input.time)
+        case .weekly:
+            return weeklyTimeBinding(for: input.time)
+        }
+    }
+
+    private func weeklyTemplateKey(for time: MedicationDayTime) -> String {
+        "weeklyTemplate.\(time.rawValue)"
+    }
+
+    private func weeklyTimeBinding(for time: MedicationDayTime) -> Binding<Date> {
+        Binding {
+            let firstSelectedDayKey = sortedDays(draft.weeklyDays)
+                .first
+                .map { draft.doseKey(day: $0, time: time) }
+            let storedTime = firstSelectedDayKey.flatMap { draft.clockTimes[$0] }
+                ?? draft.clockTimes[weeklyTemplateKey(for: time)]
+                ?? time.defaultClockTime
+            return MedicationTimeFormatting.date(from: storedTime)
+        } set: { newValue in
+            let storedTime = MedicationTimeFormatting.storedTime(from: newValue)
+            draft.clockTimes[weeklyTemplateKey(for: time)] = storedTime
+
+            for day in draft.weeklyDays {
+                draft.clockTimes[draft.doseKey(day: day, time: time)] = storedTime
+            }
         }
     }
 
@@ -6758,7 +8066,9 @@ struct MedicationEditorSheet: View {
 
             for day in draft.weeklyDays {
                 let key = draft.doseKey(day: day, time: time)
-                draft.clockTimes[key] = draft.clockTimes[key, default: time.defaultClockTime]
+                draft.clockTimes[key] = draft.clockTimes[key]
+                    ?? draft.clockTimes[weeklyTemplateKey(for: time)]
+                    ?? time.defaultClockTime
             }
         }
     }
@@ -6777,7 +8087,9 @@ struct MedicationEditorSheet: View {
 
             for time in draft.weeklyTimes {
                 let key = draft.doseKey(day: day, time: time)
-                draft.clockTimes[key] = draft.clockTimes[key, default: time.defaultClockTime]
+                draft.clockTimes[key] = draft.clockTimes[key]
+                    ?? draft.clockTimes[weeklyTemplateKey(for: time)]
+                    ?? time.defaultClockTime
             }
         }
     }
@@ -6805,7 +8117,9 @@ struct MedicationEditorSheet: View {
             }
         }
         saved.clockTimes = doseInputs.reduce(into: [:]) { result, input in
-            result[input.id] = saved.clockTimes[input.id, default: input.time.defaultClockTime]
+            result[input.id] = saved.clockTimes[input.id]
+                ?? saved.clockTimes[weeklyTemplateKey(for: input.time)]
+                ?? input.time.defaultClockTime
         }
 
         onSave(saved)
@@ -6828,7 +8142,9 @@ struct MedicationDoseInput: Identifiable {
 }
 
 enum MedicationFormStyle {
-    static let background = Color(red: 0.88, green: 0.94, blue: 0.93)
+    static let background = Color(red: 0.88, green: 0.95, blue: 0.93)
+    static let detailBackground = AppTheme.panel
+    static let border = Color(red: 0.80, green: 0.90, blue: 0.88)
 }
 
 struct MedicationFormTextField: View {
@@ -6858,8 +8174,12 @@ struct MedicationFormTextField: View {
             }
         }
         .padding(12)
-        .background(MedicationFormStyle.background)
+        .background(AppTheme.panel)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(MedicationFormStyle.border.opacity(0.55), lineWidth: 1)
+        }
     }
 }
 
@@ -6893,8 +8213,49 @@ struct MedicationFormMenu: View {
             .padding(12)
             .background(MedicationFormStyle.background)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(MedicationFormStyle.border.opacity(0.55), lineWidth: 1)
+            }
         }
         .buttonStyle(.plain)
+    }
+}
+
+struct MedicationIntervalDaysField: View {
+    @Binding var days: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(localizedAppString("Every how many days?"))
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(AppTheme.text)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+
+            Spacer()
+
+            TextField("2", text: $days)
+                .keyboardType(.numberPad)
+                .multilineTextAlignment(.center)
+                .font(.headline.weight(.bold))
+                .foregroundStyle(AppTheme.text)
+                .frame(width: 58)
+                .padding(.vertical, 8)
+                .background(Color(red: 0.96, green: 0.98, blue: 0.97))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            Text(localizedAppString("days"))
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .background(MedicationFormStyle.detailBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(MedicationFormStyle.border.opacity(0.55), lineWidth: 1)
+        }
     }
 }
 
@@ -6999,6 +8360,10 @@ struct PainLogEntrySheet: View {
                     Button(localizedAppString("Cancel")) {
                         dismiss()
                     }
+                }
+
+                ToolbarItem(placement: .principal) {
+                    ModalToolbarTitle(icon: option.icon, title: option.title, tint: option.tint)
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
@@ -7874,29 +9239,15 @@ struct SeizureTimerSheet: View {
                                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                             }
 
-                            HStack(spacing: 12) {
-                                Button(role: .destructive) {
-                                    showingDeleteConfirmation = true
-                                } label: {
-                                    Text(localizedAppString("Delete"))
-                                        .font(.headline.weight(.bold))
-                                        .frame(maxWidth: .infinity)
-                                        .padding()
-                                        .background(Color.red.opacity(0.1))
-                                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                }
-
-                                Button {
-                                    save()
-                                } label: {
-                                    Text(localizedAppString("Save"))
-                                        .font(.headline.weight(.bold))
-                                        .foregroundStyle(.white)
-                                        .frame(maxWidth: .infinity)
-                                        .padding()
-                                        .background(AppTheme.accent)
-                                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                }
+                            Button(role: .destructive) {
+                                showingDeleteConfirmation = true
+                            } label: {
+                                Text(localizedAppString("Delete"))
+                                    .font(.headline.weight(.bold))
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(Color.red.opacity(0.1))
+                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                             }
                         }
                         .authPanel()
@@ -7905,7 +9256,8 @@ struct SeizureTimerSheet: View {
                 .padding(18)
             }
             .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle(localizedAppString("Seizure Track"))
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(localizedAppString("Cancel")) {
@@ -7915,6 +9267,18 @@ struct SeizureTimerSheet: View {
                             dismiss()
                         }
                     }
+                }
+
+                ToolbarItem(placement: .principal) {
+                    ModalToolbarTitle(icon: option.icon, title: option.title, tint: option.tint)
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(localizedAppString("Save")) {
+                        save()
+                    }
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(AppTheme.accent)
                 }
             }
             .confirmationDialog(
@@ -8012,7 +9376,7 @@ struct DurationNumberField: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(LocalizedStringKey(title))
+            Text(localizedAppString(title))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
 
@@ -8623,7 +9987,7 @@ struct SleepTrackerHistoryView: View {
         }
 
         let wakeText = selectedSleepRecord.wakingCount == 1 ? localizedAppString("1 wake-up") : String(format: localizedAppString("%d wake-ups"), selectedSleepRecord.wakingCount)
-        return "\(selectedSleepRecord.qualityTitle.uppercased()) · \(wakeText)"
+        return "\(localizedAppString(selectedSleepRecord.qualityTitle)) · \(wakeText)"
     }
 
     private var headerValue: String {
@@ -8636,7 +10000,7 @@ struct SleepTrackerHistoryView: View {
 
     private var headerDateText: String {
         if let selectedSleepRecord {
-            return selectedSleepRecord.date.formatted(.dateTime.month(.abbreviated).day().year())
+            return localizedDateString(selectedSleepRecord.date, dateStyle: .medium, timeStyle: .none)
         }
 
         return dateRangeText
@@ -8661,7 +10025,7 @@ struct SleepTrackerHistoryView: View {
                         VStack(alignment: .leading, spacing: 16) {
                             Picker(localizedAppString("Sleep range"), selection: $selectedPeriod) {
                                 ForEach(SleepHistoryPeriod.allCases) { period in
-                                    Text(period.shortTitle).tag(period)
+                                    Text(localizedAppString(period.shortTitle)).tag(period)
                                 }
                             }
                             .pickerStyle(.segmented)
@@ -8795,10 +10159,10 @@ enum SleepHistoryPeriod: String, CaseIterable, Identifiable {
         }
 
         if calendar.isDate(startDate, inSameDayAs: anchorDate) {
-            return anchorDate.formatted(.dateTime.month(.abbreviated).day().year())
+            return localizedDateString(anchorDate, dateStyle: .medium, timeStyle: .none)
         }
 
-        return "\(startDate.formatted(.dateTime.month(.abbreviated).day()))–\(anchorDate.formatted(.dateTime.month(.abbreviated).day().year()))"
+        return "\(localizedDateFormatString(startDate, format: "MMM d"))–\(localizedDateString(anchorDate, dateStyle: .medium, timeStyle: .none))"
     }
 }
 
@@ -8913,6 +10277,11 @@ struct SleepVerticalBarChart: View {
 
     static func hourLabel(_ minutes: Int) -> String {
         let hour = ((minutes / 60) % 24 + 24) % 24
+        let languageCode = UserDefaults.standard.string(forKey: AppLanguage.storageKey) ?? AppLanguage.english.rawValue
+        if AppLanguage(code: languageCode) == .chinese {
+            return String(format: "%02d:00", hour)
+        }
+
         switch hour {
         case 0:
             return "12 AM"
@@ -9030,7 +10399,7 @@ struct SleepChartItem: Identifiable {
                     startMinutes: record.startMinutes,
                     endMinutes: record.endMinutes,
                     durationMinutes: record.durationMinutes,
-                    label: date.formatted(.dateTime.weekday(.abbreviated))
+                    label: localizedDateFormatString(date, format: "EEE")
                 )
             }
 
@@ -9041,7 +10410,7 @@ struct SleepChartItem: Identifiable {
                 startMinutes: 22 * 60,
                 endMinutes: 22 * 60,
                 durationMinutes: 0,
-                label: date.formatted(.dateTime.weekday(.abbreviated))
+                label: localizedDateFormatString(date, format: "EEE")
             )
         }
     }
@@ -9049,12 +10418,12 @@ struct SleepChartItem: Identifiable {
     private static func label(for record: SleepTrackerRecord, index: Int, total: Int, period: SleepHistoryPeriod) -> String {
         switch period {
         case .day, .week:
-            return record.date.formatted(.dateTime.weekday(.abbreviated))
+            return localizedDateFormatString(record.date, format: "EEE")
         case .month:
             guard total <= 10 || index == total / 2 else { return "" }
-            return record.date.formatted(.dateTime.month(.abbreviated))
+            return localizedDateFormatString(record.date, format: "MMM")
         case .sixMonths:
-            return record.date.formatted(.dateTime.month(.abbreviated))
+            return localizedDateFormatString(record.date, format: "MMM")
         }
     }
 
@@ -9079,7 +10448,7 @@ struct SleepChartItem: Identifiable {
                 startMinutes: start,
                 endMinutes: max(end, start + 8),
                 durationMinutes: duration,
-                label: first.date.formatted(.dateTime.month(.abbreviated))
+                label: localizedDateFormatString(first.date, format: "MMM")
             )
         }
         .sorted { $0.date < $1.date }
@@ -9097,7 +10466,7 @@ struct SleepTrackerRecord: Identifiable {
     let wakingCount: Int
 
     var dateLabel: String {
-        date.formatted(.dateTime.month(.abbreviated).day())
+        localizedDateFormatString(date, format: "MMM d")
     }
 
     init?(entry: HealthLogEntry) {
@@ -9286,11 +10655,11 @@ struct MedicineHistoryDay: Identifiable {
     let items: [MedicineHistoryItem]
 
     var dateTitle: String {
-        date.formatted(.dateTime.weekday(.wide).month(.wide).day().year())
+        localizedDateString(date, dateStyle: .full, timeStyle: .none)
     }
 
     var savedTimeText: String {
-        date.formatted(date: .omitted, time: .shortened)
+        localizedDateString(date, dateStyle: .none, timeStyle: .short)
     }
 
     static func days(from entries: [HealthLogEntry], calendar: Calendar = .current) -> [MedicineHistoryDay] {
@@ -9364,7 +10733,7 @@ struct MedicineHistoryItem: Identifiable {
                 MedicineHistoryItem(
                     id: "\(entry.id.uuidString)-fallback-\(index)",
                     date: entry.timestamp,
-                    timeText: entry.timestamp.formatted(date: .omitted, time: .shortened),
+                    timeText: localizedDateString(entry.timestamp, dateStyle: .none, timeStyle: .short),
                     timeSortMinutes: Self.minutes(from: entry.timestamp),
                     name: Self.cleanMedicineName(line)
                 )
@@ -9462,7 +10831,7 @@ struct MedicineHistoryDayCard: View {
                             .foregroundStyle(tint)
                             .frame(width: 24)
 
-                        Text(item.name)
+                        Text(localizedMedicineDoseText(item.name))
                             .font(.subheadline.weight(.bold))
                             .foregroundStyle(AppTheme.text)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -9566,6 +10935,10 @@ struct QuickLogHistoryLogCard: View {
             return "Pain Location"
         case "cyclicVomiting":
             return "Episodes"
+        case "meltdown":
+            return "Summary"
+        case "stimming":
+            return "Summary"
         default:
             return "Mood"
         }
@@ -9758,7 +11131,7 @@ struct InsightCard: View {
                 .foregroundStyle(AppTheme.accent)
                 .frame(width: 58, alignment: .leading)
 
-            Text(message)
+            Text(localizedAppString(message))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(AppTheme.text)
                 .fixedSize(horizontal: false, vertical: true)

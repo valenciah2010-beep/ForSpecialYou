@@ -775,50 +775,60 @@ function medicineRows(log) {
 function summarizedMedicineRows(logs) {
   const rowsByMedication = new Map();
 
-  logs.forEach((log) => {
-    medicineRows(log).forEach((row) => {
-      const key = `${row.name.toLowerCase()}|${row.time.toLowerCase()}`;
-      const editTime = formatLogTime(log.timestamp);
-      const editTimestamp = logTimestampMs(log.timestamp);
+  [...(logs || [])]
+    .sort((left, right) => logTimestampMs(left.timestamp) - logTimestampMs(right.timestamp))
+    .forEach((log) => {
+      medicineRows(log).forEach((row) => {
+        const key = `${row.name.toLowerCase()}|${row.time.toLowerCase()}`;
+        const editTime = formatLogTime(log.timestamp);
+        const editTimestamp = logTimestampMs(log.timestamp);
 
-      if (!rowsByMedication.has(key)) {
-        rowsByMedication.set(key, {
-          name: row.name,
-          time: row.time,
-          checked: row.checked,
-          latestTimestamp: editTimestamp,
-          editTimes: []
-        });
-      }
+        if (!rowsByMedication.has(key)) {
+          rowsByMedication.set(key, {
+            name: row.name,
+            time: row.time,
+            checked: row.checked,
+            checkedAt: row.checked ? editTime : '',
+            latestTimestamp: editTimestamp,
+            previousChecked: row.checked,
+            editTimes: row.checked ? [editTime] : []
+          });
+          return;
+        }
 
-      const savedRow = rowsByMedication.get(key);
-      if (editTimestamp >= savedRow.latestTimestamp) {
-        savedRow.checked = row.checked;
-        savedRow.latestTimestamp = editTimestamp;
-      }
+        const savedRow = rowsByMedication.get(key);
+        if (row.checked && savedRow.previousChecked !== true) {
+          savedRow.checkedAt = editTime;
+          savedRow.editTimes = [editTime];
+        } else if (!row.checked) {
+          savedRow.checkedAt = '';
+          savedRow.editTimes = [];
+        }
 
-      if (row.checked && !savedRow.editTimes.includes(editTime)) {
-        savedRow.editTimes.push(editTime);
-      }
+        savedRow.previousChecked = row.checked;
+        if (editTimestamp >= savedRow.latestTimestamp) {
+          savedRow.checked = row.checked;
+          savedRow.latestTimestamp = editTimestamp;
+        }
+      });
     });
-  });
 
   return Array.from(rowsByMedication.values())
     .map((row) => ({
       ...row,
-      editTimes: row.checked ? row.editTimes : []
+      editTimes: row.checked && row.checkedAt ? [row.checkedAt] : []
     }))
     .sort((left, right) => {
-    const doseOrder = {
-      morning: 0,
-      noon: 1,
-      evening: 2
-    };
-    const leftOrder = doseOrder[left.time.toLowerCase()] ?? 99;
-    const rightOrder = doseOrder[right.time.toLowerCase()] ?? 99;
+      const doseOrder = {
+        morning: 0,
+        noon: 1,
+        evening: 2
+      };
+      const leftOrder = doseOrder[left.time.toLowerCase()] ?? 99;
+      const rightOrder = doseOrder[right.time.toLowerCase()] ?? 99;
 
-    return leftOrder - rightOrder || left.name.localeCompare(right.name);
-  });
+      return leftOrder - rightOrder || left.name.localeCompare(right.name);
+    });
 }
 
 function logHasIntensityBar(log) {
