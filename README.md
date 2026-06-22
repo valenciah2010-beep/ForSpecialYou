@@ -55,7 +55,7 @@ This project has a Vue + Vite frontend, a Node.js + Koa2 backend, and a MySQL us
    ```
 
 4. Update `.env` with your MySQL username and password.
-   - For local backend development, keep `HOST=127.0.0.1`.
+   - For local backend development, keep `HOST=127.0.0.1`, `PORT=3002`, `COOKIE_SECURE=false`, and leave `VITE_API_BASE_URL` empty.
    - For server deployment behind Nginx, use `HOST=127.0.0.1`, `PORT=3002`, `PUBLIC_ORIGIN=https://fsyadmin.top`, and `COOKIE_SECURE=true`.
 
 ## Run
@@ -82,7 +82,8 @@ http://localhost:5173/
 ```
 
 The frontend is now an admin-only portal. Log in with a user whose role is `admin` to view simulator app users.
-By default, the web frontend calls `https://fsyadmin.top` for API requests, including during local Vite development. Override `VITE_API_BASE_URL` only if you intentionally want a different backend.
+During local Vite development, `/api` is proxied to `http://127.0.0.1:3002`.
+Production builds call `https://fsyadmin.top` by default. Override `VITE_API_BASE_URL` only if you intentionally want a different backend.
 
 Simulator app parent sign-up and log-in still use the backend API, but website user-list and user-management routes require an admin session.
 

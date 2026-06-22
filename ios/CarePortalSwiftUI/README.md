@@ -21,12 +21,13 @@ Native SwiftUI login and sign-up screens for the Care Portal app.
 The app is pointed at:
 
 ```text
-https://fsyadmin.top
+Debug: http://127.0.0.1:3002
+Release: https://fsyadmin.top
 ```
 
-That matches the deployed Koa backend for the admin/site API.
+Debug builds use the local Koa backend for development. Release builds use the deployed Koa backend.
 
-For local backend testing, temporarily change `APIConfig.swift` to your local or LAN backend URL, such as:
+For real-device local testing, change the Debug URL in `APIConfig.swift` to the Mac's LAN IP address, such as:
 
 ```swift
 URL(string: "http://192.168.1.20:3002")

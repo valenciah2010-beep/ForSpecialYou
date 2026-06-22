@@ -340,7 +340,7 @@
 "Meal saved to history." = "餐食已保存到历史。";
 "Unable to save this meal." = "无法保存这份餐食。";
 "Unable to create PDF." = "无法创建 PDF。";
-"Meal saved on this phone, but backend sync failed. Make sure the server is reachable at https://fsyadmin.top." = "餐食已保存在此手机上，但后端同步失败。请确认服务器可通过 https://fsyadmin.top 访问。";
+"Meal saved on this phone, but backend sync failed. Make sure the configured server is reachable." = "餐食已保存在此手机上，但后端同步失败。请确认当前配置的服务器可以访问。";
 "With full support" = "完全支持";
 "With some support" = "部分支持";
 "With a prompt" = "需要提示";

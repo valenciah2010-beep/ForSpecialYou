@@ -340,7 +340,7 @@
 "Meal saved to history." = "Meal saved to history.";
 "Unable to save this meal." = "Unable to save this meal.";
 "Unable to create PDF." = "Unable to create PDF.";
-"Meal saved on this phone, but backend sync failed. Make sure the server is reachable at https://fsyadmin.top." = "Meal saved on this phone, but backend sync failed. Make sure the server is reachable at https://fsyadmin.top.";
+"Meal saved on this phone, but backend sync failed. Make sure the configured server is reachable." = "Meal saved on this phone, but backend sync failed. Make sure the configured server is reachable.";
 "With full support" = "With full support";
 "With some support" = "With some support";
 "With a prompt" = "With a prompt";
