@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "5C0000010000000000000401"
-               BuildableName = "CarePortalSwiftUI.app"
+               BuildableName = "ForSpecialYou.app"
                BlueprintName = "CarePortalSwiftUI"
                ReferencedContainer = "container:CarePortalSwiftUI.xcodeproj">
             </BuildableReference>
@@ -46,7 +46,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "5C0000010000000000000401"
-            BuildableName = "CarePortalSwiftUI.app"
+            BuildableName = "ForSpecialYou.app"
             BlueprintName = "CarePortalSwiftUI"
             ReferencedContainer = "container:CarePortalSwiftUI.xcodeproj">
          </BuildableReference>
@@ -63,7 +63,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "5C0000010000000000000401"
-            BuildableName = "CarePortalSwiftUI.app"
+            BuildableName = "ForSpecialYou.app"
             BlueprintName = "CarePortalSwiftUI"
             ReferencedContainer = "container:CarePortalSwiftUI.xcodeproj">
          </BuildableReference>

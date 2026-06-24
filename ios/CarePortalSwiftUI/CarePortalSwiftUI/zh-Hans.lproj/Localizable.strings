@@ -815,3 +815,17 @@
 "Weighted Blanket" = "加重毯";
 "Redirection" = "转移注意力";
 "Not selected" = "未选择";
+"Add Meal Manually" = "手动添加餐食";
+"Edit Nutrient Estimate" = "编辑营养估算";
+"Estimate updated. Save meal to keep the corrected information in history." = "估算已更新。点击保存餐食后，修正后的信息会保存到历史。";
+"Unable to update this estimate." = "无法更新此估算。";
+"Add a meal photo before saving." = "保存前请先添加餐食照片。";
+"Manual meal saved to history." = "手动餐食已保存到历史。";
+"More Nutrition Details" = "更多营养信息";
+"Meal summary" = "餐食总结";
+"One recommendation per line" = "每行一条建议";
+"One note per line" = "每行一条备注";
+"Add Meal Photo" = "添加餐食照片";
+"Meal Notes" = "餐食备注";
+"Manually entered meal." = "手动输入的餐食。";
+"manual" = "手动";

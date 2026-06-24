@@ -105,8 +105,9 @@ struct BasicHealthView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
                     HealthDashboardHeader(
                         childName: displayChildName,
                         parentName: user.nickname,
@@ -243,6 +244,9 @@ struct BasicHealthView: View {
                                     activeDigestionSnapshot = option
                                 } else if option.id == "nutrition" {
                                     activeNutritionSnapshot = option
+                                } else if option.id == "mood",
+                                          let moodOption = QuickLogOption.option(id: "mood") {
+                                    activeMoodLog = moodOption
                                 } else {
                                     activeLogInput = .snapshot(option)
                                 }
@@ -257,6 +261,7 @@ struct BasicHealthView: View {
                 .padding(.horizontal, 18)
                 .padding(.top, 16)
                 .padding(.bottom, 24)
+            }
             }
             .background(AppTheme.background.ignoresSafeArea())
             .navigationTitle(localizedAppString("Dashboard"))
@@ -441,7 +446,7 @@ struct BasicHealthView: View {
             return display
         }
 
-        guard let entry = latestTodaySnapshotEntry(for: option.id) else {
+        guard let entry = option.id == "mood" ? latestTodayMoodEntry : latestTodaySnapshotEntry(for: option.id) else {
             return SnapshotCardDisplay(value: "--", detail: "--", isLoggedToday: false)
         }
 
@@ -497,6 +502,14 @@ struct BasicHealthView: View {
     private func latestTodaySnapshotEntry(for optionID: String) -> HealthLogEntry? {
         logEntries
             .filter({ $0.type == .snapshot && $0.categoryID == optionID })
+            .filter { Calendar.current.isDateInToday($0.timestamp) }
+            .sorted(by: { $0.timestamp > $1.timestamp })
+            .first
+    }
+
+    private var latestTodayMoodEntry: HealthLogEntry? {
+        logEntries
+            .filter({ $0.type == .quickLog && $0.categoryID == "mood" })
             .filter { Calendar.current.isDateInToday($0.timestamp) }
             .sorted(by: { $0.timestamp > $1.timestamp })
             .first
@@ -565,11 +578,17 @@ struct BasicHealthView: View {
     }
 
     private var completedSnapshotIDsToday: Set<String> {
-        Set(
+        var ids = Set(
             todaysLogEntries
                 .filter { $0.type == .snapshot }
                 .map(\.categoryID)
         )
+
+        if completedQuickLogIDsToday.contains("mood") {
+            ids.insert("mood")
+        }
+
+        return ids
     }
 
     private var isDailyHealthComplete: Bool {
@@ -1332,8 +1351,8 @@ struct SnapshotOption: Identifiable {
             return "Click to fill out sleep"
         case "digestion":
             return "Click to fill out gut and digestion"
-        case "skin":
-            return "Click to fill out skin"
+        case "mood":
+            return "Click to log mood"
         case "nutrition":
             return "Click to set nutrition goals"
         default:
@@ -1361,13 +1380,13 @@ struct SnapshotOption: Identifiable {
             progress: 0.55
         ),
         SnapshotOption(
-            id: "skin",
-            title: "Skin",
-            icon: "bandage.fill",
+            id: "mood",
+            title: "Mood",
+            icon: "face.smiling",
             value: "--",
             detail: "--",
-            tint: Color(red: 0.89, green: 0.72, blue: 0.49),
-            progress: 0.4
+            tint: Color(red: 1.0, green: 0.78, blue: 0.28),
+            progress: 0.5
         ),
         SnapshotOption(
             id: "nutrition",
@@ -2393,6 +2412,31 @@ struct ModalToolbarTitle: View {
     }
 }
 
+struct StickyBottomSaveButton: View {
+    let title: String
+    let tint: Color
+    var isDisabled = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(localizedAppString(title))
+                .font(.headline.weight(.bold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 15)
+                .background(isDisabled ? Color.secondary.opacity(0.45) : tint)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .disabled(isDisabled)
+        .buttonStyle(.plain)
+        .padding(.horizontal, 18)
+        .padding(.top, 10)
+        .padding(.bottom, 12)
+        .background(.ultraThinMaterial)
+    }
+}
+
 struct SleepRestSnapshotSheet: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -2455,126 +2499,131 @@ struct SleepRestSnapshotSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    HStack(spacing: 12) {
-                        Text(durationText)
-                            .font(.title.weight(.black))
-                            .foregroundStyle(AppTheme.text)
-                            .frame(width: 82, height: 58)
-                            .background(option.tint.opacity(0.18))
-                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(localizedAppString("Sleep & Rest"))
-                                .font(.title3.weight(.bold))
-                                .foregroundStyle(AppTheme.text)
-
-                            Text(String(format: localizedAppString("%@ tracked"), durationText))
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text(localizedAppString("Sleep Times"))
-                            .font(.headline.weight(.bold))
-                            .foregroundStyle(AppTheme.text)
-
-                        TimeWheelPicker(title: localizedAppString("Fell asleep at"), selection: $fellAsleepAt)
-                        TimeWheelPicker(title: localizedAppString("Woke up at"), selection: $wokeUpAt)
-                    }
-                    .authPanel()
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text(localizedAppString("Rest Quality"))
-                            .font(.headline.weight(.bold))
-                            .foregroundStyle(AppTheme.text)
-
-                        HStack(spacing: 10) {
-                            ForEach(SleepRestQuality.allCases) { quality in
-                                Button {
-                                    selectedQuality = quality
-                                } label: {
-                                    VStack(spacing: 6) {
-                                        Text(quality.emoji)
-                                            .font(.title2)
-                                        Text(LocalizedStringKey(quality.title))
-                                            .font(.caption.weight(.bold))
-                                            .foregroundStyle(AppTheme.text)
-                                            .lineLimit(1)
-                                            .minimumScaleFactor(0.75)
-                                    }
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 12)
-                                    .background(selectedQuality == quality ? option.tint.opacity(0.25) : AppTheme.fieldBackground)
-                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                    .overlay {
-                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                            .stroke(selectedQuality == quality ? option.tint : Color.clear, lineWidth: 2)
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-                    .authPanel()
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text(localizedAppString("Waking Counter"))
-                            .font(.headline.weight(.bold))
-                            .foregroundStyle(AppTheme.text)
-
-                        HStack(spacing: 14) {
-                            Button {
-                                wakingCount = max(0, wakingCount - 1)
-                            } label: {
-                                Image(systemName: "minus")
-                                    .font(.headline.weight(.bold))
-                                    .frame(width: 44, height: 44)
-                            }
-                            .buttonStyle(.bordered)
-                            .tint(option.tint)
-
-                            Text("\(wakingCount)")
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        HStack(spacing: 12) {
+                            Text(durationText)
                                 .font(.title.weight(.black))
                                 .foregroundStyle(AppTheme.text)
-                                .frame(minWidth: 54)
+                                .frame(width: 82, height: 58)
+                                .background(option.tint.opacity(0.18))
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
-                            Button {
-                                wakingCount += 1
-                            } label: {
-                                Image(systemName: "plus")
-                                    .font(.headline.weight(.bold))
-                                    .frame(width: 44, height: 44)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(localizedAppString("Sleep & Rest"))
+                                    .font(.title3.weight(.bold))
+                                    .foregroundStyle(AppTheme.text)
+
+                                Text(String(format: localizedAppString("%@ tracked"), durationText))
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
                             }
-                            .buttonStyle(.borderedProminent)
-                            .tint(option.tint)
-
-                            Text(localizedAppString(wakingCount == 1 ? "wake-up" : "wake-ups"))
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.secondary)
-
-                            Spacer()
                         }
-                    }
-                    .authPanel()
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(localizedAppString("Notes"))
-                            .font(.headline.weight(.bold))
-                            .foregroundStyle(AppTheme.text)
+                        VStack(alignment: .leading, spacing: 16) {
+                            Text(localizedAppString("Sleep Times"))
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
 
-                        TextField(localizedAppString("Nap, bedtime routine, night waking, comfort item, etc."), text: $comments, axis: .vertical)
-                            .textInputAutocapitalization(.never)
-                            .lineLimit(3...6)
-                            .padding(12)
-                            .background(AppTheme.fieldBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            TimeWheelPicker(title: localizedAppString("Fell asleep at"), selection: $fellAsleepAt)
+                            TimeWheelPicker(title: localizedAppString("Woke up at"), selection: $wokeUpAt)
+                        }
+                        .authPanel()
+
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(localizedAppString("Rest Quality"))
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            HStack(spacing: 10) {
+                                ForEach(SleepRestQuality.allCases) { quality in
+                                    Button {
+                                        selectedQuality = quality
+                                    } label: {
+                                        VStack(spacing: 6) {
+                                            Text(quality.emoji)
+                                                .font(.title2)
+                                            Text(LocalizedStringKey(quality.title))
+                                                .font(.caption.weight(.bold))
+                                                .foregroundStyle(AppTheme.text)
+                                                .lineLimit(1)
+                                                .minimumScaleFactor(0.75)
+                                        }
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 12)
+                                        .background(selectedQuality == quality ? option.tint.opacity(0.25) : AppTheme.fieldBackground)
+                                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                        .overlay {
+                                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                                .stroke(selectedQuality == quality ? option.tint : Color.clear, lineWidth: 2)
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                        .authPanel()
+
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(localizedAppString("Waking Counter"))
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            HStack(spacing: 14) {
+                                Button {
+                                    wakingCount = max(0, wakingCount - 1)
+                                } label: {
+                                    Image(systemName: "minus")
+                                        .font(.headline.weight(.bold))
+                                        .frame(width: 44, height: 44)
+                                }
+                                .buttonStyle(.bordered)
+                                .tint(option.tint)
+
+                                Text("\(wakingCount)")
+                                    .font(.title.weight(.black))
+                                    .foregroundStyle(AppTheme.text)
+                                    .frame(minWidth: 54)
+
+                                Button {
+                                    wakingCount += 1
+                                } label: {
+                                    Image(systemName: "plus")
+                                        .font(.headline.weight(.bold))
+                                        .frame(width: 44, height: 44)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(option.tint)
+
+                                Text(localizedAppString(wakingCount == 1 ? "wake-up" : "wake-ups"))
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+
+                                Spacer()
+                            }
+                        }
+                        .authPanel()
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(localizedAppString("Notes"))
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            TextField(localizedAppString("Nap, bedtime routine, night waking, comfort item, etc."), text: $comments, axis: .vertical)
+                                .textInputAutocapitalization(.never)
+                                .lineLimit(3...6)
+                                .padding(12)
+                                .background(AppTheme.fieldBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+                        .authPanel()
                     }
-                    .authPanel()
+                    .padding(18)
                 }
-                .padding(18)
+                StickyBottomSaveButton(title: "Save Log", tint: AppTheme.accent) {
+                    save()
+                }
             }
             .background(AppTheme.background.ignoresSafeArea())
             .navigationTitle("")
@@ -2590,13 +2639,6 @@ struct SleepRestSnapshotSheet: View {
                     ModalToolbarTitle(icon: option.icon, title: option.title, tint: option.tint)
                 }
 
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(localizedAppString("Save")) {
-                        save()
-                    }
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(AppTheme.accent)
-                }
             }
         }
         .presentationDetents([.large])
@@ -2810,8 +2852,9 @@ struct DigestionSnapshotSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
                     HStack(spacing: 12) {
                         Text(localizedAppString("Movement time"))
                             .font(.headline.weight(.bold))
@@ -2962,8 +3005,12 @@ struct DigestionSnapshotSheet: View {
                         )
                     }
                     .authPanel()
+                    }
+                    .padding(18)
                 }
-                .padding(18)
+                StickyBottomSaveButton(title: "Save Log", tint: AppTheme.accent) {
+                    save()
+                }
             }
             .background(AppTheme.background.ignoresSafeArea())
             .navigationTitle("")
@@ -2979,13 +3026,6 @@ struct DigestionSnapshotSheet: View {
                     ModalToolbarTitle(icon: option.icon, title: option.title, tint: option.tint)
                 }
 
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(localizedAppString("Save")) {
-                        save()
-                    }
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(AppTheme.accent)
-                }
             }
         }
         .presentationDetents([.large])
@@ -3282,63 +3322,68 @@ struct HealthLogEntrySheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    VStack(alignment: .leading, spacing: 14) {
-                        Toggle("Use current time", isOn: $useCurrentTime)
-                            .font(.subheadline.weight(.semibold))
-                            .tint(AppTheme.accent)
-
-                        DatePicker(
-                            "Time",
-                            selection: $timestamp,
-                            displayedComponents: [.date, .hourAndMinute]
-                        )
-                        .disabled(useCurrentTime)
-                        .opacity(useCurrentTime ? 0.55 : 1)
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(LocalizedStringKey(target.valuePrompt))
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Toggle("Use current time", isOn: $useCurrentTime)
                                 .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(AppTheme.text)
+                                .tint(AppTheme.accent)
 
-                            TextField(
-                                target.logType == .quickLog
-                                    ? localizedAppString("Short note")
-                                    : localizedAppString("Example: 7 hours, normal, 2/5"),
-                                text: $value
+                            DatePicker(
+                                "Time",
+                                selection: $timestamp,
+                                displayedComponents: [.date, .hourAndMinute]
                             )
+                            .disabled(useCurrentTime)
+                            .opacity(useCurrentTime ? 0.55 : 1)
+
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(LocalizedStringKey(target.valuePrompt))
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(AppTheme.text)
+
+                                TextField(
+                                    target.logType == .quickLog
+                                        ? localizedAppString("Short note")
+                                        : localizedAppString("Example: 7 hours, normal, 2/5"),
+                                    text: $value
+                                )
                                 .textInputAutocapitalization(.never)
                                 .padding(12)
                                 .background(AppTheme.fieldBackground)
                                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            }
+
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("\(localizedAppString("Severity")): \(Int(severity))/5")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(AppTheme.text)
+
+                                Slider(value: $severity, in: 1...5, step: 1)
+                                    .tint(target.tint)
+                            }
+
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(localizedAppString("Comments"))
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(AppTheme.text)
+
+                                TextField(localizedAppString("Add details, context, triggers, or what helped"), text: $comments, axis: .vertical)
+                                    .textInputAutocapitalization(.never)
+                                    .lineLimit(4...7)
+                                    .padding(12)
+                                    .background(AppTheme.fieldBackground)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            }
                         }
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("\(localizedAppString("Severity")): \(Int(severity))/5")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(AppTheme.text)
-
-                            Slider(value: $severity, in: 1...5, step: 1)
-                                .tint(target.tint)
-                        }
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(localizedAppString("Comments"))
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(AppTheme.text)
-
-                            TextField(localizedAppString("Add details, context, triggers, or what helped"), text: $comments, axis: .vertical)
-                                .textInputAutocapitalization(.never)
-                                .lineLimit(4...7)
-                                .padding(12)
-                                .background(AppTheme.fieldBackground)
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        }
+                        .authPanel()
                     }
-                    .authPanel()
+                    .padding(18)
                 }
-                .padding(18)
+                StickyBottomSaveButton(title: "Save Log", tint: AppTheme.accent) {
+                    save()
+                }
             }
             .background(AppTheme.background.ignoresSafeArea())
             .navigationTitle("")
@@ -3354,13 +3399,6 @@ struct HealthLogEntrySheet: View {
                     ModalToolbarTitle(icon: target.icon, title: target.title, tint: target.tint)
                 }
 
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(localizedAppString("Save")) {
-                        save()
-                    }
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(AppTheme.accent)
-                }
             }
         }
         .presentationDetents([.large])
@@ -3396,6 +3434,7 @@ struct MeltdownLogEntrySheet: View {
     @State private var selectedTriggers: Set<String> = []
     @State private var selectedDuration = ""
     @State private var selectedCalmingTools: Set<String> = []
+    @State private var notes = ""
 
     private let triggerOptions = [
         "Loud Noise",
@@ -3438,113 +3477,227 @@ struct MeltdownLogEntrySheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+            VStack(spacing: 0) {
+                ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
-                        DatePicker(
-                            localizedAppString("Timestamp"),
-                            selection: $timestamp,
-                            displayedComponents: [.date, .hourAndMinute]
-                        )
-                        .font(.subheadline.weight(.semibold))
+                        meltdownHeader
 
-                        VStack(alignment: .leading, spacing: 9) {
-                            HStack(alignment: .firstTextBaseline) {
-                                Text(localizedAppString("Intensity"))
-                                    .font(.subheadline.weight(.bold))
-                                    .foregroundStyle(AppTheme.text)
+                        timestampCard
 
-                                Spacer()
-
-                                Text("\(Int(intensity))/5")
-                                    .font(.caption.weight(.black))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
-                                    .background(option.tint)
-                                    .clipShape(Capsule())
-                            }
-
-                            Slider(value: $intensity, in: 1...5, step: 1)
-                                .tint(option.tint)
-
-                            HStack {
-                                Text(localizedAppString("1 = Mild Agitation/Crying"))
-                                Spacer()
-                                Text(localizedAppString("5 = Severe Meltdown/Safety Risk"))
-                            }
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(.secondary)
-
-                            Text(localizedAppString(intensityDescription))
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(option.tint)
-                        }
+                        intensityCard
 
                         meltdownMultiSelectSection(
+                            icon: "exclamationmark.triangle",
                             title: "Triggers",
                             options: triggerOptions,
                             selection: $selectedTriggers
                         )
 
                         meltdownSingleSelectSection(
+                            icon: "clock",
                             title: "Duration",
                             options: durationOptions,
                             selection: $selectedDuration
                         )
 
                         meltdownMultiSelectSection(
+                            icon: "heart.circle",
                             title: "Calming Tools Tried",
                             options: calmingToolOptions,
                             selection: $selectedCalmingTools
                         )
+
+                        notesCard
                     }
-                    .authPanel()
+                    .padding(18)
                 }
-                .padding(18)
+                StickyBottomSaveButton(title: "Save Log", tint: AppTheme.accent) {
+                    save()
+                }
             }
             .background(AppTheme.background.ignoresSafeArea())
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(localizedAppString("Cancel")) {
-                        dismiss()
-                    }
-                }
-
-                ToolbarItem(placement: .principal) {
-                    ModalToolbarTitle(icon: option.icon, title: option.title, tint: option.tint)
-                }
-
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(localizedAppString("Save")) {
-                        save()
-                    }
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(AppTheme.accent)
-                }
-            }
+            .toolbar(.hidden, for: .navigationBar)
         }
         .presentationDetents([.large])
     }
 
+    private var meltdownHeader: some View {
+        HStack(alignment: .top, spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(option.tint.opacity(0.18))
+                    .frame(width: 52, height: 52)
+
+                Image(systemName: option.icon)
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(option.tint)
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(localizedAppString("Log Meltdown"))
+                    .font(.title.weight(.black))
+                    .foregroundStyle(AppTheme.text)
+
+                Text(localizedAppString("Track and understand what happened."))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(AppTheme.accent)
+                    .frame(width: 44, height: 44)
+                    .background(AppTheme.fieldBackground)
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(localizedAppString("Close"))
+        }
+        .padding(.top, 2)
+    }
+
+    private var timestampCard: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "calendar.badge.clock")
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(AppTheme.accent)
+                .frame(width: 30, height: 30)
+                .background(AppTheme.accent.opacity(0.1))
+                .clipShape(Circle())
+
+            Text(localizedAppString("Timestamp"))
+                .font(.headline.weight(.bold))
+                .foregroundStyle(AppTheme.text)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+
+            Spacer(minLength: 4)
+
+            DatePicker("", selection: $timestamp, displayedComponents: .date)
+                .labelsHidden()
+                .datePickerStyle(.compact)
+                .fixedSize()
+
+            DatePicker("", selection: $timestamp, displayedComponents: .hourAndMinute)
+                .labelsHidden()
+                .datePickerStyle(.compact)
+                .fixedSize()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+        }
+        .shadow(color: Color.black.opacity(0.035), radius: 10, x: 0, y: 5)
+    }
+
+    private var intensityCard: some View {
+        meltdownSectionCard(icon: "waveform.path.ecg", title: "Intensity") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text(localizedAppString("How intense was it?"))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    Text("\(Int(intensity))/5")
+                        .font(.headline.weight(.black))
+                        .foregroundStyle(option.tint)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(option.tint.opacity(0.12))
+                        .overlay {
+                            Capsule()
+                                .stroke(option.tint.opacity(0.45), lineWidth: 1)
+                        }
+                        .clipShape(Capsule())
+                }
+
+                Slider(value: $intensity, in: 1...5, step: 1)
+                    .tint(option.tint)
+                    .padding(.vertical, 2)
+
+                Text(localizedAppString(intensityDescription))
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(option.tint)
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 7)
+                    .background(option.tint.opacity(0.12))
+                    .clipShape(Capsule())
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
+        }
+    }
+
+    private var notesCard: some View {
+        meltdownSectionCard(icon: "note.text", title: "Notes") {
+            TextField(localizedAppString("Add any additional details about what happened..."), text: $notes, axis: .vertical)
+                .textInputAutocapitalization(.sentences)
+                .lineLimit(3...6)
+                .padding(12)
+                .background(AppTheme.fieldBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+    }
+
+    private func meltdownSectionCard<Content: View>(
+        icon: String,
+        title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(AppTheme.accent)
+                    .frame(width: 30, height: 30)
+                    .background(AppTheme.accent.opacity(0.1))
+                    .clipShape(Circle())
+
+                Text(localizedAppString(title))
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(AppTheme.text)
+            }
+
+            content()
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+        }
+        .shadow(color: Color.black.opacity(0.035), radius: 10, x: 0, y: 5)
+    }
+
     private func meltdownMultiSelectSection(
+        icon: String,
         title: String,
         options: [String],
         selection: Binding<Set<String>>
     ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(localizedAppString(title))
-                .font(.subheadline.weight(.bold))
-                .foregroundStyle(AppTheme.text)
-
+        meltdownSectionCard(icon: icon, title: title) {
             FlowLayout(spacing: 8, rowSpacing: 8) {
                 ForEach(options, id: \.self) { chip in
-                    CyclicVomitingOptionChip(
+                    meltdownOptionChip(
                         title: chip,
+                        icon: meltdownOptionIcon(for: chip),
                         isSelected: selection.wrappedValue.contains(chip),
-                        tint: option.tint
+                        allowsCheckmark: true
                     ) {
                         if selection.wrappedValue.contains(chip) {
                             selection.wrappedValue.remove(chip)
@@ -3558,26 +3711,88 @@ struct MeltdownLogEntrySheet: View {
     }
 
     private func meltdownSingleSelectSection(
+        icon: String,
         title: String,
         options: [String],
         selection: Binding<String>
     ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(localizedAppString(title))
-                .font(.subheadline.weight(.bold))
-                .foregroundStyle(AppTheme.text)
-
+        meltdownSectionCard(icon: icon, title: title) {
             FlowLayout(spacing: 8, rowSpacing: 8) {
                 ForEach(options, id: \.self) { chip in
-                    CyclicVomitingOptionChip(
+                    meltdownOptionChip(
                         title: chip,
+                        icon: "clock",
                         isSelected: selection.wrappedValue == chip,
-                        tint: option.tint
+                        allowsCheckmark: false
                     ) {
                         selection.wrappedValue = selection.wrappedValue == chip ? "" : chip
                     }
                 }
             }
+        }
+    }
+
+    private func meltdownOptionChip(
+        title: String,
+        icon: String,
+        isSelected: Bool,
+        allowsCheckmark: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(isSelected ? AppTheme.accent : AppTheme.accent.opacity(0.9))
+
+                Text(localizedAppString(title))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(isSelected ? AppTheme.accent : AppTheme.text)
+
+                if allowsCheckmark {
+                    Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(isSelected ? AppTheme.accent : .secondary.opacity(0.55))
+                }
+            }
+            .padding(.horizontal, 13)
+            .padding(.vertical, 11)
+            .background(isSelected ? AppTheme.accent.opacity(0.12) : Color.white)
+            .clipShape(Capsule())
+            .overlay {
+                Capsule()
+                    .stroke(isSelected ? AppTheme.accent.opacity(0.55) : Color.black.opacity(0.08), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func meltdownOptionIcon(for option: String) -> String {
+        switch option {
+        case "Loud Noise":
+            return "speaker.wave.2"
+        case "Crowds":
+            return "person.2"
+        case "Transitioning":
+            return "arrow.triangle.2.circlepath"
+        case "Hunger":
+            return "fork.knife"
+        case "Fatigue":
+            return "moon.zzz"
+        case "Unknown":
+            return "questionmark.circle"
+        case "Deep Pressure":
+            return "hands.sparkles"
+        case "Headphones":
+            return "headphones"
+        case "Dim Lights":
+            return "lightbulb"
+        case "Weighted Blanket":
+            return "rectangle.fill.on.rectangle.fill"
+        case "Redirection":
+            return "arrow.uturn.left"
+        default:
+            return "circle"
         }
     }
 
@@ -3595,8 +3810,11 @@ struct MeltdownLogEntrySheet: View {
             "Intensity: \(intensityText)",
             "Triggers: \(triggersText)",
             "Duration: \(durationText)",
-            "Calming Tools Tried: \(toolsText)"
-        ].joined(separator: "\n")
+            "Calming Tools Tried: \(toolsText)",
+            notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? nil
+                : "Notes: \(notes.trimmingCharacters(in: .whitespacesAndNewlines))"
+        ].compactMap { $0 }.joined(separator: "\n")
 
         let entry = HealthLogEntry(
             id: UUID(),
@@ -3669,8 +3887,9 @@ struct StimmingTicsLogEntrySheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
                     VStack(alignment: .leading, spacing: 14) {
                         DatePicker(
                             localizedAppString("Timestamp"),
@@ -3696,8 +3915,12 @@ struct StimmingTicsLogEntrySheet: View {
                         )
                     }
                     .authPanel()
+                    }
+                    .padding(18)
                 }
-                .padding(18)
+                StickyBottomSaveButton(title: "Save Log", tint: AppTheme.accent) {
+                    save()
+                }
             }
             .background(AppTheme.background.ignoresSafeArea())
             .navigationTitle("")
@@ -3713,13 +3936,6 @@ struct StimmingTicsLogEntrySheet: View {
                     ModalToolbarTitle(icon: option.icon, title: option.title, tint: option.tint)
                 }
 
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(localizedAppString("Save Log")) {
-                        save()
-                    }
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(AppTheme.accent)
-                }
             }
         }
         .presentationDetents([.large])
@@ -4076,35 +4292,40 @@ struct CyclicVomitingLogSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(spacing: 10) {
-                        NavigationLink {
-                            backgroundPage
-                        } label: {
-                            CyclicVomitingNavigationCard(
-                                title: "Background",
-                                icon: "person.text.rectangle.fill",
-                                tint: option.tint
-                            )
-                        }
-                        .buttonStyle(.plain)
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 10) {
+                            NavigationLink {
+                                backgroundPage
+                            } label: {
+                                CyclicVomitingNavigationCard(
+                                    title: "Background",
+                                    icon: "person.text.rectangle.fill",
+                                    tint: option.tint
+                                )
+                            }
+                            .buttonStyle(.plain)
 
-                        NavigationLink {
-                            vomitingPatternPage
-                        } label: {
-                            CyclicVomitingNavigationCard(
-                                title: "Vomiting Patterns",
-                                icon: "waveform.path.ecg.rectangle.fill",
-                                tint: option.tint
-                            )
+                            NavigationLink {
+                                vomitingPatternPage
+                            } label: {
+                                CyclicVomitingNavigationCard(
+                                    title: "Vomiting Patterns",
+                                    icon: "waveform.path.ecg.rectangle.fill",
+                                    tint: option.tint
+                                )
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
+
+                        vomitingPatternForm
                     }
-
-                    vomitingPatternForm
+                    .padding(18)
                 }
-                .padding(18)
+                StickyBottomSaveButton(title: "Save Log", tint: AppTheme.accent) {
+                    saveVomitingLog()
+                }
             }
             .background(AppTheme.background.ignoresSafeArea())
             .navigationTitle("")
@@ -4120,17 +4341,11 @@ struct CyclicVomitingLogSheet: View {
                     ModalToolbarTitle(icon: option.icon, title: option.title, tint: option.tint)
                 }
 
-                ToolbarItemGroup(placement: .topBarTrailing) {
+                ToolbarItem(placement: .topBarTrailing) {
                     Button(localizedAppString("Save Progress")) {
                         saveProgress()
                     }
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppTheme.accent)
-
-                    Button(localizedAppString("Save")) {
-                        saveVomitingLog()
-                    }
-                    .font(.headline.weight(.semibold))
                     .foregroundStyle(AppTheme.accent)
                 }
             }
@@ -4144,43 +4359,37 @@ struct CyclicVomitingLogSheet: View {
     }
 
     private var backgroundPage: some View {
-        ScrollView {
-            backgroundForm
-                .padding(18)
+        VStack(spacing: 0) {
+            ScrollView {
+                backgroundForm
+                    .padding(18)
+            }
+
+            StickyBottomSaveButton(title: "Save", tint: option.tint) {
+                saveBackground()
+                dismiss()
+            }
         }
         .background(AppTheme.background.ignoresSafeArea())
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button(localizedAppString("Save")) {
-                    saveBackground()
-                    dismiss()
-                }
-                .font(.headline.weight(.semibold))
-                .foregroundStyle(AppTheme.accent)
-            }
-        }
     }
 
     private var vomitingPatternPage: some View {
-        ScrollView {
-            patternsForm
-                .padding(18)
+        VStack(spacing: 0) {
+            ScrollView {
+                patternsForm
+                    .padding(18)
+            }
+
+            StickyBottomSaveButton(title: "Save", tint: option.tint) {
+                savePatterns()
+                dismiss()
+            }
         }
         .background(AppTheme.background.ignoresSafeArea())
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button(localizedAppString("Save")) {
-                    savePatterns()
-                    dismiss()
-                }
-                .font(.headline.weight(.semibold))
-                .foregroundStyle(AppTheme.accent)
-            }
-        }
         .sheet(isPresented: $isQualityOfLifeAssessmentPresented) {
             CyclicVomitingQualityOfLifeAssessmentSheet(
                 ageRange: qualityOfLifeAgeGroup,
@@ -6336,28 +6545,33 @@ struct NutritionSnapshotSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    VStack(alignment: .leading, spacing: 16) {
-                        if goals.isEmpty {
-                            NutritionGoalsEditor(goals: $goals)
-                        } else {
-                            NutritionGoalsSummary(goals: goals)
-
-                            DisclosureGroup(isExpanded: $isGoalsExpanded) {
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        VStack(alignment: .leading, spacing: 16) {
+                            if goals.isEmpty {
                                 NutritionGoalsEditor(goals: $goals)
-                                    .padding(.top, 12)
-                            } label: {
-                                Text(localizedAppString("View Nutrition Goals"))
-                                    .font(.headline.weight(.bold))
-                                    .foregroundStyle(AppTheme.accent)
+                            } else {
+                                NutritionGoalsSummary(goals: goals)
+
+                                DisclosureGroup(isExpanded: $isGoalsExpanded) {
+                                    NutritionGoalsEditor(goals: $goals)
+                                        .padding(.top, 12)
+                                } label: {
+                                    Text(localizedAppString("View Nutrition Goals"))
+                                        .font(.headline.weight(.bold))
+                                        .foregroundStyle(AppTheme.accent)
+                                }
+                                .tint(AppTheme.accent)
                             }
-                            .tint(AppTheme.accent)
                         }
+                        .authPanel()
                     }
-                    .authPanel()
+                    .padding(18)
                 }
-                .padding(18)
+                StickyBottomSaveButton(title: "Save", tint: AppTheme.accent) {
+                    save()
+                }
             }
             .background(AppTheme.background.ignoresSafeArea())
             .navigationTitle("")
@@ -6373,13 +6587,6 @@ struct NutritionSnapshotSheet: View {
                     ModalToolbarTitle(icon: option.icon, title: option.title, tint: option.tint)
                 }
 
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(localizedAppString("Save")) {
-                        save()
-                    }
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(AppTheme.accent)
-                }
             }
         }
         .presentationDetents([.large])
@@ -6515,36 +6722,33 @@ struct NutritionGoalsPage: View {
     let onSave: () -> Void
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                PageHeader(
-                    icon: "leaf.fill",
-                    title: "Nutrition Goals",
-                    subtitle: "Calories, macros, supplements, and hydration"
-                )
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    PageHeader(
+                        icon: "leaf.fill",
+                        title: "Nutrition Goals",
+                        subtitle: "Calories, macros, supplements, and hydration"
+                    )
 
-                NutritionGoalsSummary(goals: goals)
+                    NutritionGoalsSummary(goals: goals)
 
-                NutritionGoalsEditor(goals: $goals)
-                    .padding(16)
-                    .background(AppTheme.panel)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    NutritionGoalsEditor(goals: $goals)
+                        .padding(16)
+                        .background(AppTheme.panel)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+                .padding(20)
             }
-            .padding(20)
+
+            StickyBottomSaveButton(title: "Save", tint: AppTheme.accent) {
+                onSave()
+                dismiss()
+            }
         }
         .background(AppTheme.background.ignoresSafeArea())
         .navigationTitle(localizedAppString("Nutrition Goals"))
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button(localizedAppString("Save")) {
-                    onSave()
-                    dismiss()
-                }
-                .font(.headline.weight(.bold))
-                .foregroundStyle(AppTheme.accent)
-            }
-        }
     }
 }
 
@@ -7056,19 +7260,24 @@ struct MedicineLogSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text(todayDateTitle)
-                        .font(.headline.weight(.bold))
-                        .foregroundStyle(AppTheme.text)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(14)
-                        .background(AppTheme.panel)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text(todayDateTitle)
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(14)
+                            .background(AppTheme.panel)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
-                    medicationChecklistSection
+                        medicationChecklistSection
+                    }
+                    .padding(18)
                 }
-                .padding(18)
+                StickyBottomSaveButton(title: "Save Log", tint: AppTheme.accent) {
+                    save()
+                }
             }
             .background(AppTheme.background.ignoresSafeArea())
             .navigationTitle("")
@@ -7084,20 +7293,12 @@ struct MedicineLogSheet: View {
                     ModalToolbarTitle(icon: option.icon, title: option.title, tint: option.tint)
                 }
 
-                ToolbarItemGroup(placement: .topBarTrailing) {
+                ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         isMedicineManagerPresented = true
                     } label: {
                         Text(localizedAppString("Edit"))
                             .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(AppTheme.accent)
-                    }
-
-                    Button {
-                        save()
-                    } label: {
-                        Text(localizedAppString("Save"))
-                            .font(.headline.weight(.semibold))
                             .foregroundStyle(AppTheme.accent)
                     }
                 }
@@ -7809,89 +8010,95 @@ struct MedicationEditorSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    MedicationFormTextField(
-                        title: "Medicine Name",
-                        placeholder: "Medicine Name",
-                        text: $draft.name,
-                        showsClearButton: true
-                    )
-
-                    medicationTypeSelector
-
-                    HStack(spacing: 10) {
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
                         MedicationFormTextField(
-                            title: "Amount",
-                            placeholder: "Amount",
-                            text: $draft.amount,
-                            keyboardType: .decimalPad,
-                            showsClearButton: false
+                            title: "Medicine Name",
+                            placeholder: "Medicine Name",
+                            text: $draft.name,
+                            showsClearButton: true
                         )
 
+                        medicationTypeSelector
+
+                        HStack(spacing: 10) {
+                            MedicationFormTextField(
+                                title: "Amount",
+                                placeholder: "Amount",
+                                text: $draft.amount,
+                                keyboardType: .decimalPad,
+                                showsClearButton: false
+                            )
+
+                            MedicationFormMenu(
+                                title: "Unit",
+                                value: draft.unit.isEmpty ? "Unit" : draft.unit,
+                                options: medicineUnits
+                            ) { unit in
+                                draft.unit = unit
+                            }
+                        }
+
                         MedicationFormMenu(
-                            title: "Unit",
-                            value: draft.unit.isEmpty ? "Unit" : draft.unit,
-                            options: medicineUnits
-                        ) { unit in
-                            draft.unit = unit
+                            title: "How often?",
+                            value: howOftenTitle,
+                            options: MedicationScheduleMode.allCases.map(\.title)
+                        ) { title in
+                            if let mode = MedicationScheduleMode.allCases.first(where: { $0.title == title }) {
+                                setScheduleMode(mode)
+                            }
                         }
-                    }
 
-                    MedicationFormMenu(
-                        title: "How often?",
-                        value: howOftenTitle,
-                        options: MedicationScheduleMode.allCases.map(\.title)
-                    ) { title in
-                        if let mode = MedicationScheduleMode.allCases.first(where: { $0.title == title }) {
-                            setScheduleMode(mode)
+                        if draft.mode == .intervalDays {
+                            MedicationIntervalDaysField(days: intervalDaysBinding)
                         }
-                    }
 
-                    if draft.mode == .intervalDays {
-                        MedicationIntervalDaysField(days: intervalDaysBinding)
-                    }
+                        if draft.mode == .weekly {
+                            weeklyDayPicker
+                        }
 
-                    if draft.mode == .weekly {
-                        weeklyDayPicker
-                    }
+                        whatTimeSection
 
-                    whatTimeSection
+                        MedicationFormMenu(
+                            title: "Duration",
+                            value: draft.duration.isEmpty ? "Duration" : draft.duration,
+                            options: durationOptions
+                        ) { duration in
+                            draft.duration = duration
+                        }
 
-                    MedicationFormMenu(
-                        title: "Duration",
-                        value: draft.duration.isEmpty ? "Duration" : draft.duration,
-                        options: durationOptions
-                    ) { duration in
-                        draft.duration = duration
-                    }
+                        DatePicker("Start Date", selection: $draft.startDate, displayedComponents: .date)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(AppTheme.text)
+                            .padding(12)
+                            .background(MedicationFormStyle.detailBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-                    DatePicker("Start Date", selection: $draft.startDate, displayedComponents: .date)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(AppTheme.text)
-                        .padding(12)
+                        ZStack(alignment: .topLeading) {
+                            if draft.instructions.isEmpty {
+                                Text(localizedAppString("Medication Instruction (Optional)"))
+                                    .font(.headline.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 13)
+                                    .padding(.vertical, 16)
+                            }
+
+                            TextEditor(text: $draft.instructions)
+                                .textInputAutocapitalization(.never)
+                                .frame(minHeight: 88)
+                                .scrollContentBackground(.hidden)
+                                .padding(8)
+                        }
                         .background(MedicationFormStyle.detailBackground)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                    ZStack(alignment: .topLeading) {
-                        if draft.instructions.isEmpty {
-                            Text(localizedAppString("Medication Instruction (Optional)"))
-                                .font(.headline.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 13)
-                                .padding(.vertical, 16)
-                        }
-
-                        TextEditor(text: $draft.instructions)
-                            .textInputAutocapitalization(.never)
-                            .frame(minHeight: 88)
-                            .scrollContentBackground(.hidden)
-                            .padding(8)
                     }
-                    .background(MedicationFormStyle.detailBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .padding(18)
                 }
-                .padding(18)
+
+                StickyBottomSaveButton(title: "Save", tint: AppTheme.accent, isDisabled: !canSave) {
+                    save()
+                }
             }
             .background(AppTheme.background.ignoresSafeArea())
             .navigationTitle("")
@@ -7911,21 +8118,6 @@ struct MedicationEditorSheet: View {
                     Text(LocalizedStringKey(draft.legalName.isEmpty ? "Add Medication" : "Edit Medication"))
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(AppTheme.text)
-                }
-
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        save()
-                    } label: {
-                        Text(localizedAppString("Save"))
-                            .font(.headline.weight(.bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 18)
-                            .padding(.vertical, 9)
-                            .background(canSave ? AppTheme.accent : Color.secondary.opacity(0.45))
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    }
-                    .disabled(!canSave)
                 }
             }
         }
@@ -8305,13 +8497,14 @@ struct PainLogEntrySheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    VStack(alignment: .leading, spacing: 16) {
-                        PainBodySelector(
-                            painPoints: $painPoints,
-                            tint: option.tint
-                        )
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        VStack(alignment: .leading, spacing: 16) {
+                            PainBodySelector(
+                                painPoints: $painPoints,
+                                tint: option.tint
+                            )
 
                         VStack(alignment: .leading, spacing: 8) {
                             Text("\(localizedAppString("Severity")): \(Int(severity))/5")
@@ -8347,10 +8540,14 @@ struct PainLogEntrySheet: View {
                                 .background(AppTheme.fieldBackground)
                                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         }
+                        }
+                        .authPanel()
                     }
-                    .authPanel()
+                    .padding(18)
                 }
-                .padding(18)
+                StickyBottomSaveButton(title: "Save Log", tint: AppTheme.accent) {
+                    save()
+                }
             }
             .background(AppTheme.background.ignoresSafeArea())
             .navigationTitle("")
@@ -8366,13 +8563,6 @@ struct PainLogEntrySheet: View {
                     ModalToolbarTitle(icon: option.icon, title: option.title, tint: option.tint)
                 }
 
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(localizedAppString("Save")) {
-                        save()
-                    }
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(AppTheme.accent)
-                }
             }
         }
         .presentationDetents([.large])
@@ -9113,147 +9303,152 @@ struct SeizureTimerSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    VStack(spacing: 12) {
-                        Image(systemName: option.icon)
-                            .font(.system(size: 34, weight: .bold))
-                            .foregroundStyle(option.tint)
-                            .frame(width: 70, height: 70)
-                            .background(option.tint.opacity(0.16))
-                            .clipShape(Circle())
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        VStack(spacing: 12) {
+                            Image(systemName: option.icon)
+                                .font(.system(size: 34, weight: .bold))
+                                .foregroundStyle(option.tint)
+                                .frame(width: 70, height: 70)
+                                .background(option.tint.opacity(0.16))
+                                .clipShape(Circle())
 
-                        Text(durationText(elapsedSeconds))
-                            .font(.system(size: 48, weight: .black, design: .rounded))
-                            .monospacedDigit()
-                            .foregroundStyle(AppTheme.text)
+                            Text(durationText(elapsedSeconds))
+                                .font(.system(size: 48, weight: .black, design: .rounded))
+                                .monospacedDigit()
+                                .foregroundStyle(AppTheme.text)
 
-                        Text(LocalizedStringKey(isStopped ? "Timer stopped" : (isRunning ? "Timer running" : "Timer paused")))
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(18)
-                    .background(AppTheme.panel)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-                    HStack(spacing: 12) {
-                        Button {
-                            isRunning.toggle()
-                        } label: {
-                            Text(LocalizedStringKey(isRunning ? "Pause" : "Resume"))
-                                .font(.headline.weight(.bold))
-                                .foregroundStyle(AppTheme.accent)
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(AppTheme.accent.opacity(0.12))
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            Text(LocalizedStringKey(isStopped ? "Timer stopped" : (isRunning ? "Timer running" : "Timer paused")))
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.secondary)
                         }
-                        .disabled(isStopped)
+                        .frame(maxWidth: .infinity)
+                        .padding(18)
+                        .background(AppTheme.panel)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
-                        Button {
-                            isRunning = false
-                            isStopped = true
-                        } label: {
-                            Text(localizedAppString("Stop"))
-                                .font(.headline.weight(.bold))
-                                .foregroundStyle(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(Color.red)
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        }
-                        .disabled(isStopped)
-                    }
-
-                    if !isStopped {
-                        Button {
-                            skipTimer()
-                        } label: {
-                            Text(localizedAppString("Skip"))
-                                .font(.headline.weight(.bold))
-                                .foregroundStyle(AppTheme.accent)
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(AppTheme.fieldBackground)
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        }
-                    }
-
-                    if isStopped {
-                        VStack(alignment: .leading, spacing: 16) {
-                            Text(localizedAppString("Seizure Details"))
-                                .font(.headline.weight(.bold))
-
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text(localizedAppString("Duration"))
-                                    .font(.subheadline.weight(.semibold))
-
-                                HStack(spacing: 10) {
-                                    DurationNumberField(title: localizedAppString("Minutes"), value: durationMinutesBinding)
-                                    DurationNumberField(title: localizedAppString("Seconds"), value: durationSecondsBinding)
-                                }
-
-                                Stepper("\(localizedAppString("Fine tune")): \(durationText(elapsedSeconds))", value: $elapsedSeconds, in: 0...7200, step: 1)
-                                    .font(.footnote.weight(.semibold))
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            Picker(localizedAppString("Seizure Type"), selection: $seizureType) {
-                                ForEach(seizureTypes, id: \.self) { type in
-                                    Text(LocalizedStringKey(type)).tag(type)
-                                }
-                            }
-                            .pickerStyle(.menu)
-
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("\(localizedAppString("Severity")): \(Int(severity))/5")
-                                    .font(.subheadline.weight(.semibold))
-                                Slider(value: $severity, in: 1...5, step: 1)
-                                    .tint(option.tint)
-                            }
-
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text(localizedAppString("Triggers"))
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(AppTheme.text)
-
-                                TextField(localizedAppString("Flashing lights, missed sleep, heat, illness, etc."), text: $triggers, axis: .vertical)
-                                    .textInputAutocapitalization(.never)
-                                    .lineLimit(3...6)
-                                    .padding(12)
-                                    .background(AppTheme.fieldBackground)
-                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            }
-
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text(localizedAppString("Post-event Notes"))
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(AppTheme.text)
-
-                                TextField(localizedAppString("Recovery, breathing, color, awareness, what helped"), text: $postEventNotes, axis: .vertical)
-                                    .textInputAutocapitalization(.never)
-                                    .lineLimit(4...7)
-                                    .padding(12)
-                                    .background(AppTheme.fieldBackground)
-                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            }
-
-                            Button(role: .destructive) {
-                                showingDeleteConfirmation = true
+                        HStack(spacing: 12) {
+                            Button {
+                                isRunning.toggle()
                             } label: {
-                                Text(localizedAppString("Delete"))
+                                Text(LocalizedStringKey(isRunning ? "Pause" : "Resume"))
                                     .font(.headline.weight(.bold))
+                                    .foregroundStyle(AppTheme.accent)
                                     .frame(maxWidth: .infinity)
                                     .padding()
-                                    .background(Color.red.opacity(0.1))
+                                    .background(AppTheme.accent.opacity(0.12))
+                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            }
+                            .disabled(isStopped)
+
+                            Button {
+                                isRunning = false
+                                isStopped = true
+                            } label: {
+                                Text(localizedAppString("Stop"))
+                                    .font(.headline.weight(.bold))
+                                    .foregroundStyle(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(Color.red)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            }
+                            .disabled(isStopped)
+                        }
+
+                        if !isStopped {
+                            Button {
+                                skipTimer()
+                            } label: {
+                                Text(localizedAppString("Skip"))
+                                    .font(.headline.weight(.bold))
+                                    .foregroundStyle(AppTheme.accent)
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(AppTheme.fieldBackground)
                                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                             }
                         }
-                        .authPanel()
+
+                        if isStopped {
+                            VStack(alignment: .leading, spacing: 16) {
+                                Text(localizedAppString("Seizure Details"))
+                                    .font(.headline.weight(.bold))
+
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text(localizedAppString("Duration"))
+                                        .font(.subheadline.weight(.semibold))
+
+                                    HStack(spacing: 10) {
+                                        DurationNumberField(title: localizedAppString("Minutes"), value: durationMinutesBinding)
+                                        DurationNumberField(title: localizedAppString("Seconds"), value: durationSecondsBinding)
+                                    }
+
+                                    Stepper("\(localizedAppString("Fine tune")): \(durationText(elapsedSeconds))", value: $elapsedSeconds, in: 0...7200, step: 1)
+                                        .font(.footnote.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                Picker(localizedAppString("Seizure Type"), selection: $seizureType) {
+                                    ForEach(seizureTypes, id: \.self) { type in
+                                        Text(LocalizedStringKey(type)).tag(type)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("\(localizedAppString("Severity")): \(Int(severity))/5")
+                                        .font(.subheadline.weight(.semibold))
+                                    Slider(value: $severity, in: 1...5, step: 1)
+                                        .tint(option.tint)
+                                }
+
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text(localizedAppString("Triggers"))
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(AppTheme.text)
+
+                                    TextField(localizedAppString("Flashing lights, missed sleep, heat, illness, etc."), text: $triggers, axis: .vertical)
+                                        .textInputAutocapitalization(.never)
+                                        .lineLimit(3...6)
+                                        .padding(12)
+                                        .background(AppTheme.fieldBackground)
+                                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                }
+
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text(localizedAppString("Post-event Notes"))
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(AppTheme.text)
+
+                                    TextField(localizedAppString("Recovery, breathing, color, awareness, what helped"), text: $postEventNotes, axis: .vertical)
+                                        .textInputAutocapitalization(.never)
+                                        .lineLimit(4...7)
+                                        .padding(12)
+                                        .background(AppTheme.fieldBackground)
+                                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                }
+
+                                Button(role: .destructive) {
+                                    showingDeleteConfirmation = true
+                                } label: {
+                                    Text(localizedAppString("Delete"))
+                                        .font(.headline.weight(.bold))
+                                        .frame(maxWidth: .infinity)
+                                        .padding()
+                                        .background(Color.red.opacity(0.1))
+                                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                }
+                            }
+                            .authPanel()
+                        }
                     }
+                    .padding(18)
                 }
-                .padding(18)
+                StickyBottomSaveButton(title: "Save Log", tint: AppTheme.accent) {
+                    save()
+                }
             }
             .background(AppTheme.background.ignoresSafeArea())
             .navigationTitle("")
@@ -9273,13 +9468,6 @@ struct SeizureTimerSheet: View {
                     ModalToolbarTitle(icon: option.icon, title: option.title, tint: option.tint)
                 }
 
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(localizedAppString("Save")) {
-                        save()
-                    }
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(AppTheme.accent)
-                }
             }
             .confirmationDialog(
                 localizedAppString("Delete this seizure timer?"),
@@ -9795,7 +9983,11 @@ struct SnapshotHistoryView: View {
 
     private func entriesFor(_ option: SnapshotOption) -> [HealthLogEntry] {
         entries
-            .filter { $0.type == .snapshot && $0.categoryID == option.id }
+            .filter {
+                option.id == "mood"
+                    ? $0.type == .quickLog && $0.categoryID == "mood"
+                    : $0.type == .snapshot && $0.categoryID == option.id
+            }
             .sorted { $0.timestamp < $1.timestamp }
     }
 }
@@ -11659,65 +11851,75 @@ struct TherapyMilestoneSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack(spacing: 12) {
-                        Image(systemName: category.icon)
-                            .font(.title3.weight(.bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 44, height: 44)
-                            .background(category.tint)
-                            .clipShape(Circle())
-
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(LocalizedStringKey(category.title))
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        HStack(spacing: 12) {
+                            Image(systemName: category.icon)
                                 .font(.title3.weight(.bold))
-                                .foregroundStyle(AppTheme.text)
+                                .foregroundStyle(.white)
+                                .frame(width: 44, height: 44)
+                                .background(category.tint)
+                                .clipShape(Circle())
 
-                            Text(localizedAppString("Log a new milestone"))
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(LocalizedStringKey(category.title))
+                                    .font(.title3.weight(.bold))
+                                    .foregroundStyle(AppTheme.text)
 
-                    DatePicker(localizedAppString("Date"), selection: $date, displayedComponents: .date)
-                        .font(.subheadline.weight(.semibold))
-                        .padding(12)
-                        .background(AppTheme.fieldBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                    ProfileTextField(
-                        title: "Milestone",
-                        text: $milestone,
-                        placeholder: "Example: Used two-word request",
-                        axis: .vertical
-                    )
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(localizedAppString("Support level"))
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(AppTheme.text)
-
-                        Picker(localizedAppString("Support level"), selection: $supportLevel) {
-                            ForEach(supportLevels, id: \.self) { level in
-                                Text(LocalizedStringKey(level)).tag(level)
+                                Text(localizedAppString("Log a new milestone"))
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
                             }
                         }
-                        .pickerStyle(.menu)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(12)
-                        .background(AppTheme.fieldBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    }
 
-                    ProfileTextField(
-                        title: "Notes",
-                        text: $notes,
-                        placeholder: "What helped, where it happened, or what to practice next",
-                        axis: .vertical
-                    )
+                        DatePicker(localizedAppString("Date"), selection: $date, displayedComponents: .date)
+                            .font(.subheadline.weight(.semibold))
+                            .padding(12)
+                            .background(AppTheme.fieldBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                        ProfileTextField(
+                            title: "Milestone",
+                            text: $milestone,
+                            placeholder: "Example: Used two-word request",
+                            axis: .vertical
+                        )
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(localizedAppString("Support level"))
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(AppTheme.text)
+
+                            Picker(localizedAppString("Support level"), selection: $supportLevel) {
+                                ForEach(supportLevels, id: \.self) { level in
+                                    Text(LocalizedStringKey(level)).tag(level)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
+                            .background(AppTheme.fieldBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+
+                        ProfileTextField(
+                            title: "Notes",
+                            text: $notes,
+                            placeholder: "What helped, where it happened, or what to practice next",
+                            axis: .vertical
+                        )
+                    }
+                    .padding(20)
                 }
-                .padding(20)
+
+                StickyBottomSaveButton(
+                    title: "Save",
+                    tint: category.tint,
+                    isDisabled: milestone.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ) {
+                    save()
+                }
             }
             .background(AppTheme.background.ignoresSafeArea())
             .navigationTitle(localizedAppString("Milestone"))
@@ -11727,14 +11929,6 @@ struct TherapyMilestoneSheet: View {
                     Button(localizedAppString("Cancel")) {
                         dismiss()
                     }
-                }
-
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(localizedAppString("Save")) {
-                        save()
-                    }
-                    .fontWeight(.bold)
-                    .disabled(milestone.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
@@ -11775,6 +11969,8 @@ struct NutrientView: View {
     @State private var estimateError = ""
     @State private var saveMessage = ""
     @State private var hasSavedCurrentMeal = false
+    @State private var isEstimateEditorPresented = false
+    @State private var isManualMealEntryPresented = false
     @State private var activeMealPDF: MealPDFShareItem?
     @State private var nutritionGoals = NutritionGoals()
 
@@ -11850,6 +12046,19 @@ struct NutrientView: View {
                         .buttonStyle(.plain)
 
                         Button {
+                            isManualMealEntryPresented = true
+                        } label: {
+                            Label(localizedAppString("Add Meal Manually"), systemImage: "square.and.pencil")
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.accent)
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(AppTheme.accent.opacity(0.12))
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+
+                        Button {
                             estimateMeal()
                         } label: {
                             HStack {
@@ -11913,6 +12122,9 @@ struct NutrientView: View {
                             .disabled(mealPhotoData.isEmpty)
 
                             MealNutritionEstimateView(estimate: estimate)
+                                .onTapGesture {
+                                    isEstimateEditorPresented = true
+                                }
                         } else {
                             VStack(alignment: .leading, spacing: 12) {
                                 HealthMetricRow(icon: "fork.knife", title: "Meals", value: localizedAppString("0 analyzed"))
@@ -11959,6 +12171,22 @@ struct NutrientView: View {
             }
             .sheet(item: $activeMealPDF) { item in
                 PDFShareSheet(url: item.url)
+            }
+            .sheet(isPresented: $isEstimateEditorPresented) {
+                if let estimate = mealEstimate {
+                    MealEstimateEditorSheet(
+                        title: "Edit Nutrient Estimate",
+                        estimate: estimate,
+                        requiresPhoto: false
+                    ) { updatedEstimate in
+                        updateCurrentEstimate(updatedEstimate)
+                    }
+                }
+            }
+            .sheet(isPresented: $isManualMealEntryPresented) {
+                ManualMealEntrySheet { imageData, estimate in
+                    saveManualMeal(imageData: imageData, estimate: estimate)
+                }
             }
         }
     }
@@ -12174,6 +12402,43 @@ struct NutrientView: View {
         }
     }
 
+    private func updateCurrentEstimate(_ estimate: MealNutritionEstimate) {
+        if let data = try? JSONEncoder().encode(estimate) {
+            mealEstimateData = data
+            hasSavedCurrentMeal = false
+            saveMessage = localizedAppString("Estimate updated. Save meal to keep the corrected information in history.")
+        } else {
+            saveMessage = localizedAppString("Unable to update this estimate.")
+        }
+    }
+
+    private func saveManualMeal(imageData: Data, estimate: MealNutritionEstimate) {
+        guard !imageData.isEmpty else {
+            saveMessage = localizedAppString("Add a meal photo before saving.")
+            return
+        }
+
+        var savedMeals = savedMealHistory
+        let compressedImageData = savedMealImageData(from: imageData)
+        savedMeals.insert(
+            SavedMealEstimate(
+                savedAt: Date(),
+                imageData: compressedImageData,
+                estimate: estimate
+            ),
+            at: 0
+        )
+
+        if let data = try? JSONEncoder().encode(savedMeals) {
+            savedMealHistoryData = data
+            saveMessage = localizedAppString("Manual meal saved to history.")
+            applyMealEstimateToNutritionGoals(estimate)
+            syncSavedMeals(savedMeals, showFailure: true)
+        } else {
+            saveMessage = localizedAppString("Unable to save this meal.")
+        }
+    }
+
     private func exportCurrentMealPDF(_ estimate: MealNutritionEstimate) {
         guard !mealPhotoData.isEmpty,
               let url = MealPDFExporter.export(imageData: mealPhotoData, estimate: estimate, savedAt: Date()) else {
@@ -12253,12 +12518,16 @@ struct NutrientView: View {
     }
 
     private func savedMealImageData() -> Data {
-        if let image = UIImage(data: mealPhotoData),
+        savedMealImageData(from: mealPhotoData)
+    }
+
+    private func savedMealImageData(from imageData: Data) -> Data {
+        if let image = UIImage(data: imageData),
            let jpegData = image.resizedForMealAnalysis(maxDimension: 900).jpegData(compressionQuality: 0.72) {
             return jpegData
         }
 
-        return mealPhotoData
+        return imageData
     }
 
     private func mealImageDataURL() -> String {
@@ -12642,6 +12911,389 @@ struct CameraMealPhotoPicker: UIViewControllerRepresentable {
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
             parent.dismiss()
         }
+    }
+}
+
+struct MealEstimateEditorSheet: View {
+    let title: String
+    let estimate: MealNutritionEstimate
+    var requiresPhoto = false
+    var imageData: Data = Data()
+    let onSave: (MealNutritionEstimate) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var calories: String
+    @State private var protein: String
+    @State private var carbs: String
+    @State private var fat: String
+    @State private var fiber: String
+    @State private var sugar: String
+    @State private var summary: String
+    @State private var recommendations: String
+    @State private var notes: String
+
+    init(
+        title: String,
+        estimate: MealNutritionEstimate,
+        requiresPhoto: Bool = false,
+        imageData: Data = Data(),
+        onSave: @escaping (MealNutritionEstimate) -> Void
+    ) {
+        self.title = title
+        self.estimate = estimate
+        self.requiresPhoto = requiresPhoto
+        self.imageData = imageData
+        self.onSave = onSave
+        self._calories = State(initialValue: "\(estimate.calories)")
+        self._protein = State(initialValue: "\(estimate.protein)")
+        self._carbs = State(initialValue: "\(estimate.carbs)")
+        self._fat = State(initialValue: "\(estimate.fat)")
+        self._fiber = State(initialValue: "\(estimate.fiber)")
+        self._sugar = State(initialValue: "\(estimate.sugar)")
+        self._summary = State(initialValue: estimate.summary)
+        self._recommendations = State(initialValue: estimate.recommendations.joined(separator: "\n"))
+        self._notes = State(initialValue: estimate.notes.joined(separator: "\n"))
+    }
+
+    private var canSave: Bool {
+        (!requiresPhoto || !imageData.isEmpty)
+            && intValue(calories) > 0
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if let image = UIImage(data: imageData) {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 180)
+                            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(localizedAppString("Calories"))
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+
+                        NutrientNumberInput(title: "Calories", unit: "kcal", text: $calories)
+                    }
+                    .nutritionEditCard()
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(localizedAppString("Macronutrients"))
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+
+                        NutrientNumberInput(title: "Protein", unit: "g", text: $protein)
+                        NutrientNumberInput(title: "Carbs", unit: "g", text: $carbs)
+                        NutrientNumberInput(title: "Fat", unit: "g", text: $fat)
+                    }
+                    .nutritionEditCard()
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(localizedAppString("More Nutrition Details"))
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+
+                        NutrientNumberInput(title: "Fiber", unit: "g", text: $fiber)
+                        NutrientNumberInput(title: "Sugar", unit: "g", text: $sugar)
+                    }
+                    .nutritionEditCard()
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(localizedAppString("Summary"))
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+
+                        TextField(localizedAppString("Meal summary"), text: $summary, axis: .vertical)
+                            .lineLimit(3...5)
+                            .nutritionTextFieldStyle()
+
+                        Text(localizedAppString("Recommendations"))
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+
+                        TextField(localizedAppString("One recommendation per line"), text: $recommendations, axis: .vertical)
+                            .lineLimit(3...6)
+                            .nutritionTextFieldStyle()
+
+                        Text(localizedAppString("Notes"))
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+
+                        TextField(localizedAppString("One note per line"), text: $notes, axis: .vertical)
+                            .lineLimit(3...6)
+                            .nutritionTextFieldStyle()
+                    }
+                    .nutritionEditCard()
+                }
+                .padding(20)
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle(localizedAppString(title))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(localizedAppString("Cancel")) {
+                        dismiss()
+                    }
+                    .foregroundStyle(AppTheme.accent)
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(localizedAppString("Save")) {
+                        onSave(makeEstimate())
+                        dismiss()
+                    }
+                    .fontWeight(.bold)
+                    .foregroundStyle(canSave ? AppTheme.accent : .secondary)
+                    .disabled(!canSave)
+                }
+            }
+        }
+    }
+
+    private func makeEstimate() -> MealNutritionEstimate {
+        MealNutritionEstimate(
+            calories: intValue(calories),
+            protein: intValue(protein),
+            carbs: intValue(carbs),
+            fat: intValue(fat),
+            fiber: intValue(fiber),
+            sugar: intValue(sugar),
+            confidence: estimate.confidence,
+            summary: summary.trimmingCharacters(in: .whitespacesAndNewlines),
+            recommendations: lineList(from: recommendations),
+            notes: lineList(from: notes)
+        )
+    }
+
+    private func intValue(_ text: String) -> Int {
+        Int(text.filter(\.isNumber)) ?? 0
+    }
+
+    private func lineList(from text: String) -> [String] {
+        text
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+}
+
+struct ManualMealEntrySheet: View {
+    let onSave: (Data, MealNutritionEstimate) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedMealPhoto: PhotosPickerItem?
+    @State private var imageData = Data()
+    @State private var calories = ""
+    @State private var protein = ""
+    @State private var carbs = ""
+    @State private var fat = ""
+    @State private var fiber = ""
+    @State private var sugar = ""
+    @State private var summary = ""
+    @State private var notes = ""
+
+    private var canSave: Bool {
+        !imageData.isEmpty && intValue(calories) > 0
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    PhotosPicker(selection: $selectedMealPhoto, matching: .images) {
+                        ZStack {
+                            if let image = UIImage(data: imageData) {
+                                Image(uiImage: image)
+                                    .resizable()
+                                    .scaledToFill()
+                            } else {
+                                VStack(spacing: 10) {
+                                    Image(systemName: "camera.fill")
+                                        .font(.title.weight(.bold))
+                                        .foregroundStyle(AppTheme.accent)
+
+                                    Text(localizedAppString("Add Meal Photo"))
+                                        .font(.headline.weight(.bold))
+                                        .foregroundStyle(AppTheme.text)
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 190)
+                        .background(AppTheme.fieldBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(localizedAppString("Calories"))
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+
+                        NutrientNumberInput(title: "Calories", unit: "kcal", text: $calories)
+                    }
+                    .nutritionEditCard()
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(localizedAppString("Macronutrients"))
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+
+                        NutrientNumberInput(title: "Protein", unit: "g", text: $protein)
+                        NutrientNumberInput(title: "Carbs", unit: "g", text: $carbs)
+                        NutrientNumberInput(title: "Fat", unit: "g", text: $fat)
+                    }
+                    .nutritionEditCard()
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(localizedAppString("More Nutrition Details"))
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+
+                        NutrientNumberInput(title: "Fiber", unit: "g", text: $fiber)
+                        NutrientNumberInput(title: "Sugar", unit: "g", text: $sugar)
+                    }
+                    .nutritionEditCard()
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(localizedAppString("Meal Notes"))
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+
+                        TextField(localizedAppString("Meal summary"), text: $summary, axis: .vertical)
+                            .lineLimit(3...5)
+                            .nutritionTextFieldStyle()
+
+                        TextField(localizedAppString("Notes"), text: $notes, axis: .vertical)
+                            .lineLimit(3...6)
+                            .nutritionTextFieldStyle()
+                    }
+                    .nutritionEditCard()
+                }
+                .padding(20)
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle(localizedAppString("Add Meal Manually"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(localizedAppString("Cancel")) {
+                        dismiss()
+                    }
+                    .foregroundStyle(AppTheme.accent)
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(localizedAppString("Save")) {
+                        onSave(imageData, makeEstimate())
+                        dismiss()
+                    }
+                    .fontWeight(.bold)
+                    .foregroundStyle(canSave ? AppTheme.accent : .secondary)
+                    .disabled(!canSave)
+                }
+            }
+            .task(id: selectedMealPhoto) {
+                await loadSelectedMealPhoto()
+            }
+        }
+    }
+
+    private func loadSelectedMealPhoto() async {
+        guard let selectedMealPhoto else { return }
+
+        do {
+            if let data = try await selectedMealPhoto.loadTransferable(type: Data.self) {
+                await MainActor.run {
+                    imageData = data
+                }
+            }
+        } catch {
+            // Keep the current draft if photo loading fails.
+        }
+    }
+
+    private func makeEstimate() -> MealNutritionEstimate {
+        let trimmedSummary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return MealNutritionEstimate(
+            calories: intValue(calories),
+            protein: intValue(protein),
+            carbs: intValue(carbs),
+            fat: intValue(fat),
+            fiber: intValue(fiber),
+            sugar: intValue(sugar),
+            confidence: "manual",
+            summary: trimmedSummary.isEmpty ? localizedAppString("Manually entered meal.") : trimmedSummary,
+            recommendations: [],
+            notes: trimmedNotes.isEmpty ? [] : [trimmedNotes]
+        )
+    }
+
+    private func intValue(_ text: String) -> Int {
+        Int(text.filter(\.isNumber)) ?? 0
+    }
+}
+
+struct NutrientNumberInput: View {
+    let title: String
+    let unit: String
+    @Binding var text: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(LocalizedStringKey(title))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppTheme.text)
+
+            Spacer()
+
+            TextField("0", text: numericText)
+                .keyboardType(.numberPad)
+                .multilineTextAlignment(.trailing)
+                .font(.headline.weight(.bold))
+                .frame(width: 90)
+                .padding(.vertical, 10)
+                .padding(.horizontal, 12)
+                .background(AppTheme.fieldBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            Text(unit)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+                .frame(width: 36, alignment: .leading)
+        }
+    }
+
+    private var numericText: Binding<String> {
+        Binding(
+            get: { text },
+            set: { text = $0.filter(\.isNumber) }
+        )
+    }
+}
+
+private extension View {
+    func nutritionEditCard() -> some View {
+        self
+            .padding(14)
+            .background(AppTheme.panel)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .shadow(color: .black.opacity(0.04), radius: 10, x: 0, y: 6)
+    }
+
+    func nutritionTextFieldStyle() -> some View {
+        self
+            .padding(12)
+            .background(AppTheme.fieldBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
