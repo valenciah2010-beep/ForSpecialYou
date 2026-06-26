@@ -40,10 +40,10 @@
 			</dict>
 		</dict>
 	</dict>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>ForSpecialYou uses your photo library so you can choose child profile and meal photos.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>ForSpecialYou uses the camera so you can take meal photos for nutrient estimates.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>ForSpecialYou uses your photo library so you can choose child profile and meal photos.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchScreen</key>
