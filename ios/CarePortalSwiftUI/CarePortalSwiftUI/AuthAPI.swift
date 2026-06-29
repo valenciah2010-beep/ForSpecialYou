@@ -71,6 +71,10 @@ struct AuthAPI {
         let _: MessageResponse = try await post("/api/app-data", body: body)
     }
 
+    func loadAppData(userId: Int) async throws -> ParentAppDataSnapshot {
+        try await post("/api/app-data/load", body: AppSessionRequest(userId: userId))
+    }
+
     func appSettings(userId: Int) async throws -> ParentAppSettings {
         try await post("/api/app-settings", body: AppSessionRequest(userId: userId))
     }
@@ -112,7 +116,9 @@ struct AuthAPI {
         }
 
         if (200..<300).contains(httpResponse.statusCode) {
-            return try JSONDecoder().decode(Response.self, from: data)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(Response.self, from: data)
         }
 
         if let errorBody = try? JSONDecoder().decode(MessageResponse.self, from: data) {
@@ -158,7 +164,7 @@ private struct MealAnalysisRequest: Encodable {
     let language: String
 }
 
-struct ChildProfileSync: Encodable {
+struct ChildProfileSync: Codable {
     let fullName: String
     let birthDate: String
     let supportNeeds: String
@@ -176,6 +182,14 @@ private struct ParentAppDataSyncRequest: Encodable {
 }
 
 struct ParentAppSettings: Decodable {
+    let nutrientDailyLimit: Int
+}
+
+struct ParentAppDataSnapshot: Decodable {
+    let childProfile: ChildProfileSync?
+    let healthLogs: [HealthLogEntry]
+    let savedMeals: [SavedMealEstimate]
+    let nutrientDailyUsage: NutrientDailyUsage?
     let nutrientDailyLimit: Int
 }
 

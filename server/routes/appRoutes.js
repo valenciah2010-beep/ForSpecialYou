@@ -12,8 +12,74 @@ import {
 import { normalizeNutrientDailyLimit } from '../utils/validators.js';
 import { activeBlockMessage, blockFieldsSQL, serializeUser } from '../utils/users.js';
 
+function parseStoredJSON(value, fallback) {
+  if (!value) return fallback;
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
 export function createAppRoutes() {
   const router = new Router();
+
+  router.post('/api/app-data/load', async (ctx) => {
+    const userId = Number(ctx.request.body?.userId);
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      ctx.status = 400;
+      ctx.body = { message: 'Please choose a valid parent user.' };
+      return;
+    }
+
+    try {
+      await ensureDatabaseShapeReady();
+
+      const [rows] = await pool.execute(
+        `SELECT
+          users.id,
+          users.role,
+          ${blockFieldsSQL('users')}
+          parent_app_data.child_profile AS childProfile,
+          parent_app_data.health_logs AS healthLogs,
+          parent_app_data.saved_meals AS savedMeals,
+          parent_app_data.nutrient_daily_usage AS nutrientDailyUsage,
+          COALESCE(parent_app_data.nutrient_daily_limit, 3) AS nutrientDailyLimit
+         FROM users
+         LEFT JOIN parent_app_data ON parent_app_data.user_id = users.id
+         WHERE users.id = ? AND users.role = 'parent'
+         LIMIT 1`,
+        [userId]
+      );
+
+      const user = rows[0];
+      if (!user) {
+        ctx.status = 404;
+        ctx.body = { message: 'Parent user was not found.' };
+        return;
+      }
+
+      if (Number(user.isBlocked) === 1) {
+        ctx.status = 403;
+        ctx.body = { message: activeBlockMessage(user) };
+        return;
+      }
+
+      ctx.body = {
+        childProfile: parseStoredJSON(user.childProfile, {}),
+        healthLogs: parseStoredJSON(user.healthLogs, []),
+        savedMeals: parseStoredJSON(user.savedMeals, []),
+        nutrientDailyUsage: parseStoredJSON(user.nutrientDailyUsage, null),
+        nutrientDailyLimit: normalizeNutrientDailyLimit(user.nutrientDailyLimit)
+      };
+    } catch (error) {
+      console.error(error);
+      ctx.status = 500;
+      ctx.body = { message: 'Could not load app data right now.' };
+    }
+  });
 
   router.post('/api/app-data', async (ctx) => {
     const body = ctx.request.body || {};

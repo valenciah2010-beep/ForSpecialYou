@@ -344,7 +344,7 @@ struct BasicHealthView: View {
                 .presentationDetents([.medium, .large])
             }
             .onAppear {
-                syncParentAppData()
+                syncParentAppDataIfLocalDataExists()
                 MedicationReminderScheduler.reschedule(medications: medications)
             }
             .task(id: healthInsightRefreshKey) {
@@ -1059,6 +1059,21 @@ struct BasicHealthView: View {
                 retryOnFailure: true
             )
         }
+    }
+
+    private func syncParentAppDataIfLocalDataExists() {
+        let hasProfileData = [
+            childName,
+            birthDate,
+            supportNeeds,
+            homeSchoolNotes,
+            emergencyContact,
+            careNotes
+        ]
+        .contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+        guard hasProfileData || !logEntries.isEmpty else { return }
+        syncParentAppData()
     }
 
     @MainActor

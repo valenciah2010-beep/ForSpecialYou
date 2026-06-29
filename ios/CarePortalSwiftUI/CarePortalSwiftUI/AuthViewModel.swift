@@ -65,6 +65,7 @@ final class AuthViewModel: ObservableObject {
 
         do {
             let user = try await api.login(username: loginNickname, password: loginPassword)
+            await restoreServerAppData(for: user)
             currentUser = user
             saveUser(user)
             loginPassword = ""
@@ -140,6 +141,7 @@ final class AuthViewModel: ObservableObject {
 
         do {
             let user = try await api.validateSavedSession(userId: savedUser.id)
+            await restoreServerAppData(for: user)
             currentUser = user
             saveUser(user)
         } catch {
@@ -201,6 +203,68 @@ final class AuthViewModel: ObservableObject {
     private func saveUser(_ user: CarePortalUser) {
         guard let data = try? JSONEncoder().encode(user) else { return }
         UserDefaults.standard.set(data, forKey: Self.savedUserKey)
+    }
+
+    private func restoreServerAppData(for user: CarePortalUser) async {
+        do {
+            let snapshot = try await api.loadAppData(userId: user.id)
+            restoreChildProfile(snapshot.childProfile, userID: user.id)
+            restoreHealthLogs(snapshot.healthLogs, userID: user.id)
+            restoreSavedMeals(snapshot.savedMeals, userID: user.id)
+            restoreNutrientDailyUsage(snapshot.nutrientDailyUsage, userID: user.id)
+            UserDefaults.standard.set(snapshot.nutrientDailyLimit, forKey: "nutrient.\(user.id).dailyEstimateLimit")
+        } catch {
+            print("App data restore failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func restoreChildProfile(_ profile: ChildProfileSync?, userID: Int) {
+        guard let profile else { return }
+        setStringIfLocalBlank(profile.fullName, key: "profile.\(userID).fullName")
+        setStringIfLocalBlank(profile.birthDate, key: "profile.\(userID).birthDate")
+        setStringIfLocalBlank(profile.supportNeeds, key: "profile.\(userID).phone")
+        setStringIfLocalBlank(profile.homeSchoolNotes, key: "profile.\(userID).address")
+        setStringIfLocalBlank(profile.emergencyContact, key: "profile.\(userID).emergencyContact")
+        setStringIfLocalBlank(profile.careNotes, key: "profile.\(userID).medicalNotes")
+    }
+
+    private func restoreHealthLogs(_ logs: [HealthLogEntry], userID: Int) {
+        guard !logs.isEmpty else { return }
+        let key = "health.\(userID).logData"
+        guard (UserDefaults.standard.data(forKey: key) ?? Data()).isEmpty,
+              let data = try? JSONEncoder().encode(logs) else {
+            return
+        }
+        UserDefaults.standard.set(data, forKey: key)
+    }
+
+    private func restoreSavedMeals(_ meals: [SavedMealEstimate], userID: Int) {
+        guard !meals.isEmpty else { return }
+        let key = "nutrient.\(userID).savedMealHistoryData"
+        guard (UserDefaults.standard.data(forKey: key) ?? Data()).isEmpty,
+              let data = try? JSONEncoder().encode(meals) else {
+            return
+        }
+        UserDefaults.standard.set(data, forKey: key)
+    }
+
+    private func restoreNutrientDailyUsage(_ usage: NutrientDailyUsage?, userID: Int) {
+        guard let usage else { return }
+        let key = "nutrient.\(userID).dailyUsageData"
+        guard (UserDefaults.standard.data(forKey: key) ?? Data()).isEmpty,
+              let data = try? JSONEncoder().encode(usage) else {
+            return
+        }
+        UserDefaults.standard.set(data, forKey: key)
+    }
+
+    private func setStringIfLocalBlank(_ value: String, key: String) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let existing = UserDefaults.standard.string(forKey: key) ?? ""
+        guard existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        UserDefaults.standard.set(value, forKey: key)
     }
 
     private func resetLoginProtection() {
