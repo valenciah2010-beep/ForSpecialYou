@@ -853,3 +853,6 @@
 "Heat/Feverish skin" = "皮肤发热";
 "Swelling" = "肿胀";
 "Irritation/Crying" = "烦躁/哭闹";
+"Add Dose" = "添加剂量";
+"You hit the maximum number of doses for one day." = "已达到当天剂量次数上限。";
+"Close" = "关闭";

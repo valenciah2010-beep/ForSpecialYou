@@ -65,6 +65,8 @@ struct BasicHealthView: View {
     @State private var activeSeizureTimer: QuickLogOption?
     @State private var activeMeltdownLog: QuickLogOption?
     @State private var activeStimmingLog: QuickLogOption?
+    @State private var activeAccidentLog: QuickLogOption?
+    @State private var activeDeescalationLog: QuickLogOption?
     @State private var activePainLog: QuickLogOption?
     @State private var activeSkinLog: QuickLogOption?
     @State private var activeMedicineLog: QuickLogOption?
@@ -169,6 +171,10 @@ struct BasicHealthView: View {
                                         activeMeltdownLog = option
                                     } else if option.id == "stimming" {
                                         activeStimmingLog = option
+                                    } else if option.id == "accident" {
+                                        activeAccidentLog = option
+                                    } else if option.id == "deescalation" {
+                                        activeDeescalationLog = option
                                     } else if option.id == "pain" {
                                         activePainLog = option
                                     } else if option.id == "skin" {
@@ -247,9 +253,8 @@ struct BasicHealthView: View {
                                     activeDigestionSnapshot = option
                                 } else if option.id == "nutrition" {
                                     activeNutritionSnapshot = option
-                                } else if option.id == "mood",
-                                          let moodOption = QuickLogOption.option(id: "mood") {
-                                    activeMoodLog = moodOption
+                                } else if option.id == "mood" {
+                                    activeMoodLog = QuickLogOption.moodSnapshotOption
                                 } else {
                                     activeLogInput = .snapshot(option)
                                 }
@@ -303,6 +308,16 @@ struct BasicHealthView: View {
             }
             .sheet(item: $activeStimmingLog) { option in
                 StimmingTicsLogEntrySheet(option: option) { entry in
+                    saveLogEntry(entry)
+                }
+            }
+            .sheet(item: $activeAccidentLog) { option in
+                AccidentLogEntrySheet(option: option) { entry in
+                    saveLogEntry(entry)
+                }
+            }
+            .sheet(item: $activeDeescalationLog) { option in
+                DeescalationLogEntrySheet(option: option) { entry in
                     saveLogEntry(entry)
                 }
             }
@@ -1337,10 +1352,16 @@ struct QuickLogOption: Identifiable {
     let icon: String
     let tint: Color
 
+    static let moodSnapshotOption = QuickLogOption(
+        id: "mood",
+        title: "Mood",
+        icon: "face.smiling",
+        tint: Color(red: 0.95, green: 0.52, blue: 0.61)
+    )
+
     static let all: [QuickLogOption] = [
         QuickLogOption(id: "seizure", title: "Seizure Track", icon: "timer", tint: Color(red: 0.94, green: 0.31, blue: 0.29)),
         QuickLogOption(id: "meltdown", title: "Meltdown", icon: "exclamationmark.triangle.fill", tint: Color(red: 0.96, green: 0.74, blue: 0.24)),
-        QuickLogOption(id: "mood", title: "Mood", icon: "face.smiling", tint: Color(red: 0.95, green: 0.52, blue: 0.61)),
         QuickLogOption(id: "stimming", title: "Stimming/Tics", icon: "waveform.path.ecg", tint: Color(red: 0.51, green: 0.69, blue: 0.96)),
         QuickLogOption(id: "accident", title: "Accident", icon: "drop.triangle.fill", tint: Color(red: 0.69, green: 0.61, blue: 0.91)),
         QuickLogOption(id: "deescalation", title: "De-escalation", icon: "hand.raised.fill", tint: Color(red: 0.43, green: 0.77, blue: 0.62)),
@@ -1352,7 +1373,7 @@ struct QuickLogOption: Identifiable {
         QuickLogOption(id: "medsFood", title: "Medicine", icon: "pills.fill", tint: Color(red: 0.38, green: 0.75, blue: 0.55))
     ]
 
-    static let defaultSelectionString = "seizure,meltdown,mood,cyclicVomiting,medsFood"
+    static let defaultSelectionString = "seizure,meltdown,cyclicVomiting,medsFood"
     static let defaultSelectionIDs = defaultSelectionString.split(separator: ",").map(String.init)
 
     static func option(id: String) -> QuickLogOption? {
@@ -1721,6 +1742,13 @@ enum MedicationDayTime: String, CaseIterable, Codable, Identifiable {
     case morning
     case noon
     case evening
+    case dose4
+    case dose5
+    case dose6
+    case dose7
+    case dose8
+    case dose9
+    case dose10
 
     var id: String { rawValue }
 
@@ -1732,6 +1760,20 @@ enum MedicationDayTime: String, CaseIterable, Codable, Identifiable {
             return "Dose 2"
         case .evening:
             return "Dose 3"
+        case .dose4:
+            return "Dose 4"
+        case .dose5:
+            return "Dose 5"
+        case .dose6:
+            return "Dose 6"
+        case .dose7:
+            return "Dose 7"
+        case .dose8:
+            return "Dose 8"
+        case .dose9:
+            return "Dose 9"
+        case .dose10:
+            return "Dose 10"
         }
     }
 
@@ -1743,6 +1785,20 @@ enum MedicationDayTime: String, CaseIterable, Codable, Identifiable {
             return "12:00"
         case .evening:
             return "18:00"
+        case .dose4:
+            return "20:00"
+        case .dose5:
+            return "22:00"
+        case .dose6:
+            return "23:00"
+        case .dose7:
+            return "06:00"
+        case .dose8:
+            return "10:00"
+        case .dose9:
+            return "14:00"
+        case .dose10:
+            return "16:00"
         }
     }
 }
@@ -2484,6 +2540,23 @@ struct ModalToolbarTitle: View {
     }
 }
 
+struct ToolbarCloseButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.headline.weight(.bold))
+                .foregroundStyle(AppTheme.accent)
+                .frame(width: 34, height: 34)
+                .background(AppTheme.accent.opacity(0.10))
+                .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(localizedAppString("Close"))
+    }
+}
+
 struct StickyBottomSaveButton: View {
     let title: String
     let tint: Color
@@ -2701,8 +2774,8 @@ struct SleepRestSnapshotSheet: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(localizedAppString("Cancel")) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarCloseButton {
                         dismiss()
                     }
                 }
@@ -3088,8 +3161,8 @@ struct DigestionSnapshotSheet: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(localizedAppString("Cancel")) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarCloseButton {
                         dismiss()
                     }
                 }
@@ -3461,8 +3534,8 @@ struct HealthLogEntrySheet: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(localizedAppString("Cancel")) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarCloseButton {
                         dismiss()
                     }
                 }
@@ -3904,6 +3977,485 @@ struct MeltdownLogEntrySheet: View {
     }
 }
 
+struct AccidentLogEntrySheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let option: QuickLogOption
+    let onSave: (HealthLogEntry) -> Void
+
+    @State private var timestamp = Date()
+    @State private var selectedAccidentType = ""
+    @State private var selectedContexts: Set<String> = []
+    @State private var signaledBeforehand: Bool?
+    @State private var notes = ""
+
+    private let accidentTypes = ["Urine", "Stool", "Both"]
+    private let contextOptions = [
+        "🎯 Deep in Play",
+        "🚌 On the Bus/Transition",
+        "🏫 School/Therapy",
+        "🛌 During Sleep"
+    ]
+
+    private var canSave: Bool {
+        !selectedAccidentType.isEmpty
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        accidentSectionCard(icon: "calendar.badge.clock", title: "Timestamp") {
+                            HStack(spacing: 10) {
+                                DatePicker("", selection: $timestamp, displayedComponents: .date)
+                                    .labelsHidden()
+                                    .datePickerStyle(.compact)
+
+                                DatePicker("", selection: $timestamp, displayedComponents: .hourAndMinute)
+                                    .labelsHidden()
+                                    .datePickerStyle(.compact)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+
+                        accidentSectionCard(icon: "drop.triangle.fill", title: "Accident Type") {
+                            HStack(spacing: 0) {
+                                ForEach(accidentTypes, id: \.self) { type in
+                                    Button {
+                                        selectedAccidentType = selectedAccidentType == type ? "" : type
+                                    } label: {
+                                        Text(localizedAppString(type))
+                                            .font(.subheadline.weight(.bold))
+                                            .foregroundStyle(selectedAccidentType == type ? AppTheme.text : .secondary)
+                                            .frame(maxWidth: .infinity)
+                                            .padding(.vertical, 13)
+                                            .background(selectedAccidentType == type ? Color(red: 0.78, green: 0.88, blue: 1.0) : AppTheme.fieldBackground)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+
+                        accidentSectionCard(icon: "mappin.and.ellipse", title: "Context / Setting") {
+                            FlowLayout(spacing: 8, rowSpacing: 8) {
+                                ForEach(contextOptions, id: \.self) { context in
+                                    accidentContextChip(context)
+                                }
+                            }
+                        }
+
+                        accidentSectionCard(icon: "figure.walk.motion", title: "Signaled Beforehand?") {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text(localizedAppString("Did they signal or try to go?"))
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+
+                                HStack(spacing: 10) {
+                                    accidentSignalButton(title: "Yes", value: true)
+                                    accidentSignalButton(title: "No", value: false)
+                                }
+                            }
+                        }
+
+                        accidentSectionCard(icon: "note.text", title: "Notes") {
+                            TextField(localizedAppString("Add details, context, or follow-up notes"), text: $notes, axis: .vertical)
+                                .textInputAutocapitalization(.sentences)
+                                .lineLimit(3...6)
+                                .padding(12)
+                                .background(AppTheme.fieldBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+                    }
+                    .padding(18)
+                }
+
+                StickyBottomSaveButton(
+                    title: "Save Log",
+                    tint: option.tint,
+                    isDisabled: !canSave
+                ) {
+                    save()
+                }
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    ModalToolbarTitle(icon: option.icon, title: option.title, tint: option.tint)
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarCloseButton {
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .presentationDetents([.large])
+    }
+
+    private func accidentSectionCard<Content: View>(
+        icon: String,
+        title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(option.tint)
+                    .frame(width: 30, height: 30)
+                    .background(option.tint.opacity(0.12))
+                    .clipShape(Circle())
+
+                Text(localizedAppString(title))
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(AppTheme.text)
+            }
+
+            content()
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+        }
+        .shadow(color: Color.black.opacity(0.035), radius: 10, x: 0, y: 5)
+    }
+
+    private func accidentContextChip(_ context: String) -> some View {
+        let isSelected = selectedContexts.contains(context)
+
+        return Button {
+            if isSelected {
+                selectedContexts.remove(context)
+            } else {
+                selectedContexts.insert(context)
+            }
+        } label: {
+            Text(localizedAppString(context))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(isSelected ? AppTheme.text : .secondary)
+                .padding(.horizontal, 13)
+                .padding(.vertical, 10)
+                .background(isSelected ? Color(red: 0.83, green: 0.76, blue: 0.95) : Color.gray.opacity(0.10))
+                .clipShape(Capsule())
+                .overlay {
+                    Capsule()
+                        .stroke(isSelected ? Color(red: 0.68, green: 0.58, blue: 0.86).opacity(0.45) : Color.clear, lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func accidentSignalButton(title: String, value: Bool) -> some View {
+        let isSelected = signaledBeforehand == value
+
+        return Button {
+            signaledBeforehand = isSelected ? nil : value
+        } label: {
+            Text(localizedAppString(title))
+                .font(.headline.weight(.bold))
+                .foregroundStyle(isSelected ? .white : AppTheme.text)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 13)
+                .background(isSelected ? option.tint : AppTheme.fieldBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func save() {
+        let contextText = selectedContexts.isEmpty
+            ? localizedAppString("Not selected")
+            : selectedContexts.sorted().map { localizedAppString($0) }.joined(separator: ", ")
+        let signalText: String
+        if let signaledBeforehand {
+            signalText = signaledBeforehand ? localizedAppString("Yes") : localizedAppString("No")
+        } else {
+            signalText = localizedAppString("Not selected")
+        }
+
+        let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        let comments = [
+            "Timestamp: \(localizedDateString(timestamp, dateStyle: .medium, timeStyle: .short))",
+            "Accident Type: \(localizedAppString(selectedAccidentType))",
+            "Context / Setting: \(contextText)",
+            "Did they signal or try to go?: \(signalText)",
+            trimmedNotes.isEmpty ? nil : "Notes: \(trimmedNotes)"
+        ].compactMap { $0 }.joined(separator: "\n")
+
+        let entry = HealthLogEntry(
+            id: UUID(),
+            type: .quickLog,
+            categoryID: option.id,
+            title: option.title,
+            timestamp: timestamp,
+            severity: 1,
+            value: localizedAppString(selectedAccidentType),
+            comments: comments
+        )
+
+        onSave(entry)
+        dismiss()
+    }
+}
+
+struct DeescalationLogEntrySheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let option: QuickLogOption
+    let onSave: (HealthLogEntry) -> Void
+
+    @State private var timestamp = Date()
+    @State private var selectedTools: Set<String> = []
+    @State private var selectedEffectiveness = ""
+    @State private var selectedBaselineTime = ""
+    @State private var notes = ""
+
+    private let toolOptions = [
+        "🎧 Headphones",
+        "🧱 Deep Pressure",
+        "💡 Dimmed Lights",
+        "🛏️ Weighted Blanket",
+        "🔄 Redirection/Distraction",
+        "🧘 Quiet Space"
+    ]
+
+    private let effectivenessOptions = [
+        "Not Effective",
+        "Somewhat Effective",
+        "Highly Effective"
+    ]
+
+    private let baselineOptions = [
+        "<5 mins",
+        "5-15 mins",
+        "15-30 mins",
+        "30+ mins"
+    ]
+
+    private var canSave: Bool {
+        !selectedEffectiveness.isEmpty || !selectedTools.isEmpty || !selectedBaselineTime.isEmpty
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        deescalationSectionCard(icon: "calendar.badge.clock", title: "Timestamp") {
+                            HStack(spacing: 10) {
+                                DatePicker("", selection: $timestamp, displayedComponents: .date)
+                                    .labelsHidden()
+                                    .datePickerStyle(.compact)
+
+                                DatePicker("", selection: $timestamp, displayedComponents: .hourAndMinute)
+                                    .labelsHidden()
+                                    .datePickerStyle(.compact)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+
+                        deescalationSectionCard(icon: "hands.sparkles", title: "Tools Used") {
+                            FlowLayout(spacing: 8, rowSpacing: 8) {
+                                ForEach(toolOptions, id: \.self) { tool in
+                                    deescalationToolChip(tool)
+                                }
+                            }
+                        }
+
+                        deescalationSectionCard(icon: "gauge.with.dots.needle.bottom.50percent", title: "Effectiveness") {
+                            HStack(spacing: 0) {
+                                ForEach(effectivenessOptions, id: \.self) { effectiveness in
+                                    Button {
+                                        selectedEffectiveness = selectedEffectiveness == effectiveness ? "" : effectiveness
+                                    } label: {
+                                        Text(localizedAppString(effectiveness))
+                                            .font(.caption.weight(.bold))
+                                            .foregroundStyle(selectedEffectiveness == effectiveness ? AppTheme.text : .secondary)
+                                            .multilineTextAlignment(.center)
+                                            .lineLimit(2)
+                                            .minimumScaleFactor(0.82)
+                                            .frame(maxWidth: .infinity)
+                                            .padding(.vertical, 13)
+                                            .padding(.horizontal, 4)
+                                            .background(selectedEffectiveness == effectiveness ? effectivenessColor(for: effectiveness) : AppTheme.fieldBackground)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+
+                        deescalationSectionCard(icon: "clock", title: "Time to Baseline") {
+                            HStack(spacing: 8) {
+                                ForEach(baselineOptions, id: \.self) { time in
+                                    Button {
+                                        selectedBaselineTime = selectedBaselineTime == time ? "" : time
+                                    } label: {
+                                        Text(localizedAppString(time))
+                                            .font(.caption.weight(.bold))
+                                            .foregroundStyle(selectedBaselineTime == time ? .white : AppTheme.text)
+                                            .frame(maxWidth: .infinity)
+                                            .padding(.vertical, 12)
+                                            .background(selectedBaselineTime == time ? option.tint : AppTheme.fieldBackground)
+                                            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+
+                        deescalationSectionCard(icon: "note.text", title: "Notes") {
+                            TextField(localizedAppString("Add details, context, or follow-up notes"), text: $notes, axis: .vertical)
+                                .textInputAutocapitalization(.sentences)
+                                .lineLimit(3...6)
+                                .padding(12)
+                                .background(AppTheme.fieldBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+                    }
+                    .padding(18)
+                }
+
+                StickyBottomSaveButton(
+                    title: "Save Log",
+                    tint: option.tint,
+                    isDisabled: !canSave
+                ) {
+                    save()
+                }
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    ModalToolbarTitle(icon: option.icon, title: option.title, tint: option.tint)
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarCloseButton {
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .presentationDetents([.large])
+    }
+
+    private func deescalationSectionCard<Content: View>(
+        icon: String,
+        title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(option.tint)
+                    .frame(width: 30, height: 30)
+                    .background(option.tint.opacity(0.12))
+                    .clipShape(Circle())
+
+                Text(localizedAppString(title))
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(AppTheme.text)
+            }
+
+            content()
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+        }
+        .shadow(color: Color.black.opacity(0.035), radius: 10, x: 0, y: 5)
+    }
+
+    private func deescalationToolChip(_ tool: String) -> some View {
+        let isSelected = selectedTools.contains(tool)
+
+        return Button {
+            if isSelected {
+                selectedTools.remove(tool)
+            } else {
+                selectedTools.insert(tool)
+            }
+        } label: {
+            Text(localizedAppString(tool))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(isSelected ? AppTheme.text : .secondary)
+                .padding(.horizontal, 13)
+                .padding(.vertical, 10)
+                .background(isSelected ? Color(red: 0.78, green: 0.88, blue: 1.0) : Color.gray.opacity(0.10))
+                .clipShape(Capsule())
+                .overlay {
+                    Capsule()
+                        .stroke(isSelected ? Color(red: 0.48, green: 0.66, blue: 0.90).opacity(0.45) : Color.clear, lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func effectivenessColor(for effectiveness: String) -> Color {
+        switch effectiveness {
+        case "Not Effective":
+            return Color.gray.opacity(0.22)
+        case "Somewhat Effective":
+            return Color(red: 1.0, green: 0.86, blue: 0.52)
+        case "Highly Effective":
+            return Color(red: 0.70, green: 0.88, blue: 0.70)
+        default:
+            return AppTheme.fieldBackground
+        }
+    }
+
+    private func save() {
+        let toolsText = selectedTools.isEmpty
+            ? localizedAppString("Not selected")
+            : selectedTools.sorted().map { localizedAppString($0) }.joined(separator: ", ")
+        let effectivenessText = selectedEffectiveness.isEmpty
+            ? localizedAppString("Not selected")
+            : localizedAppString(selectedEffectiveness)
+        let baselineText = selectedBaselineTime.isEmpty
+            ? localizedAppString("Not selected")
+            : localizedAppString(selectedBaselineTime)
+        let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        let comments = [
+            "Timestamp: \(localizedDateString(timestamp, dateStyle: .medium, timeStyle: .short))",
+            "Tools Used: \(toolsText)",
+            "Effectiveness: \(effectivenessText)",
+            "Time to Baseline: \(baselineText)",
+            trimmedNotes.isEmpty ? nil : "Notes: \(trimmedNotes)"
+        ].compactMap { $0 }.joined(separator: "\n")
+
+        let entry = HealthLogEntry(
+            id: UUID(),
+            type: .quickLog,
+            categoryID: option.id,
+            title: option.title,
+            timestamp: timestamp,
+            severity: selectedEffectiveness == "Highly Effective" ? 1 : selectedEffectiveness == "Somewhat Effective" ? 3 : 5,
+            value: effectivenessText,
+            comments: comments
+        )
+
+        onSave(entry)
+        dismiss()
+    }
+}
+
 struct StimmingTicsLogEntrySheet: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -3998,8 +4550,8 @@ struct StimmingTicsLogEntrySheet: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(localizedAppString("Cancel")) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarCloseButton {
                         dismiss()
                     }
                 }
@@ -4403,22 +4955,22 @@ struct CyclicVomitingLogSheet: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(localizedAppString("Cancel")) {
-                        dismiss()
-                    }
-                }
-
                 ToolbarItem(placement: .principal) {
                     ModalToolbarTitle(icon: option.icon, title: option.title, tint: option.tint)
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(localizedAppString("Save Progress")) {
-                        saveProgress()
+                    HStack(spacing: 10) {
+                        Button(localizedAppString("Save Progress")) {
+                            saveProgress()
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AppTheme.accent)
+
+                        ToolbarCloseButton {
+                            dismiss()
+                        }
                     }
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppTheme.accent)
                 }
             }
         }
@@ -6649,8 +7201,8 @@ struct NutritionSnapshotSheet: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(localizedAppString("Cancel")) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarCloseButton {
                         dismiss()
                     }
                 }
@@ -7003,15 +7555,23 @@ struct MoodLogSheet: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(step == .kind ? "Cancel" : "Back") {
-                        goBack()
+                if step != .kind {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button(localizedAppString("Back")) {
+                            goBack()
+                        }
+                        .foregroundStyle(AppTheme.accent)
                     }
-                    .foregroundStyle(AppTheme.accent)
                 }
 
                 ToolbarItem(placement: .principal) {
                     ModalToolbarTitle(icon: option.icon, title: option.title, tint: option.tint)
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarCloseButton {
+                        dismiss()
+                    }
                 }
             }
         }
@@ -7355,12 +7915,6 @@ struct MedicineLogSheet: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(localizedAppString("Cancel")) {
-                        dismiss()
-                    }
-                }
-
                 ToolbarItem(placement: .principal) {
                     ModalToolbarTitle(icon: option.icon, title: option.title, tint: option.tint)
                 }
@@ -7372,6 +7926,17 @@ struct MedicineLogSheet: View {
                         Text(localizedAppString("Edit"))
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(AppTheme.accent)
+                            .padding(.horizontal, 14)
+                            .frame(height: 34)
+                            .background(AppTheme.accent.opacity(0.10))
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarCloseButton {
+                        dismiss()
                     }
                 }
             }
@@ -7757,6 +8322,9 @@ struct MedicationEditorSheet: View {
     let onSave: (MedicationSchedule) -> Void
 
     @State private var draft: MedicationSchedule
+    @State private var isMultipleDoseMode: Bool
+    @State private var hasSelectedScheduleFrequency: Bool
+    @State private var doseLimitMessage = ""
 
     init(medication: MedicationSchedule, onSave: @escaping (MedicationSchedule) -> Void) {
         self.onSave = onSave
@@ -7767,6 +8335,8 @@ struct MedicationEditorSheet: View {
             initialMedication.amount = existingDose
         }
         self._draft = State(initialValue: initialMedication)
+        self._isMultipleDoseMode = State(initialValue: initialMedication.dailyTimes.count > 3 || initialMedication.weeklyTimes.count > 3)
+        self._hasSelectedScheduleFrequency = State(initialValue: !initialMedication.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || initialMedication.mode != .daily || !initialMedication.dailyTimes.isEmpty || !initialMedication.weeklyDays.isEmpty || !initialMedication.weeklyTimes.isEmpty)
     }
 
     private var canSave: Bool {
@@ -7974,6 +8544,37 @@ struct MedicationEditorSheet: View {
                     .background(MedicationFormStyle.detailBackground)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
+
+                if isMultipleDoseMode || selectedDoseSlots.count > 3 {
+                    Button {
+                        addDoseSlot()
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.headline.weight(.bold))
+
+                            Text(localizedAppString("Add Dose"))
+                                .font(.subheadline.weight(.bold))
+                        }
+                        .foregroundStyle(AppTheme.accent)
+                        .frame(maxWidth: .infinity)
+                        .padding(12)
+                        .background(AppTheme.panel)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(AppTheme.accent.opacity(0.14), lineWidth: 1)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if !doseLimitMessage.isEmpty {
+                    Text(doseLimitMessage)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         }
     }
@@ -7998,6 +8599,10 @@ struct MedicationEditorSheet: View {
     }
 
     private var howOftenTitle: String {
+        guard hasSelectedScheduleFrequency else {
+            return "Frequency"
+        }
+
         switch draft.mode {
         case .intervalDays:
             return "Every X days"
@@ -8007,6 +8612,10 @@ struct MedicationEditorSheet: View {
     }
 
     private var doseFrequencyTitle: String {
+        if isMultipleDoseMode && selectedDoseSlots.count >= 3 {
+            return "Multiple times a day"
+        }
+
         switch selectedDoseSlots.count {
         case 1:
             return "Once a day"
@@ -8015,17 +8624,24 @@ struct MedicationEditorSheet: View {
         case 3:
             return "Three times a day"
         default:
-            return "What Time?"
+            return "Multiple times a day"
         }
     }
 
     private func applyDoseFrequency(_ frequency: String) {
+        doseLimitMessage = ""
         switch frequency {
         case "Once a day":
+            isMultipleDoseMode = false
             setDoseSlots([.morning])
         case "Twice a day":
+            isMultipleDoseMode = false
             setDoseSlots([.morning, .evening])
-        case "Three times a day", "Multiple times a day":
+        case "Three times a day":
+            isMultipleDoseMode = false
+            setDoseSlots([.morning, .noon, .evening])
+        case "Multiple times a day":
+            isMultipleDoseMode = true
             setDoseSlots([.morning, .noon, .evening])
         default:
             break
@@ -8080,6 +8696,19 @@ struct MedicationEditorSheet: View {
         }
     }
 
+    private func addDoseSlot() {
+        let currentSlots = sortedTimes(selectedDoseSlots)
+        guard currentSlots.count < MedicationDayTime.allCases.count,
+              let nextSlot = MedicationDayTime.allCases.first(where: { !currentSlots.contains($0) }) else {
+            doseLimitMessage = localizedAppString("You hit the maximum number of doses for one day.")
+            return
+        }
+
+        doseLimitMessage = ""
+        isMultipleDoseMode = true
+        setDoseSlots(currentSlots + [nextSlot])
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -8089,7 +8718,8 @@ struct MedicationEditorSheet: View {
                             title: "Medicine Name",
                             placeholder: "Medicine Name",
                             text: $draft.name,
-                            showsClearButton: true
+                            showsClearButton: true,
+                            background: MedicationFormStyle.background
                         )
 
                         medicationTypeSelector
@@ -8118,6 +8748,7 @@ struct MedicationEditorSheet: View {
                             options: MedicationScheduleMode.allCases.map(\.title)
                         ) { title in
                             if let mode = MedicationScheduleMode.allCases.first(where: { $0.title == title }) {
+                                hasSelectedScheduleFrequency = true
                                 setScheduleMode(mode)
                             }
                         }
@@ -8176,20 +8807,16 @@ struct MedicationEditorSheet: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "chevron.left")
-                            .font(.headline.weight(.bold))
-                            .foregroundStyle(AppTheme.text)
-                    }
-                }
-
                 ToolbarItem(placement: .principal) {
                     Text(LocalizedStringKey(draft.legalName.isEmpty ? "Add Medication" : "Edit Medication"))
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(AppTheme.text)
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarCloseButton {
+                        dismiss()
+                    }
                 }
             }
         }
@@ -8417,6 +9044,7 @@ struct MedicationFormTextField: View {
     @Binding var text: String
     var keyboardType: UIKeyboardType = .default
     var showsClearButton: Bool
+    var background: Color = AppTheme.panel
 
     var body: some View {
         HStack(spacing: 8) {
@@ -8438,7 +9066,7 @@ struct MedicationFormTextField: View {
             }
         }
         .padding(12)
-        .background(AppTheme.panel)
+        .background(background)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -8625,8 +9253,8 @@ struct PainLogEntrySheet: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(localizedAppString("Cancel")) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarCloseButton {
                         dismiss()
                     }
                 }
@@ -8802,11 +9430,10 @@ struct SkinLogEntrySheet: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(localizedAppString("Cancel")) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarCloseButton {
                         dismiss()
                     }
-                    .foregroundStyle(AppTheme.accent)
                 }
 
                 ToolbarItem(placement: .principal) {
@@ -9917,8 +10544,8 @@ struct SeizureTimerSheet: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(localizedAppString("Cancel")) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarCloseButton {
                         if isStopped {
                             showingDeleteConfirmation = true
                         } else {
@@ -12388,8 +13015,8 @@ struct TherapyMilestoneSheet: View {
             .navigationTitle(localizedAppString("Milestone"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(localizedAppString("Cancel")) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarCloseButton {
                         dismiss()
                     }
                 }
@@ -12472,6 +13099,33 @@ struct NutrientView: View {
                         .padding(.top, 2)
                     }
 
+                    Button {
+                        isManualMealEntryPresented = true
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "square.and.pencil")
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 36, height: 36)
+                                .background(AppTheme.accent)
+                                .clipShape(Circle())
+
+                            Text(localizedAppString("Add Meal Manually"))
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            Spacer()
+
+                            Image(systemName: "chevron.right")
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.text.opacity(0.65))
+                        }
+                        .padding(16)
+                        .background(AppTheme.panel)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+
                     VStack(alignment: .leading, spacing: 16) {
                         NutrientDailyLimitSummary(
                             estimateCount: dailyUsage.estimateCount,
@@ -12505,19 +13159,6 @@ struct NutrientView: View {
                         } label: {
                             MealPhotoUploadPanel(imageData: mealPhotoData)
                                 .opacity(canUploadMealPhoto ? 1 : 0.55)
-                        }
-                        .buttonStyle(.plain)
-
-                        Button {
-                            isManualMealEntryPresented = true
-                        } label: {
-                            Label(localizedAppString("Add Meal Manually"), systemImage: "square.and.pencil")
-                                .font(.headline.weight(.bold))
-                                .foregroundStyle(AppTheme.accent)
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(AppTheme.accent.opacity(0.12))
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         }
                         .buttonStyle(.plain)
 
@@ -13499,21 +14140,20 @@ struct MealEstimateEditorSheet: View {
             .navigationTitle(localizedAppString(title))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(localizedAppString("Cancel")) {
-                        dismiss()
-                    }
-                    .foregroundStyle(AppTheme.accent)
-                }
-
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(localizedAppString("Save")) {
-                        onSave(makeEstimate())
-                        dismiss()
+                    HStack(spacing: 10) {
+                        Button(localizedAppString("Save")) {
+                            onSave(makeEstimate())
+                            dismiss()
+                        }
+                        .fontWeight(.bold)
+                        .foregroundStyle(canSave ? AppTheme.accent : .secondary)
+                        .disabled(!canSave)
+
+                        ToolbarCloseButton {
+                            dismiss()
+                        }
                     }
-                    .fontWeight(.bold)
-                    .foregroundStyle(canSave ? AppTheme.accent : .secondary)
-                    .disabled(!canSave)
                 }
             }
         }
@@ -13645,21 +14285,20 @@ struct ManualMealEntrySheet: View {
             .navigationTitle(localizedAppString("Add Meal Manually"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(localizedAppString("Cancel")) {
-                        dismiss()
-                    }
-                    .foregroundStyle(AppTheme.accent)
-                }
-
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(localizedAppString("Save")) {
-                        onSave(imageData, makeEstimate())
-                        dismiss()
+                    HStack(spacing: 10) {
+                        Button(localizedAppString("Save")) {
+                            onSave(imageData, makeEstimate())
+                            dismiss()
+                        }
+                        .fontWeight(.bold)
+                        .foregroundStyle(canSave ? AppTheme.accent : .secondary)
+                        .disabled(!canSave)
+
+                        ToolbarCloseButton {
+                            dismiss()
+                        }
                     }
-                    .fontWeight(.bold)
-                    .foregroundStyle(canSave ? AppTheme.accent : .secondary)
-                    .disabled(!canSave)
                 }
             }
             .task(id: selectedMealPhoto) {
