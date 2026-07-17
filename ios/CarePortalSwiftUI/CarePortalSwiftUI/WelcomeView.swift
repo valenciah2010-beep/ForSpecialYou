@@ -12,33 +12,2361 @@ struct WelcomeView: View {
 
     var body: some View {
         TabView(selection: $selectedTab) {
+            DiagnosisView(user: user)
+                .tabItem {
+                    Label(localizedAppString("Diagnosis"), systemImage: "stethoscope")
+                }
+                .tag(0)
+
             BasicHealthView(user: user) {
-                selectedTab = 3
+                selectedTab = 4
             }
                 .tabItem {
                     Label(localizedAppString("Health"), systemImage: "heart.text.square")
                 }
-                .tag(0)
+                .tag(1)
 
             TherapyTrackingView(user: user)
                 .tabItem {
                     Label(localizedAppString("Therapy"), systemImage: "figure.mind.and.body")
                 }
-                .tag(1)
+                .tag(2)
 
             NutrientView(user: user)
                 .tabItem {
                     Label(localizedAppString("Nutrient"), systemImage: "leaf")
                 }
-                .tag(2)
+                .tag(3)
 
             ProfileView(user: user, logout: logout)
                 .tabItem {
                     Label(localizedAppString("Profile"), systemImage: "person.crop.circle")
                 }
-                .tag(3)
+                .tag(4)
         }
         .tint(AppTheme.accent)
+    }
+}
+
+struct DiagnosisView: View {
+    let user: CarePortalUser
+    @AppStorage private var selectedDiagnosisOptionData: String
+    @AppStorage private var conditionData: Data
+    @AppStorage private var doctorVisitData: Data
+    @AppStorage private var diagnosisNoteData: Data
+    @State private var isEditorPresented = false
+    @State private var isConditionFormPresented = false
+    @State private var isDoctorVisitFormPresented = false
+    @State private var editingCondition: DiagnosisCondition?
+    @State private var pendingDeleteTarget: DiagnosisDeleteTarget?
+
+    init(user: CarePortalUser) {
+        self.user = user
+        self._selectedDiagnosisOptionData = AppStorage(wrappedValue: "", "diagnosis.\(user.id).selectedOptions")
+        self._conditionData = AppStorage(wrappedValue: Data(), "diagnosis.\(user.id).conditions")
+        self._doctorVisitData = AppStorage(wrappedValue: Data(), "diagnosis.\(user.id).doctorVisits")
+        self._diagnosisNoteData = AppStorage(wrappedValue: Data(), "diagnosis.\(user.id).generalNotes")
+    }
+
+    private var selectedDiagnosisIDs: Set<String> {
+        Set(selectedDiagnosisOptionData.split(separator: ",").map(String.init))
+    }
+
+    private var selectedDiagnosisOptions: [DiagnosisOption] {
+        DiagnosisOption.all.filter { selectedDiagnosisIDs.contains($0.id) }
+    }
+
+    private var selectedDiagnosisBinding: Binding<Set<String>> {
+        Binding {
+            selectedDiagnosisIDs
+        } set: { newValue in
+            selectedDiagnosisOptionData = DiagnosisOption.all
+                .map(\.id)
+                .filter { newValue.contains($0) }
+                .joined(separator: ",")
+        }
+    }
+
+    private var conditions: [DiagnosisCondition] {
+        get {
+            guard !conditionData.isEmpty else { return [] }
+            return (try? JSONDecoder().decode([DiagnosisCondition].self, from: conditionData)) ?? []
+        }
+        nonmutating set {
+            conditionData = (try? JSONEncoder().encode(newValue)) ?? Data()
+        }
+    }
+
+    private var doctorVisits: [DiagnosisDoctorVisit] {
+        get {
+            guard !doctorVisitData.isEmpty else { return [] }
+            return (try? JSONDecoder().decode([DiagnosisDoctorVisit].self, from: doctorVisitData)) ?? []
+        }
+        nonmutating set {
+            doctorVisitData = (try? JSONEncoder().encode(newValue)) ?? Data()
+        }
+    }
+
+    private var diagnosisNotes: [DiagnosisGeneralNote] {
+        get {
+            guard !diagnosisNoteData.isEmpty else { return [] }
+            return (try? JSONDecoder().decode([DiagnosisGeneralNote].self, from: diagnosisNoteData)) ?? []
+        }
+        nonmutating set {
+            diagnosisNoteData = (try? JSONEncoder().encode(newValue)) ?? Data()
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack(alignment: .center, spacing: 12) {
+                                Image(systemName: "stethoscope")
+                                    .font(.system(size: 34, weight: .semibold))
+                                    .foregroundStyle(AppTheme.accent)
+
+                                Text(localizedAppString("Diagnosis"))
+                                    .font(.largeTitle.weight(.bold))
+                                    .foregroundStyle(AppTheme.text)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        Button {
+                            isEditorPresented = true
+                        } label: {
+                            Text(localizedAppString("Edit"))
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(AppTheme.accent)
+                                .padding(.horizontal, 14)
+                                .frame(height: 38)
+                                .background(AppTheme.accent.opacity(0.10))
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 4)
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text(localizedAppString("Conditions"))
+                                .font(.title2.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            Spacer()
+
+                            Button {
+                                isConditionFormPresented = true
+                            } label: {
+                                Image(systemName: "plus")
+                                    .font(.headline.weight(.bold))
+                                    .foregroundStyle(AppTheme.accent)
+                                    .frame(width: 38, height: 38)
+                                    .background(AppTheme.accent.opacity(0.10))
+                                    .clipShape(Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(localizedAppString("Add condition"))
+                        }
+
+                        if conditions.isEmpty {
+                            Text(localizedAppString("No conditions added yet."))
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(14)
+                                .background(AppTheme.panel)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        } else {
+                            VStack(spacing: 10) {
+                                ForEach(conditions) { condition in
+                                    DiagnosisSwipeRow(
+                                        actions: [
+                                            DiagnosisSwipeAction(title: "Edit", icon: "pencil", tint: AppTheme.accent) {
+                                                editingCondition = condition
+                                            },
+                                            DiagnosisSwipeAction(title: "Delete", icon: "trash", tint: .red) {
+                                                pendingDeleteTarget = DiagnosisDeleteTarget(kind: .condition(condition))
+                                            }
+                                        ]
+                                    ) {
+                                        Button {
+                                            editingCondition = condition
+                                        } label: {
+                                            DiagnosisConditionCard(condition: condition)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                            }
+                        }
+
+                        HStack(spacing: 10) {
+                            DiagnosisSecondaryAddButton(title: "Doctor Visit", icon: "stethoscope", tint: Color(red: 0.19, green: 0.48, blue: 0.82)) {
+                                isDoctorVisitFormPresented = true
+                            }
+                        }
+                    }
+
+                    if !selectedDiagnosisOptions.isEmpty {
+                        VStack(spacing: 10) {
+                            ForEach(selectedDiagnosisOptions) { option in
+                                DiagnosisSwipeRow(
+                                    actions: [
+                                        DiagnosisSwipeAction(title: "Delete", icon: "trash", tint: .red) {
+                                            pendingDeleteTarget = DiagnosisDeleteTarget(kind: .category(option))
+                                        }
+                                    ]
+                                ) {
+                                    NavigationLink {
+                                        DiagnosisDetailView(userID: user.id, option: option)
+                                    } label: {
+                                        HStack(spacing: 14) {
+                                            Text(option.emoji)
+                                                .font(.title2)
+                                                .frame(width: 46, height: 46)
+                                                .background(AppTheme.accent.opacity(0.10))
+                                                .clipShape(Circle())
+
+                                            Text(localizedAppString(option.title))
+                                                .font(.headline.weight(.bold))
+                                                .foregroundStyle(AppTheme.text)
+                                                .lineLimit(2)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                        }
+                                        .padding(16)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .background(AppTheme.panel)
+                                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(20)
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle(localizedAppString("Diagnosis"))
+            .alert(item: $pendingDeleteTarget) { target in
+                Alert(
+                    title: Text(localizedAppString(target.titleKey)),
+                    message: Text(localizedAppString(target.messageKey)),
+                    primaryButton: .destructive(Text(localizedAppString("Delete"))) {
+                        switch target.kind {
+                        case .condition(let condition):
+                            conditions = conditions.filter { $0.id != condition.id }
+                        case .category(let option):
+                            removeDiagnosisOption(option.id)
+                        }
+                        pendingDeleteTarget = nil
+                    },
+                    secondaryButton: .cancel(Text(localizedAppString("Cancel"))) {
+                        pendingDeleteTarget = nil
+                    }
+                )
+            }
+            .sheet(isPresented: $isEditorPresented) {
+                DiagnosisSelectionSheet(selectedIDs: selectedDiagnosisBinding)
+            }
+            .sheet(isPresented: $isConditionFormPresented) {
+                DiagnosisConditionFormSheet { condition in
+                    var updated = conditions
+                    updated.insert(condition, at: 0)
+                    conditions = updated
+                    isConditionFormPresented = false
+                }
+            }
+            .sheet(item: $editingCondition) { condition in
+                DiagnosisConditionFormSheet(existingCondition: condition) { editedCondition in
+                    var updated = conditions
+                    if let index = updated.firstIndex(where: { $0.id == editedCondition.id }) {
+                        updated[index] = editedCondition
+                    } else {
+                        updated.insert(editedCondition, at: 0)
+                    }
+                    conditions = updated
+                    editingCondition = nil
+                }
+            }
+            .sheet(isPresented: $isDoctorVisitFormPresented) {
+                DiagnosisDoctorVisitFormSheet { visit in
+                    var updated = doctorVisits
+                    updated.insert(visit, at: 0)
+                    doctorVisits = updated
+                    isDoctorVisitFormPresented = false
+                }
+            }
+        }
+    }
+
+    private func removeDiagnosisOption(_ id: String) {
+        var updatedIDs = Set(selectedDiagnosisOptionData.split(separator: ",").map(String.init))
+        updatedIDs.remove(id)
+        selectedDiagnosisOptionData = DiagnosisOption.all
+            .map(\.id)
+            .filter { updatedIDs.contains($0) }
+            .joined(separator: ",")
+    }
+}
+
+struct DiagnosisDeleteTarget: Identifiable {
+    enum Kind {
+        case condition(DiagnosisCondition)
+        case category(DiagnosisOption)
+    }
+
+    let id = UUID()
+    let kind: Kind
+
+    var titleKey: String {
+        switch kind {
+        case .condition:
+            return "Delete condition?"
+        case .category:
+            return "Remove category from page?"
+        }
+    }
+
+    var messageKey: String {
+        switch kind {
+        case .condition:
+            return "This condition will be removed."
+        case .category:
+            return "This category will be hidden from the page but still available in Edit."
+        }
+    }
+}
+
+struct DiagnosisCondition: Codable, Identifiable, Equatable {
+    let id: UUID
+    let categoryIDs: [String]
+    let name: String
+    let notes: String
+    let photos: [DiagnosisAttachment]
+    let createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        categoryIDs: [String],
+        name: String,
+        notes: String,
+        photos: [DiagnosisAttachment],
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.categoryIDs = categoryIDs
+        self.name = name
+        self.notes = notes
+        self.photos = photos
+        self.createdAt = createdAt
+    }
+
+    var categoryText: String {
+        let names = categoryIDs.compactMap { id in
+            DiagnosisOption.option(id: id).map { localizedAppString($0.title) }
+        }
+
+        return names.isEmpty ? localizedAppString("No category selected") : names.joined(separator: ", ")
+    }
+}
+
+struct DiagnosisConditionCard: View {
+    let condition: DiagnosisCondition
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(condition.categoryText)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+                .lineLimit(2)
+
+            Text(condition.name)
+                .font(.headline.weight(.bold))
+                .foregroundStyle(AppTheme.text)
+                .lineLimit(3)
+
+            if !condition.photos.isEmpty {
+                Text(String(format: localizedAppString("%d photo(s)"), condition.photos.count))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppTheme.accent)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.panel)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+struct DiagnosisDoctorVisit: Codable, Identifiable, Equatable {
+    let id: UUID
+    let categoryIDs: [String]
+    let title: String
+    let doctorName: String
+    let clinicLocation: String
+    let date: Date
+    let notes: String
+    let attachments: [DiagnosisAttachment]
+    let createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        categoryIDs: [String],
+        title: String = "",
+        doctorName: String,
+        clinicLocation: String,
+        date: Date,
+        notes: String,
+        attachments: [DiagnosisAttachment],
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.categoryIDs = categoryIDs
+        self.title = title
+        self.doctorName = doctorName
+        self.clinicLocation = clinicLocation
+        self.date = date
+        self.notes = notes
+        self.attachments = attachments
+        self.createdAt = createdAt
+    }
+
+    var categoryText: String {
+        diagnosisCategoryText(categoryIDs)
+    }
+
+    var displayTitle: String {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedTitle.isEmpty {
+            return trimmedTitle
+        }
+
+        let trimmedDoctorName = doctorName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedDoctorName.isEmpty ? localizedAppString("Doctor Visit") : trimmedDoctorName
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case categoryIDs
+        case title
+        case doctorName
+        case clinicLocation
+        case date
+        case notes
+        case attachments
+        case createdAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(UUID.self, forKey: .id)
+        self.categoryIDs = try container.decode([String].self, forKey: .categoryIDs)
+        self.title = (try? container.decode(String.self, forKey: .title)) ?? ""
+        self.doctorName = try container.decode(String.self, forKey: .doctorName)
+        self.clinicLocation = try container.decode(String.self, forKey: .clinicLocation)
+        self.date = try container.decode(Date.self, forKey: .date)
+        self.notes = try container.decode(String.self, forKey: .notes)
+        self.attachments = try container.decode([DiagnosisAttachment].self, forKey: .attachments)
+        self.createdAt = try container.decode(Date.self, forKey: .createdAt)
+    }
+}
+
+struct DiagnosisGeneralNote: Codable, Identifiable, Equatable {
+    let id: UUID
+    let categoryIDs: [String]
+    let date: Date?
+    let notes: String
+    let attachments: [DiagnosisAttachment]
+    let createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        categoryIDs: [String],
+        date: Date?,
+        notes: String,
+        attachments: [DiagnosisAttachment],
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.categoryIDs = categoryIDs
+        self.date = date
+        self.notes = notes
+        self.attachments = attachments
+        self.createdAt = createdAt
+    }
+
+    var categoryText: String {
+        diagnosisCategoryText(categoryIDs)
+    }
+}
+
+private func diagnosisCategoryText(_ categoryIDs: [String]) -> String {
+    let names = categoryIDs.compactMap { id in
+        DiagnosisOption.option(id: id).map { localizedAppString($0.title) }
+    }
+
+    return names.isEmpty ? localizedAppString("No category selected") : names.joined(separator: ", ")
+}
+
+struct DiagnosisSecondaryAddButton: View {
+    let title: String
+    let icon: String
+    let tint: Color
+    let action: () -> Void
+
+    init(title: String, icon: String, tint: Color = AppTheme.accent, action: @escaping () -> Void) {
+        self.title = title
+        self.icon = icon
+        self.tint = tint
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: "plus")
+                    .font(.subheadline.weight(.black))
+
+                Image(systemName: icon)
+                    .font(.subheadline.weight(.bold))
+
+                Text(localizedAppString(title))
+                    .font(.subheadline.weight(.bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            .foregroundStyle(tint)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 13)
+            .background(tint.opacity(0.14))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct DiagnosisSwipeAction: Identifiable {
+    let id = UUID()
+    let title: String
+    let icon: String
+    let tint: Color
+    let action: () -> Void
+}
+
+struct DiagnosisSwipeRow<Content: View>: View {
+    let actions: [DiagnosisSwipeAction]
+    @ViewBuilder let content: () -> Content
+
+    @State private var offset: CGFloat = 0
+    @State private var isSwiping = false
+    @State private var gestureStartOffset: CGFloat = 0
+
+    private var actionWidth: CGFloat {
+        CGFloat(actions.count) * 72
+    }
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            HStack(spacing: 8) {
+                ForEach(actions) { action in
+                    Button {
+                        withAnimation(.spring(response: 0.22, dampingFraction: 0.9)) {
+                            offset = 0
+                            gestureStartOffset = 0
+                            isSwiping = false
+                        }
+                        action.action()
+                    } label: {
+                        VStack(spacing: 4) {
+                            Image(systemName: action.icon)
+                                .font(.headline.weight(.bold))
+
+                            Text(localizedAppString(action.title))
+                                .font(.caption2.weight(.bold))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.75)
+                        }
+                        .foregroundStyle(.white)
+                        .frame(width: 64, height: 62)
+                        .background(action.tint)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.trailing, 4)
+            .opacity(offset == 0 ? 0 : 1)
+            .allowsHitTesting(offset != 0)
+            .zIndex(2)
+
+            content()
+                .offset(x: offset)
+                .disabled(isSwiping || offset != 0)
+                .highPriorityGesture(
+                    DragGesture(minimumDistance: 18)
+                        .onChanged { value in
+                            let horizontal = value.translation.width
+                            guard abs(horizontal) > abs(value.translation.height) else { return }
+
+                            if !isSwiping {
+                                isSwiping = true
+                                gestureStartOffset = offset
+                            }
+
+                            let proposedOffset = gestureStartOffset + horizontal
+                            offset = min(0, max(-actionWidth, proposedOffset))
+                        }
+                        .onEnded { value in
+                            let predictedOffset = gestureStartOffset + value.predictedEndTranslation.width
+                            let shouldOpen = predictedOffset < -(actionWidth * 0.38)
+                            withAnimation(.spring(response: 0.24, dampingFraction: 0.86)) {
+                                offset = shouldOpen ? -actionWidth : 0
+                            }
+
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+                                isSwiping = false
+                                gestureStartOffset = offset
+                            }
+                        }
+                )
+                .zIndex(1)
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+struct DiagnosisDoctorVisitCard: View {
+    let visit: DiagnosisDoctorVisit
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(visit.categoryText)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+                .lineLimit(2)
+
+            Text(visit.displayTitle)
+                .font(.headline.weight(.bold))
+                .foregroundStyle(AppTheme.text)
+                .lineLimit(2)
+
+            HStack(spacing: 8) {
+                Text(localizedDateString(visit.date, dateStyle: .medium, timeStyle: .none))
+
+                if !visit.clinicLocation.isEmpty {
+                    Text("•")
+                    Text(visit.clinicLocation)
+                        .lineLimit(1)
+                }
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+
+            if !visit.attachments.isEmpty {
+                Text(String(format: localizedAppString("%d attachment(s)"), visit.attachments.count))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppTheme.accent)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.panel)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+struct DiagnosisGeneralNoteCard: View {
+    let note: DiagnosisGeneralNote
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                Text(note.categoryText)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                    .lineLimit(2)
+
+                Spacer()
+
+                if let date = note.date {
+                    Text(localizedDateString(date, dateStyle: .medium, timeStyle: .none))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Text(note.notes)
+                .font(.headline.weight(.bold))
+                .foregroundStyle(AppTheme.text)
+                .lineLimit(3)
+
+            if !note.attachments.isEmpty {
+                Text(String(format: localizedAppString("%d attachment(s)"), note.attachments.count))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppTheme.accent)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.panel)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+struct DiagnosisCategoryTimelineItem: Identifiable {
+    enum Kind {
+        case doctorVisit
+        case note
+    }
+
+    let id: String
+    let sourceID: UUID
+    let date: Date
+    let kind: Kind
+    let title: String
+    let notePreview: String
+
+    var kindTitle: String {
+        switch kind {
+        case .doctorVisit:
+            return localizedAppString("Doctor Visit")
+        case .note:
+            return localizedAppString("Notes")
+        }
+    }
+
+    var icon: String {
+        switch kind {
+        case .doctorVisit:
+            return "stethoscope"
+        case .note:
+            return "note.text"
+        }
+    }
+
+    var tint: Color {
+        switch kind {
+        case .doctorVisit:
+            return Color(red: 0.19, green: 0.48, blue: 0.82)
+        case .note:
+            return Color(red: 0.82, green: 0.58, blue: 0.10)
+        }
+    }
+}
+
+struct DiagnosisCategoryTimelineView: View {
+    let items: [DiagnosisCategoryTimelineItem]
+    let onSelect: (DiagnosisCategoryTimelineItem) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(localizedAppString("History"))
+                .font(.headline.weight(.bold))
+                .foregroundStyle(AppTheme.text)
+
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    Button {
+                        onSelect(item)
+                    } label: {
+                        HStack(alignment: .top, spacing: 12) {
+                            VStack(spacing: 0) {
+                                ZStack {
+                                    Circle()
+                                        .fill(item.tint.opacity(0.16))
+                                        .frame(width: 34, height: 34)
+
+                                    Image(systemName: item.icon)
+                                        .font(.caption.weight(.black))
+                                        .foregroundStyle(item.tint)
+                                }
+
+                                if index < items.count - 1 {
+                                    Rectangle()
+                                        .fill(AppTheme.accent.opacity(0.14))
+                                        .frame(width: 2, height: 56)
+                                }
+                            }
+
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack(alignment: .top, spacing: 8) {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(item.title)
+                                            .font(.headline.weight(.bold))
+                                            .foregroundStyle(AppTheme.text)
+                                            .lineLimit(2)
+
+                                        Text(localizedDateString(item.date, dateStyle: .medium, timeStyle: .none))
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                                    Text(item.kindTitle)
+                                        .font(.caption.weight(.bold))
+                                        .foregroundStyle(item.tint)
+                                        .padding(.horizontal, 9)
+                                        .padding(.vertical, 4)
+                                        .background(item.tint.opacity(0.12))
+                                        .clipShape(Capsule())
+                                }
+
+                                if !item.notePreview.isEmpty {
+                                    Text(item.notePreview)
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(2)
+                                }
+                            }
+                            .padding(.top, 5)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(.bottom, index < items.count - 1 ? 4 : 0)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .diagnosisDetailCard()
+    }
+}
+
+struct DiagnosisOption: Identifiable {
+    let id: String
+    let title: String
+    let emoji: String
+
+    static let all: [DiagnosisOption] = [
+        DiagnosisOption(id: "genetics", title: "Genetics", emoji: "🧬"),
+        DiagnosisOption(id: "pediatricHealthClinic", title: "Pediatric Health Clinic (Early Screening)", emoji: "🩺"),
+        DiagnosisOption(id: "developmentalBehavioral", title: "Developmental-Behavioral Pediatrics", emoji: "🧩"),
+        DiagnosisOption(id: "childPsychiatryPsychology", title: "Child Psychiatry/Psychology", emoji: "🧠"),
+        DiagnosisOption(id: "neurology", title: "Neurology", emoji: "⚡"),
+        DiagnosisOption(id: "rehabilitationInterventions", title: "Rehabilitation / Interventions", emoji: "🏃"),
+        DiagnosisOption(id: "gastroenterology", title: "Gastroenterology", emoji: "🍽️"),
+        DiagnosisOption(id: "oralRelated", title: "Oral Related (Stomatology)", emoji: "🦷"),
+        DiagnosisOption(id: "dermatology", title: "Dermatology", emoji: "🩹"),
+        DiagnosisOption(id: "orthopedics", title: "Orthopedics", emoji: "🦴"),
+        DiagnosisOption(id: "stomatology", title: "Otolaryngology (ENT)", emoji: "👂"),
+        DiagnosisOption(id: "neurosurgery", title: "Neurosurgery", emoji: "🧠"),
+        DiagnosisOption(id: "ophthalmology", title: "Ophthalmology", emoji: "👁️"),
+        DiagnosisOption(id: "traditionalChineseMedicine", title: "Traditional Chinese Medicine", emoji: "🌿"),
+        DiagnosisOption(id: "nutrition", title: "Nutrition", emoji: "🥗"),
+        DiagnosisOption(id: "autismSpecialist", title: "Autism Specialist", emoji: "♾️"),
+        DiagnosisOption(id: "other", title: "Other", emoji: "✨")
+    ]
+
+    static func option(id: String) -> DiagnosisOption? {
+        all.first { $0.id == id }
+    }
+}
+
+struct DiagnosisConditionFormSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let existingCondition: DiagnosisCondition?
+    let onSave: (DiagnosisCondition) -> Void
+
+    @State private var selectedCategoryIDs: Set<String>
+    @State private var conditionName: String
+    @State private var notes: String
+    @State private var photos: [DiagnosisAttachment]
+    @State private var selectedPhotos: [PhotosPickerItem] = []
+    @State private var isCameraPresented = false
+    @State private var isCategoryExpanded = false
+    @State private var statusMessage = ""
+
+    private var canSave: Bool {
+        !conditionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var selectedCategoryText: String {
+        let selected = DiagnosisOption.all
+            .filter { selectedCategoryIDs.contains($0.id) }
+            .map { "\($0.emoji) \(localizedAppString($0.title))" }
+
+        return selected.isEmpty ? localizedAppString("Select category") : selected.joined(separator: ", ")
+    }
+
+    init(existingCondition: DiagnosisCondition? = nil, onSave: @escaping (DiagnosisCondition) -> Void) {
+        self.existingCondition = existingCondition
+        self.onSave = onSave
+        self._selectedCategoryIDs = State(initialValue: Set(existingCondition?.categoryIDs ?? []))
+        self._conditionName = State(initialValue: existingCondition?.name ?? "")
+        self._notes = State(initialValue: existingCondition?.notes ?? "")
+        self._photos = State(initialValue: existingCondition?.photos ?? [])
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Button {
+                                withAnimation(.spring(response: 0.25, dampingFraction: 0.86)) {
+                                    isCategoryExpanded.toggle()
+                                }
+                            } label: {
+                                HStack(spacing: 10) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(localizedAppString("Select category"))
+                                            .font(.caption.weight(.bold))
+                                            .foregroundStyle(.secondary)
+
+                                        Text(selectedCategoryText)
+                                            .font(.headline.weight(.semibold))
+                                            .foregroundStyle(AppTheme.text)
+                                            .lineLimit(2)
+                                    }
+
+                                    Spacer()
+
+                                    Image(systemName: "chevron.down")
+                                        .font(.subheadline.weight(.bold))
+                                        .foregroundStyle(.secondary)
+                                        .rotationEffect(.degrees(isCategoryExpanded ? 180 : 0))
+                                }
+                                .padding(14)
+                                .background(AppTheme.fieldBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+
+                            if isCategoryExpanded {
+                                VStack(spacing: 8) {
+                                    ForEach(DiagnosisOption.all) { option in
+                                        Button {
+                                            toggleCategory(option.id)
+                                        } label: {
+                                            HStack(spacing: 12) {
+                                                Image(systemName: selectedCategoryIDs.contains(option.id) ? "checkmark.square.fill" : "square")
+                                                    .font(.headline.weight(.semibold))
+                                                    .foregroundStyle(selectedCategoryIDs.contains(option.id) ? AppTheme.accent : .secondary)
+
+                                                Text(option.emoji)
+                                                    .font(.title3)
+                                                    .frame(width: 28)
+
+                                                Text(localizedAppString(option.title))
+                                                    .font(.subheadline.weight(.semibold))
+                                                    .foregroundStyle(AppTheme.text)
+                                                    .lineLimit(1)
+                                                    .minimumScaleFactor(0.75)
+
+                                                Spacer()
+                                            }
+                                            .padding(12)
+                                            .background(selectedCategoryIDs.contains(option.id) ? AppTheme.accent.opacity(0.10) : AppTheme.panel)
+                                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                            }
+                        }
+                        .diagnosisDetailCard()
+
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(localizedAppString("Condition Name"))
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            TextField(localizedAppString("Enter condition name"), text: $conditionName)
+                                .textInputAutocapitalization(.words)
+                                .font(.headline.weight(.semibold))
+                                .padding(14)
+                                .background(AppTheme.fieldBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+                        .diagnosisDetailCard()
+
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(localizedAppString("Notes"))
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            TextField(localizedAppString("Add notes"), text: $notes, axis: .vertical)
+                                .textInputAutocapitalization(.sentences)
+                                .lineLimit(5...10)
+                                .padding(14)
+                                .background(AppTheme.fieldBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+                        .diagnosisDetailCard()
+
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(localizedAppString("Photos"))
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            HStack(spacing: 10) {
+                                Button {
+                                    if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                                        isCameraPresented = true
+                                    } else {
+                                        statusMessage = localizedAppString("Camera unavailable on this device.")
+                                    }
+                                } label: {
+                                    DiagnosisAttachmentAction(title: "Take Photo", icon: "camera.fill")
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+
+                                PhotosPicker(selection: $selectedPhotos, matching: .images) {
+                                    DiagnosisAttachmentAction(title: "Upload Photo", icon: "photo.on.rectangle")
+                                }
+                                .buttonStyle(.plain)
+                            }
+
+                            if !statusMessage.isEmpty {
+                                Text(statusMessage)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            if !photos.isEmpty {
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 10) {
+                                        ForEach(photos) { photo in
+                                            DiagnosisConditionPhotoThumb(photo: photo) {
+                                                photos.removeAll { $0.id == photo.id }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .diagnosisDetailCard()
+                    }
+                    .padding(18)
+                }
+
+                StickyBottomSaveButton(
+                    title: "Save",
+                    tint: AppTheme.accent,
+                    isDisabled: !canSave
+                ) {
+                    save()
+                }
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle(localizedAppString(existingCondition == nil ? "New Condition" : "Edit Condition"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarCloseButton {
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .presentationDetents([.large])
+        .onChange(of: selectedPhotos) { _, newValue in
+            guard !newValue.isEmpty else { return }
+            Task {
+                await loadSelectedPhotos(newValue)
+            }
+        }
+        .fullScreenCover(isPresented: $isCameraPresented) {
+            CameraMealPhotoPicker { data in
+                addPhoto(data)
+            }
+            .ignoresSafeArea()
+        }
+    }
+
+    private func toggleCategory(_ id: String) {
+        if selectedCategoryIDs.contains(id) {
+            selectedCategoryIDs.remove(id)
+        } else {
+            selectedCategoryIDs.insert(id)
+        }
+    }
+
+    private func loadSelectedPhotos(_ selectedItems: [PhotosPickerItem]) async {
+        var loaded: [Data] = []
+
+        for item in selectedItems {
+            if let data = try? await item.loadTransferable(type: Data.self) {
+                loaded.append(data)
+            }
+        }
+
+        await MainActor.run {
+            addPhotos(loaded)
+            selectedPhotos = []
+        }
+    }
+
+    private func addPhoto(_ data: Data) {
+        addPhotos([data])
+    }
+
+    private func addPhotos(_ dataItems: [Data]) {
+        guard !dataItems.isEmpty else { return }
+
+        for data in dataItems {
+            let compressed = compressedConditionPhotoData(data)
+            photos.append(
+                DiagnosisAttachment(
+                    kind: .photo,
+                    name: "\(localizedAppString("Photo")) \(photos.count + 1)",
+                    data: compressed
+                )
+            )
+        }
+
+        statusMessage = dataItems.count == 1
+            ? localizedAppString("Photo added.")
+            : String(format: localizedAppString("%d photos added."), dataItems.count)
+    }
+
+    private func compressedConditionPhotoData(_ data: Data) -> Data {
+        if let image = UIImage(data: data),
+           let jpegData = image.resizedForMealAnalysis(maxDimension: 1000).jpegData(compressionQuality: 0.74) {
+            return jpegData
+        }
+
+        return data
+    }
+
+    private func save() {
+        let condition = DiagnosisCondition(
+            id: existingCondition?.id ?? UUID(),
+            categoryIDs: DiagnosisOption.all.map(\.id).filter { selectedCategoryIDs.contains($0) },
+            name: conditionName.trimmingCharacters(in: .whitespacesAndNewlines),
+            notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
+            photos: photos,
+            createdAt: existingCondition?.createdAt ?? Date()
+        )
+
+        onSave(condition)
+    }
+}
+
+struct DiagnosisConditionPhotoThumb: View {
+    let photo: DiagnosisAttachment
+    let onDelete: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            if let image = UIImage(data: photo.data) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 92, height: 92)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            } else {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(AppTheme.fieldBackground)
+                    .frame(width: 92, height: 92)
+            }
+
+            Button(action: onDelete) {
+                Image(systemName: "xmark")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(.white)
+                    .frame(width: 24, height: 24)
+                    .background(Color.black.opacity(0.55))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .padding(6)
+        }
+    }
+}
+
+struct DiagnosisCategoryDropdown: View {
+    @Binding var selectedCategoryIDs: Set<String>
+    @Binding var isExpanded: Bool
+
+    private var selectedCategoryText: String {
+        let selected = DiagnosisOption.all
+            .filter { selectedCategoryIDs.contains($0.id) }
+            .map { "\($0.emoji) \(localizedAppString($0.title))" }
+
+        return selected.isEmpty ? localizedAppString("Select category") : selected.joined(separator: ", ")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Button {
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.86)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(localizedAppString("Select category"))
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.secondary)
+
+                        Text(selectedCategoryText)
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(AppTheme.text)
+                            .lineLimit(2)
+                    }
+
+                    Spacer()
+
+                    Image(systemName: "chevron.down")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                }
+                .padding(14)
+                .background(AppTheme.fieldBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                VStack(spacing: 8) {
+                    ForEach(DiagnosisOption.all) { option in
+                        Button {
+                            toggle(option.id)
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: selectedCategoryIDs.contains(option.id) ? "checkmark.square.fill" : "square")
+                                    .font(.headline.weight(.semibold))
+                                    .foregroundStyle(selectedCategoryIDs.contains(option.id) ? AppTheme.accent : .secondary)
+
+                                Text(option.emoji)
+                                    .font(.title3)
+                                    .frame(width: 28)
+
+                                Text(localizedAppString(option.title))
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(AppTheme.text)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.75)
+
+                                Spacer()
+                            }
+                            .padding(12)
+                            .background(selectedCategoryIDs.contains(option.id) ? AppTheme.accent.opacity(0.10) : AppTheme.panel)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    private func toggle(_ id: String) {
+        if selectedCategoryIDs.contains(id) {
+            selectedCategoryIDs.remove(id)
+        } else {
+            selectedCategoryIDs.insert(id)
+        }
+    }
+}
+
+private enum DiagnosisAttachmentHelper {
+    static func loadPhotoData(from selectedItems: [PhotosPickerItem]) async -> [Data] {
+        var loaded: [Data] = []
+
+        for item in selectedItems {
+            if let data = try? await item.loadTransferable(type: Data.self) {
+                loaded.append(data)
+            }
+        }
+
+        return loaded
+    }
+
+    static func photoAttachments(from dataItems: [Data], startingAt startIndex: Int) -> [DiagnosisAttachment] {
+        dataItems.enumerated().map { offset, data in
+            DiagnosisAttachment(
+                kind: .photo,
+                name: "\(localizedAppString("Photo")) \(startIndex + offset + 1)",
+                data: compressedPhotoData(data)
+            )
+        }
+    }
+
+    static func compressedPhotoData(_ data: Data) -> Data {
+        if let image = UIImage(data: data),
+           let jpegData = image.resizedForMealAnalysis(maxDimension: 1000).jpegData(compressionQuality: 0.74) {
+            return jpegData
+        }
+
+        return data
+    }
+
+    static func importedFiles(from result: Result<[URL], Error>) -> ([DiagnosisAttachment], String) {
+        switch result {
+        case .success(let urls):
+            var attachments: [DiagnosisAttachment] = []
+            var blockedVideoCount = 0
+
+            for url in urls {
+                guard !DiagnosisAttachment.isVideoFile(url) else {
+                    blockedVideoCount += 1
+                    continue
+                }
+
+                let didAccess = url.startAccessingSecurityScopedResource()
+                defer {
+                    if didAccess {
+                        url.stopAccessingSecurityScopedResource()
+                    }
+                }
+
+                guard let data = try? Data(contentsOf: url) else {
+                    continue
+                }
+
+                attachments.append(DiagnosisAttachment(kind: .file, name: url.lastPathComponent, data: data))
+            }
+
+            if blockedVideoCount > 0 {
+                return (attachments, localizedAppString("Videos cannot be uploaded. Please choose photos or supported documents."))
+            }
+
+            return (attachments, attachments.isEmpty ? "" : localizedAppString("File added."))
+        case .failure:
+            return ([], localizedAppString("Unable to import this file."))
+        }
+    }
+}
+
+struct DiagnosisDoctorVisitFormSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let existingVisit: DiagnosisDoctorVisit?
+    let onSave: (DiagnosisDoctorVisit) -> Void
+
+    @State private var selectedCategoryIDs: Set<String>
+    @State private var visitTitle: String
+    @State private var doctorName: String
+    @State private var clinicLocation: String
+    @State private var visitDate: Date
+    @State private var notes: String
+    @State private var attachments: [DiagnosisAttachment]
+    @State private var selectedPhotos: [PhotosPickerItem] = []
+    @State private var isCategoryExpanded = false
+    @State private var isCameraPresented = false
+    @State private var isFileImporterPresented = false
+    @State private var statusMessage = ""
+
+    private var canSave: Bool {
+        !visitTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !doctorName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    init(
+        initialCategoryID: String? = nil,
+        existingVisit: DiagnosisDoctorVisit? = nil,
+        onSave: @escaping (DiagnosisDoctorVisit) -> Void
+    ) {
+        self.existingVisit = existingVisit
+        self.onSave = onSave
+        self._selectedCategoryIDs = State(initialValue: Set(existingVisit?.categoryIDs ?? initialCategoryID.map { [$0] } ?? []))
+        self._visitTitle = State(initialValue: existingVisit?.title ?? "")
+        self._doctorName = State(initialValue: existingVisit?.doctorName ?? "")
+        self._clinicLocation = State(initialValue: existingVisit?.clinicLocation ?? "")
+        self._visitDate = State(initialValue: existingVisit?.date ?? Date())
+        self._notes = State(initialValue: existingVisit?.notes ?? "")
+        self._attachments = State(initialValue: existingVisit?.attachments ?? [])
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(localizedAppString("Title:"))
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            TextField(localizedAppString("Enter title"), text: $visitTitle)
+                                .textInputAutocapitalization(.words)
+                                .font(.headline.weight(.semibold))
+                                .padding(14)
+                                .background(AppTheme.fieldBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+                        .diagnosisDetailCard()
+
+                        VStack(alignment: .leading, spacing: 12) {
+                            DiagnosisCategoryDropdown(selectedCategoryIDs: $selectedCategoryIDs, isExpanded: $isCategoryExpanded)
+
+                            HStack(spacing: 12) {
+                                Text(localizedAppString("Date of Visit"))
+                                    .font(.headline.weight(.bold))
+                                    .foregroundStyle(AppTheme.text)
+
+                                Spacer()
+
+                                DatePicker(localizedAppString("Date of Visit"), selection: $visitDate, displayedComponents: [.date])
+                                    .datePickerStyle(.compact)
+                                    .labelsHidden()
+                            }
+                            .padding(14)
+                            .background(AppTheme.fieldBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+                        .diagnosisDetailCard()
+
+                        VStack(alignment: .leading, spacing: 12) {
+                            TextField(localizedAppString("Enter doctor name"), text: $doctorName)
+                                .textInputAutocapitalization(.words)
+                                .font(.headline.weight(.semibold))
+                                .padding(14)
+                                .background(AppTheme.fieldBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                            TextField(localizedAppString("Enter clinic or hospital"), text: $clinicLocation)
+                                .textInputAutocapitalization(.words)
+                                .font(.headline.weight(.semibold))
+                                .padding(14)
+                                .background(AppTheme.fieldBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+                        .diagnosisDetailCard()
+
+                        DiagnosisNotesInputCard(notes: $notes, placeholder: "Add visit notes")
+
+                        DiagnosisRecordAttachmentCard(
+                            attachments: attachments,
+                            statusMessage: statusMessage,
+                            onTakePhoto: openCamera,
+                            onUploadFile: { isFileImporterPresented = true },
+                            selectedPhotos: $selectedPhotos,
+                            onDelete: deleteAttachment
+                        )
+                    }
+                    .padding(18)
+                }
+
+                StickyBottomSaveButton(title: "Save", tint: AppTheme.accent, isDisabled: !canSave) {
+                    save()
+                }
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle(localizedAppString(existingVisit == nil ? "Doctor Visit" : "Edit Doctor Visit"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarCloseButton {
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .presentationDetents([.large])
+        .onChange(of: selectedPhotos) { _, newValue in
+            guard !newValue.isEmpty else { return }
+            Task {
+                let loaded = await DiagnosisAttachmentHelper.loadPhotoData(from: newValue)
+                await MainActor.run {
+                    addPhotos(loaded)
+                    selectedPhotos = []
+                }
+            }
+        }
+        .fullScreenCover(isPresented: $isCameraPresented) {
+            CameraMealPhotoPicker { data in
+                addPhotos([data])
+            }
+            .ignoresSafeArea()
+        }
+        .fileImporter(
+            isPresented: $isFileImporterPresented,
+            allowedContentTypes: DiagnosisAttachment.allowedFileTypes,
+            allowsMultipleSelection: true
+        ) { result in
+            importFiles(result)
+        }
+    }
+
+    private func openCamera() {
+        if UIImagePickerController.isSourceTypeAvailable(.camera) {
+            isCameraPresented = true
+        } else {
+            statusMessage = localizedAppString("Camera unavailable on this device.")
+        }
+    }
+
+    private func addPhotos(_ dataItems: [Data]) {
+        guard !dataItems.isEmpty else { return }
+        let photoCount = attachments.filter { $0.kind == .photo }.count
+        attachments.append(contentsOf: DiagnosisAttachmentHelper.photoAttachments(from: dataItems, startingAt: photoCount))
+        statusMessage = dataItems.count == 1
+            ? localizedAppString("Photo added.")
+            : String(format: localizedAppString("%d photos added."), dataItems.count)
+    }
+
+    private func importFiles(_ result: Result<[URL], Error>) {
+        let imported = DiagnosisAttachmentHelper.importedFiles(from: result)
+        attachments.append(contentsOf: imported.0)
+        statusMessage = imported.1
+    }
+
+    private func deleteAttachment(_ attachment: DiagnosisAttachment) {
+        attachments.removeAll { $0.id == attachment.id }
+    }
+
+    private func save() {
+        onSave(
+            DiagnosisDoctorVisit(
+                id: existingVisit?.id ?? UUID(),
+                categoryIDs: DiagnosisOption.all.map(\.id).filter { selectedCategoryIDs.contains($0) },
+                title: visitTitle.trimmingCharacters(in: .whitespacesAndNewlines),
+                doctorName: doctorName.trimmingCharacters(in: .whitespacesAndNewlines),
+                clinicLocation: clinicLocation.trimmingCharacters(in: .whitespacesAndNewlines),
+                date: visitDate,
+                notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
+                attachments: attachments,
+                createdAt: existingVisit?.createdAt ?? Date()
+            )
+        )
+    }
+}
+
+struct DiagnosisGeneralNoteFormSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let existingNote: DiagnosisGeneralNote?
+    let onSave: (DiagnosisGeneralNote) -> Void
+
+    @State private var selectedCategoryIDs: Set<String>
+    @State private var includesDate: Bool
+    @State private var noteDate: Date
+    @State private var notes: String
+    @State private var attachments: [DiagnosisAttachment]
+    @State private var selectedPhotos: [PhotosPickerItem] = []
+    @State private var isCategoryExpanded = false
+    @State private var isCameraPresented = false
+    @State private var isFileImporterPresented = false
+    @State private var statusMessage = ""
+
+    private var canSave: Bool {
+        !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    init(
+        initialCategoryID: String? = nil,
+        existingNote: DiagnosisGeneralNote? = nil,
+        onSave: @escaping (DiagnosisGeneralNote) -> Void
+    ) {
+        self.existingNote = existingNote
+        self.onSave = onSave
+        self._selectedCategoryIDs = State(initialValue: Set(existingNote?.categoryIDs ?? initialCategoryID.map { [$0] } ?? []))
+        self._includesDate = State(initialValue: existingNote?.date != nil)
+        self._noteDate = State(initialValue: existingNote?.date ?? Date())
+        self._notes = State(initialValue: existingNote?.notes ?? "")
+        self._attachments = State(initialValue: existingNote?.attachments ?? [])
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        DiagnosisCategoryDropdown(selectedCategoryIDs: $selectedCategoryIDs, isExpanded: $isCategoryExpanded)
+                            .diagnosisDetailCard()
+
+                        VStack(alignment: .leading, spacing: 12) {
+                            Toggle(localizedAppString("Add date"), isOn: $includesDate)
+                                .font(.headline.weight(.bold))
+                                .tint(AppTheme.accent)
+
+                            if includesDate {
+                                DatePicker(localizedAppString("Date"), selection: $noteDate, displayedComponents: [.date])
+                                    .datePickerStyle(.compact)
+                                    .labelsHidden()
+                                    .padding(14)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(AppTheme.fieldBackground)
+                                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            }
+                        }
+                        .diagnosisDetailCard()
+
+                        DiagnosisNotesInputCard(notes: $notes, placeholder: "Add note details")
+
+                        DiagnosisRecordAttachmentCard(
+                            attachments: attachments,
+                            statusMessage: statusMessage,
+                            onTakePhoto: openCamera,
+                            onUploadFile: { isFileImporterPresented = true },
+                            selectedPhotos: $selectedPhotos,
+                            onDelete: deleteAttachment
+                        )
+                    }
+                    .padding(18)
+                }
+
+                StickyBottomSaveButton(title: "Save", tint: AppTheme.accent, isDisabled: !canSave) {
+                    save()
+                }
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle(localizedAppString(existingNote == nil ? "Notes" : "Edit Notes"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarCloseButton {
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .presentationDetents([.large])
+        .onChange(of: selectedPhotos) { _, newValue in
+            guard !newValue.isEmpty else { return }
+            Task {
+                let loaded = await DiagnosisAttachmentHelper.loadPhotoData(from: newValue)
+                await MainActor.run {
+                    addPhotos(loaded)
+                    selectedPhotos = []
+                }
+            }
+        }
+        .fullScreenCover(isPresented: $isCameraPresented) {
+            CameraMealPhotoPicker { data in
+                addPhotos([data])
+            }
+            .ignoresSafeArea()
+        }
+        .fileImporter(
+            isPresented: $isFileImporterPresented,
+            allowedContentTypes: DiagnosisAttachment.allowedFileTypes,
+            allowsMultipleSelection: true
+        ) { result in
+            importFiles(result)
+        }
+    }
+
+    private func openCamera() {
+        if UIImagePickerController.isSourceTypeAvailable(.camera) {
+            isCameraPresented = true
+        } else {
+            statusMessage = localizedAppString("Camera unavailable on this device.")
+        }
+    }
+
+    private func addPhotos(_ dataItems: [Data]) {
+        guard !dataItems.isEmpty else { return }
+        let photoCount = attachments.filter { $0.kind == .photo }.count
+        attachments.append(contentsOf: DiagnosisAttachmentHelper.photoAttachments(from: dataItems, startingAt: photoCount))
+        statusMessage = dataItems.count == 1
+            ? localizedAppString("Photo added.")
+            : String(format: localizedAppString("%d photos added."), dataItems.count)
+    }
+
+    private func importFiles(_ result: Result<[URL], Error>) {
+        let imported = DiagnosisAttachmentHelper.importedFiles(from: result)
+        attachments.append(contentsOf: imported.0)
+        statusMessage = imported.1
+    }
+
+    private func deleteAttachment(_ attachment: DiagnosisAttachment) {
+        attachments.removeAll { $0.id == attachment.id }
+    }
+
+    private func save() {
+        onSave(
+            DiagnosisGeneralNote(
+                id: existingNote?.id ?? UUID(),
+                categoryIDs: DiagnosisOption.all.map(\.id).filter { selectedCategoryIDs.contains($0) },
+                date: includesDate ? noteDate : nil,
+                notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
+                attachments: attachments,
+                createdAt: existingNote?.createdAt ?? Date()
+            )
+        )
+    }
+}
+
+struct DiagnosisNotesInputCard: View {
+    @Binding var notes: String
+    let placeholder: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(localizedAppString("Notes"))
+                .font(.headline.weight(.bold))
+                .foregroundStyle(AppTheme.text)
+
+            TextField(localizedAppString(placeholder), text: $notes, axis: .vertical)
+                .textInputAutocapitalization(.sentences)
+                .lineLimit(6...12)
+                .padding(14)
+                .background(AppTheme.fieldBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .diagnosisDetailCard()
+    }
+}
+
+struct DiagnosisRecordAttachmentCard: View {
+    let attachments: [DiagnosisAttachment]
+    let statusMessage: String
+    let onTakePhoto: () -> Void
+    let onUploadFile: () -> Void
+    @Binding var selectedPhotos: [PhotosPickerItem]
+    let onDelete: (DiagnosisAttachment) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(localizedAppString("Documents and Photos"))
+                .font(.headline.weight(.bold))
+                .foregroundStyle(AppTheme.text)
+
+            HStack(spacing: 10) {
+                Button(action: onTakePhoto) {
+                    DiagnosisAttachmentAction(title: "Take Photo", icon: "camera.fill")
+                }
+                .buttonStyle(.plain)
+                .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+
+                PhotosPicker(selection: $selectedPhotos, matching: .images) {
+                    DiagnosisAttachmentAction(title: "Upload Photo", icon: "photo.on.rectangle")
+                }
+                .buttonStyle(.plain)
+            }
+
+            Button(action: onUploadFile) {
+                HStack(spacing: 10) {
+                    Image(systemName: "doc.fill")
+                        .font(.headline.weight(.bold))
+                    Text(localizedAppString("Upload File"))
+                        .font(.headline.weight(.bold))
+                    Spacer()
+                }
+                .foregroundStyle(AppTheme.accent)
+                .padding(14)
+                .background(AppTheme.accent.opacity(0.10))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .buttonStyle(.plain)
+
+            if !statusMessage.isEmpty {
+                Text(statusMessage)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            if attachments.isEmpty {
+                Text(localizedAppString("No photos or files added yet."))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .background(AppTheme.fieldBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            } else {
+                VStack(spacing: 10) {
+                    ForEach(attachments) { attachment in
+                        DiagnosisAttachmentRow(attachment: attachment) {
+                            onDelete(attachment)
+                        }
+                    }
+                }
+            }
+        }
+        .diagnosisDetailCard()
+    }
+}
+
+struct DiagnosisSelectionSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var selectedIDs: Set<String>
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    ForEach(DiagnosisOption.all) { option in
+                        diagnosisButton(option)
+                    }
+                }
+                .padding(18)
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle(localizedAppString("Diagnosis"))
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(localizedAppString("Done")) {
+                        dismiss()
+                    }
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(AppTheme.accent)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func diagnosisButton(_ option: DiagnosisOption) -> some View {
+        let isSelected = selectedIDs.contains(option.id)
+
+        return Button {
+            if isSelected {
+                selectedIDs.remove(option.id)
+            } else {
+                selectedIDs.insert(option.id)
+            }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(isSelected ? AppTheme.accent : .secondary.opacity(0.75))
+
+                Text(option.emoji)
+                    .font(.title3)
+                    .frame(width: 30)
+
+                Text(localizedAppString(option.title))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.text)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(14)
+            .background(isSelected ? AppTheme.accent.opacity(0.12) : AppTheme.panel)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(isSelected ? AppTheme.accent.opacity(0.32) : Color.clear, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct DiagnosisAttachment: Codable, Identifiable, Equatable {
+    enum Kind: String, Codable {
+        case photo
+        case file
+    }
+
+    static let allowedFileTypes: [UTType] = [
+        .image,
+        .pdf,
+        .plainText,
+        .text,
+        .rtf,
+        .commaSeparatedText,
+        .json,
+        .xml
+    ]
+
+    static func isVideoFile(_ url: URL) -> Bool {
+        let type = (try? url.resourceValues(forKeys: [.contentTypeKey]).contentType)
+            ?? UTType(filenameExtension: url.pathExtension)
+
+        return type?.conforms(to: .movie) == true
+            || type?.conforms(to: .audiovisualContent) == true
+    }
+
+    let id: UUID
+    let kind: Kind
+    let name: String
+    let data: Data
+    let createdAt: Date
+
+    init(id: UUID = UUID(), kind: Kind, name: String, data: Data, createdAt: Date = Date()) {
+        self.id = id
+        self.kind = kind
+        self.name = name
+        self.data = data
+        self.createdAt = createdAt
+    }
+}
+
+struct DiagnosisDetailView: View {
+    let userID: Int
+    let option: DiagnosisOption
+
+    @AppStorage private var notes: String
+    @AppStorage private var attachmentData: Data
+    @AppStorage private var doctorVisitData: Data
+    @AppStorage private var diagnosisNoteData: Data
+    @State private var selectedPhotos: [PhotosPickerItem] = []
+    @State private var isCameraPresented = false
+    @State private var isFileImporterPresented = false
+    @State private var isDoctorVisitFormPresented = false
+    @State private var editingDoctorVisit: DiagnosisDoctorVisit?
+    @State private var editingDiagnosisNote: DiagnosisGeneralNote?
+    @State private var statusMessage = ""
+
+    init(userID: Int, option: DiagnosisOption) {
+        self.userID = userID
+        self.option = option
+        self._notes = AppStorage(wrappedValue: "", "diagnosis.\(userID).\(option.id).notes")
+        self._attachmentData = AppStorage(wrappedValue: Data(), "diagnosis.\(userID).\(option.id).attachments")
+        self._doctorVisitData = AppStorage(wrappedValue: Data(), "diagnosis.\(userID).doctorVisits")
+        self._diagnosisNoteData = AppStorage(wrappedValue: Data(), "diagnosis.\(userID).generalNotes")
+    }
+
+    private var attachments: [DiagnosisAttachment] {
+        get {
+            guard !attachmentData.isEmpty else { return [] }
+            return (try? JSONDecoder().decode([DiagnosisAttachment].self, from: attachmentData)) ?? []
+        }
+        nonmutating set {
+            attachmentData = (try? JSONEncoder().encode(newValue)) ?? Data()
+        }
+    }
+
+    private var doctorVisits: [DiagnosisDoctorVisit] {
+        get {
+            guard !doctorVisitData.isEmpty else { return [] }
+            return (try? JSONDecoder().decode([DiagnosisDoctorVisit].self, from: doctorVisitData)) ?? []
+        }
+        nonmutating set {
+            doctorVisitData = (try? JSONEncoder().encode(newValue)) ?? Data()
+        }
+    }
+
+    private var diagnosisNotes: [DiagnosisGeneralNote] {
+        get {
+            guard !diagnosisNoteData.isEmpty else { return [] }
+            return (try? JSONDecoder().decode([DiagnosisGeneralNote].self, from: diagnosisNoteData)) ?? []
+        }
+        nonmutating set {
+            diagnosisNoteData = (try? JSONEncoder().encode(newValue)) ?? Data()
+        }
+    }
+
+    private var categoryTimelineItems: [DiagnosisCategoryTimelineItem] {
+        let visitItems = doctorVisits
+            .filter { $0.categoryIDs.contains(option.id) }
+            .map { visit in
+                DiagnosisCategoryTimelineItem(
+                    id: "visit-\(visit.id.uuidString)",
+                    sourceID: visit.id,
+                    date: visit.date,
+                    kind: .doctorVisit,
+                    title: visit.displayTitle,
+                    notePreview: visit.notes
+                )
+            }
+
+        let noteItems = diagnosisNotes
+            .filter { $0.categoryIDs.contains(option.id) }
+            .map { note in
+                DiagnosisCategoryTimelineItem(
+                    id: "note-\(note.id.uuidString)",
+                    sourceID: note.id,
+                    date: note.date ?? note.createdAt,
+                    kind: .note,
+                    title: localizedAppString("Notes"),
+                    notePreview: note.notes
+                )
+            }
+
+        return (visitItems + noteItems).sorted { $0.date > $1.date }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(spacing: 14) {
+                    Text(option.emoji)
+                        .font(.largeTitle)
+                        .frame(width: 58, height: 58)
+                        .background(AppTheme.accent.opacity(0.10))
+                        .clipShape(Circle())
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(localizedAppString(option.title))
+                            .font(.title2.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+
+                        Text(localizedAppString("Medical diagnosis/history"))
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 10) {
+                        DiagnosisSecondaryAddButton(title: "Doctor Visit", icon: "stethoscope", tint: Color(red: 0.19, green: 0.48, blue: 0.82)) {
+                            isDoctorVisitFormPresented = true
+                        }
+                    }
+
+                    if !categoryTimelineItems.isEmpty {
+                        DiagnosisCategoryTimelineView(items: categoryTimelineItems) { item in
+                            switch item.kind {
+                            case .doctorVisit:
+                                editingDoctorVisit = doctorVisits.first { $0.id == item.sourceID }
+                            case .note:
+                                editingDiagnosisNote = diagnosisNotes.first { $0.id == item.sourceID }
+                            }
+                        }
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(localizedAppString("Notes"))
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(AppTheme.text)
+
+                    TextField(localizedAppString("Add diagnosis history, medical notes, evaluation details, or care-team updates"), text: $notes, axis: .vertical)
+                        .textInputAutocapitalization(.sentences)
+                        .lineLimit(8...14)
+                        .padding(14)
+                        .background(AppTheme.fieldBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .diagnosisDetailCard()
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(localizedAppString("Photos and Files"))
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(AppTheme.text)
+
+                    HStack(spacing: 10) {
+                        Button {
+                            if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                                isCameraPresented = true
+                            } else {
+                                statusMessage = localizedAppString("Camera unavailable on this device.")
+                            }
+                        } label: {
+                            DiagnosisAttachmentAction(title: "Take Photo", icon: "camera.fill")
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+
+                        PhotosPicker(selection: $selectedPhotos, matching: .images) {
+                            DiagnosisAttachmentAction(title: "Upload Photo", icon: "photo.on.rectangle")
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    Button {
+                        isFileImporterPresented = true
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "doc.fill")
+                                .font(.headline.weight(.bold))
+                            Text(localizedAppString("Upload File"))
+                                .font(.headline.weight(.bold))
+                            Spacer()
+                        }
+                        .foregroundStyle(AppTheme.accent)
+                        .padding(14)
+                        .background(AppTheme.accent.opacity(0.10))
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+
+                    if !statusMessage.isEmpty {
+                        Text(statusMessage)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if attachments.isEmpty {
+                        Text(localizedAppString("No photos or files added yet."))
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(14)
+                            .background(AppTheme.fieldBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    } else {
+                        VStack(spacing: 10) {
+                            ForEach(attachments) { attachment in
+                                DiagnosisAttachmentRow(attachment: attachment) {
+                                    deleteAttachment(attachment)
+                                }
+                            }
+                        }
+                    }
+                }
+                .diagnosisDetailCard()
+            }
+            .padding(20)
+        }
+        .background(AppTheme.background.ignoresSafeArea())
+        .navigationTitle(localizedAppString(option.title))
+        .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: selectedPhotos) { _, newValue in
+            guard !newValue.isEmpty else { return }
+            Task {
+                await loadSelectedPhotos(newValue)
+            }
+        }
+        .fullScreenCover(isPresented: $isCameraPresented) {
+            CameraMealPhotoPicker { data in
+                addPhoto(data)
+            }
+            .ignoresSafeArea()
+        }
+        .fileImporter(
+            isPresented: $isFileImporterPresented,
+            allowedContentTypes: DiagnosisAttachment.allowedFileTypes,
+            allowsMultipleSelection: true
+        ) { result in
+            importFiles(result)
+        }
+        .sheet(isPresented: $isDoctorVisitFormPresented) {
+            DiagnosisDoctorVisitFormSheet(initialCategoryID: option.id) { visit in
+                var updated = doctorVisits
+                updated.insert(visit, at: 0)
+                doctorVisits = updated
+                isDoctorVisitFormPresented = false
+            }
+        }
+        .sheet(item: $editingDoctorVisit) { visit in
+            DiagnosisDoctorVisitFormSheet(existingVisit: visit) { editedVisit in
+                var updated = doctorVisits
+                if let index = updated.firstIndex(where: { $0.id == editedVisit.id }) {
+                    updated[index] = editedVisit
+                } else {
+                    updated.insert(editedVisit, at: 0)
+                }
+                doctorVisits = updated
+                editingDoctorVisit = nil
+            }
+        }
+        .sheet(item: $editingDiagnosisNote) { note in
+            DiagnosisGeneralNoteFormSheet(existingNote: note) { editedNote in
+                var updated = diagnosisNotes
+                if let index = updated.firstIndex(where: { $0.id == editedNote.id }) {
+                    updated[index] = editedNote
+                } else {
+                    updated.insert(editedNote, at: 0)
+                }
+                diagnosisNotes = updated
+                editingDiagnosisNote = nil
+            }
+        }
+    }
+
+    private func loadSelectedPhotos(_ photos: [PhotosPickerItem]) async {
+        var loadedPhotoData: [Data] = []
+
+        for photo in photos {
+            do {
+                if let data = try await photo.loadTransferable(type: Data.self) {
+                    loadedPhotoData.append(data)
+                }
+            } catch {
+                await MainActor.run {
+                    statusMessage = localizedAppString("Unable to load this photo.")
+                }
+            }
+        }
+
+        await MainActor.run {
+            if !loadedPhotoData.isEmpty {
+                addPhotos(loadedPhotoData)
+            }
+            selectedPhotos = []
+        }
+    }
+
+    private func addPhoto(_ data: Data) {
+        addPhotos([data])
+    }
+
+    private func addPhotos(_ photos: [Data]) {
+        var updated = attachments
+
+        for data in photos.reversed() {
+            let compressed = compressedDiagnosisPhotoData(data)
+            updated.insert(
+                DiagnosisAttachment(
+                    kind: .photo,
+                    name: "\(localizedAppString("Photo")) \(updated.filter { $0.kind == .photo }.count + 1)",
+                    data: compressed
+                ),
+                at: 0
+            )
+        }
+
+        attachments = updated
+        statusMessage = photos.count == 1
+            ? localizedAppString("Photo added.")
+            : String(format: localizedAppString("%d photos added."), photos.count)
+    }
+
+    private func compressedDiagnosisPhotoData(_ data: Data) -> Data {
+        if let image = UIImage(data: data),
+           let jpegData = image.resizedForMealAnalysis(maxDimension: 1000).jpegData(compressionQuality: 0.74) {
+            return jpegData
+        }
+
+        return data
+    }
+
+    private func importFiles(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            var updated = attachments
+            var blockedVideoCount = 0
+
+            for url in urls {
+                guard !DiagnosisAttachment.isVideoFile(url) else {
+                    blockedVideoCount += 1
+                    continue
+                }
+
+                let didAccess = url.startAccessingSecurityScopedResource()
+                defer {
+                    if didAccess {
+                        url.stopAccessingSecurityScopedResource()
+                    }
+                }
+
+                guard let data = try? Data(contentsOf: url) else {
+                    continue
+                }
+
+                updated.insert(
+                    DiagnosisAttachment(kind: .file, name: url.lastPathComponent, data: data),
+                    at: 0
+                )
+            }
+
+            attachments = updated
+            if blockedVideoCount > 0 {
+                statusMessage = localizedAppString("Videos cannot be uploaded. Please choose photos or supported documents.")
+            } else {
+                statusMessage = urls.isEmpty ? "" : localizedAppString("File added.")
+            }
+        case .failure:
+            statusMessage = localizedAppString("Unable to import this file.")
+        }
+    }
+
+    private func deleteAttachment(_ attachment: DiagnosisAttachment) {
+        attachments = attachments.filter { $0.id != attachment.id }
+    }
+}
+
+struct DiagnosisAttachmentAction: View {
+    let title: String
+    let icon: String
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.headline.weight(.bold))
+
+            Text(localizedAppString(title))
+                .font(.caption.weight(.bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+        }
+        .foregroundStyle(AppTheme.accent)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 14)
+        .background(AppTheme.accent.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+struct DiagnosisAttachmentRow: View {
+    let attachment: DiagnosisAttachment
+    let onDelete: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if attachment.kind == .photo, let image = UIImage(data: attachment.data) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 54, height: 54)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            } else {
+                Image(systemName: "doc.fill")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(AppTheme.accent)
+                    .frame(width: 54, height: 54)
+                    .background(AppTheme.accent.opacity(0.10))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(attachment.name)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(AppTheme.text)
+                    .lineLimit(1)
+
+                Text(localizedDateString(attachment.createdAt, dateStyle: .medium, timeStyle: .short))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button(action: onDelete) {
+                Image(systemName: "trash")
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(.red.opacity(0.85))
+                    .frame(width: 36, height: 36)
+                    .background(Color.red.opacity(0.10))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(12)
+        .background(AppTheme.fieldBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+private extension View {
+    func diagnosisDetailCard() -> some View {
+        self
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(AppTheme.panel)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+struct DiagnosisInfoCard: View {
+    let icon: String
+    let title: String
+    let detail: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.headline.weight(.bold))
+                .foregroundStyle(AppTheme.accent)
+                .frame(width: 34, height: 34)
+                .background(AppTheme.accent.opacity(0.12))
+                .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(LocalizedStringKey(title))
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(AppTheme.text)
+
+                Text(LocalizedStringKey(detail))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.panel)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
 
@@ -14964,14 +17292,16 @@ struct PageHeader: View {
     let subtitle: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Image(systemName: icon)
-                .font(.system(size: 34, weight: .semibold))
-                .foregroundStyle(AppTheme.accent)
-
+        VStack(alignment: .leading, spacing: 6) {
             VStack(alignment: .leading, spacing: 6) {
-                Text(LocalizedStringKey(title))
-                    .font(.largeTitle.weight(.bold))
+                HStack(alignment: .center, spacing: 12) {
+                    Image(systemName: icon)
+                        .font(.system(size: 34, weight: .semibold))
+                        .foregroundStyle(AppTheme.accent)
+
+                    Text(LocalizedStringKey(title))
+                        .font(.largeTitle.weight(.bold))
+                }
 
                 Text(LocalizedStringKey(subtitle))
                     .font(.subheadline)
