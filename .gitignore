@@ -37,3 +37,7 @@ xcuserdata/
 # Temporary files
 tmp/
 temp/
+
+# Android release signing
+android/CarePortalAndroid/keystore.properties
+android/CarePortalAndroid/app/signing/

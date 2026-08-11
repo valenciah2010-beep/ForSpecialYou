@@ -251,7 +251,7 @@ struct DiagnosisView: View {
                 .padding(20)
             }
             .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle(localizedAppString("Diagnosis"))
+            .navigationTitle(localizedAppString("Category"))
             .alert(item: $pendingDeleteTarget) { target in
                 Alert(
                     title: Text(localizedAppString(target.titleKey)),
@@ -278,6 +278,7 @@ struct DiagnosisView: View {
                     var updated = conditions
                     updated.insert(condition, at: 0)
                     conditions = updated
+                    addDiagnosisOptions(condition.categoryIDs)
                     isConditionFormPresented = false
                 }
             }
@@ -290,6 +291,7 @@ struct DiagnosisView: View {
                         updated.insert(editedCondition, at: 0)
                     }
                     conditions = updated
+                    addDiagnosisOptions(editedCondition.categoryIDs)
                     editingCondition = nil
                 }
             }
@@ -298,6 +300,7 @@ struct DiagnosisView: View {
                     var updated = doctorVisits
                     updated.insert(visit, at: 0)
                     doctorVisits = updated
+                    addDiagnosisOptions(visit.categoryIDs)
                     isDoctorVisitFormPresented = false
                 }
             }
@@ -307,6 +310,15 @@ struct DiagnosisView: View {
     private func removeDiagnosisOption(_ id: String) {
         var updatedIDs = Set(selectedDiagnosisOptionData.split(separator: ",").map(String.init))
         updatedIDs.remove(id)
+        selectedDiagnosisOptionData = DiagnosisOption.all
+            .map(\.id)
+            .filter { updatedIDs.contains($0) }
+            .joined(separator: ",")
+    }
+
+    private func addDiagnosisOptions(_ ids: [String]) {
+        var updatedIDs = Set(selectedDiagnosisOptionData.split(separator: ",").map(String.init))
+        updatedIDs.formUnion(ids)
         selectedDiagnosisOptionData = DiagnosisOption.all
             .map(\.id)
             .filter { updatedIDs.contains($0) }
@@ -1898,6 +1910,7 @@ struct DiagnosisDetailView: View {
     @AppStorage private var attachmentData: Data
     @AppStorage private var doctorVisitData: Data
     @AppStorage private var diagnosisNoteData: Data
+    @AppStorage private var selectedDiagnosisOptionData: String
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var isCameraPresented = false
     @State private var isFileImporterPresented = false
@@ -1913,6 +1926,7 @@ struct DiagnosisDetailView: View {
         self._attachmentData = AppStorage(wrappedValue: Data(), "diagnosis.\(userID).\(option.id).attachments")
         self._doctorVisitData = AppStorage(wrappedValue: Data(), "diagnosis.\(userID).doctorVisits")
         self._diagnosisNoteData = AppStorage(wrappedValue: Data(), "diagnosis.\(userID).generalNotes")
+        self._selectedDiagnosisOptionData = AppStorage(wrappedValue: "", "diagnosis.\(userID).selectedOptions")
     }
 
     private var attachments: [DiagnosisAttachment] {
@@ -2125,6 +2139,7 @@ struct DiagnosisDetailView: View {
                 var updated = doctorVisits
                 updated.insert(visit, at: 0)
                 doctorVisits = updated
+                addDiagnosisOptions(visit.categoryIDs)
                 isDoctorVisitFormPresented = false
             }
         }
@@ -2137,6 +2152,7 @@ struct DiagnosisDetailView: View {
                     updated.insert(editedVisit, at: 0)
                 }
                 doctorVisits = updated
+                addDiagnosisOptions(editedVisit.categoryIDs)
                 editingDoctorVisit = nil
             }
         }
@@ -2152,6 +2168,15 @@ struct DiagnosisDetailView: View {
                 editingDiagnosisNote = nil
             }
         }
+    }
+
+    private func addDiagnosisOptions(_ ids: [String]) {
+        var updatedIDs = Set(selectedDiagnosisOptionData.split(separator: ",").map(String.init))
+        updatedIDs.formUnion(ids)
+        selectedDiagnosisOptionData = DiagnosisOption.all
+            .map(\.id)
+            .filter { updatedIDs.contains($0) }
+            .joined(separator: ",")
     }
 
     private func loadSelectedPhotos(_ photos: [PhotosPickerItem]) async {
@@ -2403,6 +2428,7 @@ struct BasicHealthView: View {
     @State private var activeSleepSnapshot: SleepSnapshotEditorTarget?
     @State private var activeDigestionSnapshot: SnapshotOption?
     @State private var activeNutritionSnapshot: SnapshotOption?
+    @State private var activeMeasurementSnapshot: MeasurementSnapshotEditorTarget?
     @State private var draggingQuickLogID: String?
     @State private var isSyncingParentAppData = false
     @State private var healthInsights: [HealthInsight] = []
@@ -2539,7 +2565,7 @@ struct BasicHealthView: View {
                         DashboardSectionTitle("Daily Snapshot")
 
                         NavigationLink {
-                            SnapshotHistoryView(options: SnapshotOption.all, entries: logEntries)
+                            SnapshotHistoryView(options: SnapshotOption.all + SnapshotOption.measurements, entries: logEntries)
                         } label: {
                             HStack(spacing: 6) {
                                 Image(systemName: "chart.line.uptrend.xyaxis")
@@ -2590,6 +2616,22 @@ struct BasicHealthView: View {
                         }
                     }
 
+                    HStack(spacing: 10) {
+                        ForEach(SnapshotOption.measurements) { option in
+                            let snapshotSummary = todaysSnapshotSummary(for: option)
+
+                            CompactSnapshotCard(
+                                option: option,
+                                displayValue: snapshotSummary.isLoggedToday ? snapshotSummary.value : nil
+                            ) {
+                                activeMeasurementSnapshot = MeasurementSnapshotEditorTarget(
+                                    option: option,
+                                    existingEntry: latestTodaySnapshotEntry(for: option.id)
+                                )
+                            }
+                        }
+                    }
+
                     DashboardSectionTitle("Insights & Alerts")
 
                     insightsAndAlertsSection
@@ -2622,6 +2664,11 @@ struct BasicHealthView: View {
             .sheet(item: $activeNutritionSnapshot) { option in
                 NutritionSnapshotSheet(userID: user.id, option: option) { entry in
                     saveNutritionEntry(entry)
+                }
+            }
+            .sheet(item: $activeMeasurementSnapshot) { target in
+                MeasurementSnapshotSheet(target: target) { entry in
+                    saveDailySnapshotEntry(entry)
                 }
             }
             .sheet(item: $activeSeizureTimer) { option in
@@ -3373,6 +3420,22 @@ struct BasicHealthView: View {
         syncParentAppData(healthLogs: updatedEntries)
     }
 
+    private func saveDailySnapshotEntry(_ entry: HealthLogEntry) {
+        var updatedEntries = logEntries.filter { savedEntry in
+            !(savedEntry.type == .snapshot
+              && savedEntry.categoryID == entry.categoryID
+              && Calendar.current.isDate(savedEntry.timestamp, inSameDayAs: entry.timestamp))
+        }
+        updatedEntries.append(entry)
+        updatedEntries.sort { $0.timestamp < $1.timestamp }
+
+        if let data = try? JSONEncoder().encode(updatedEntries) {
+            healthLogData = data
+        }
+
+        syncParentAppData(healthLogs: updatedEntries)
+    }
+
     private func saveMedications(_ newMedications: [MedicationSchedule]) {
         let sortedMedications = newMedications.sorted {
             $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
@@ -3733,6 +3796,21 @@ struct SnapshotOption: Identifiable {
         }
     }
 
+    var dashboardLabel: String {
+        switch id {
+        case "sleep":
+            return "Sleep"
+        case "digestion":
+            return "Bowel Movement"
+        case "mood":
+            return "Mood"
+        case "nutrition":
+            return "Nutrition"
+        default:
+            return title
+        }
+    }
+
     static let all: [SnapshotOption] = [
         SnapshotOption(
             id: "sleep",
@@ -3769,6 +3847,27 @@ struct SnapshotOption: Identifiable {
             detail: "--",
             tint: Color(red: 0.43, green: 0.77, blue: 0.62),
             progress: 0.75
+        )
+    ]
+
+    static let measurements: [SnapshotOption] = [
+        SnapshotOption(
+            id: "height",
+            title: "Height",
+            icon: "ruler.fill",
+            value: "--",
+            detail: "--",
+            tint: Color(red: 0.34, green: 0.66, blue: 0.88),
+            progress: 0.5
+        ),
+        SnapshotOption(
+            id: "weight",
+            title: "Weight",
+            icon: "scalemass.fill",
+            value: "--",
+            detail: "--",
+            tint: Color(red: 0.43, green: 0.77, blue: 0.62),
+            progress: 0.5
         )
     ]
 }
@@ -4798,41 +4897,22 @@ struct SnapshotCard: View {
         Button {
             action()
         } label: {
-            VStack(alignment: .leading, spacing: 10) {
-                Text(LocalizedStringKey(option.title))
-                    .font(.caption.weight(.bold))
+            VStack(spacing: 10) {
+                Image(systemName: iconName)
+                    .font(.system(size: 34, weight: .semibold))
+                    .foregroundStyle(option.tint)
+                    .frame(height: 40)
+
+                Text(LocalizedStringKey(option.dashboardLabel))
+                    .font(.headline.weight(.bold))
                     .foregroundStyle(AppTheme.text)
                     .lineLimit(2)
-                    .frame(height: 30, alignment: .topLeading)
-
-                if option.id != "sleep" {
-                    HStack {
-                        Spacer()
-                        Image(systemName: iconName)
-                            .font(.system(size: 30, weight: .semibold))
-                            .foregroundStyle(option.tint)
-                        Spacer()
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(valueText)
-                        .font(option.id == "sleep" ? .title3.weight(.black) : .caption.weight(.bold))
-                        .foregroundStyle(AppTheme.text)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-
-                    Text(detailText)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                }
-
+                    .multilineTextAlignment(.center)
+                    .minimumScaleFactor(0.78)
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(minHeight: 148)
+            .padding(14)
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 118)
             .background(option.tint.opacity(0.18))
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay {
@@ -4842,6 +4922,189 @@ struct SnapshotCard: View {
             .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 4)
         }
         .buttonStyle(.plain)
+    }
+}
+
+struct CompactSnapshotCard: View {
+    let option: SnapshotOption
+    var displayValue: String?
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: option.icon)
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(option.tint)
+                    .frame(width: 34, height: 34)
+                    .background(option.tint.opacity(0.12))
+                    .clipShape(Circle())
+
+                Text(LocalizedStringKey(option.title))
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(AppTheme.text)
+
+                Spacer(minLength: 6)
+
+                if let displayValue, !displayValue.isEmpty, displayValue != "--" {
+                    Text(displayValue)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.78)
+                }
+            }
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity)
+            .frame(height: 54)
+            .background(AppTheme.panel)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(option.tint.opacity(0.16), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct MeasurementSnapshotEditorTarget: Identifiable {
+    let option: SnapshotOption
+    let existingEntry: HealthLogEntry?
+
+    var id: String {
+        existingEntry?.id.uuidString ?? "new-\(option.id)"
+    }
+}
+
+struct MeasurementSnapshotSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let target: MeasurementSnapshotEditorTarget
+    let onSave: (HealthLogEntry) -> Void
+
+    @State private var timestamp: Date
+    @State private var measurementValue: String
+    @State private var selectedUnit: String
+    @State private var notes: String
+
+    private var units: [String] {
+        target.option.id == "height" ? ["cm", "in"] : ["Kg", "lbs"]
+    }
+
+    private var canSave: Bool {
+        !measurementValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    init(target: MeasurementSnapshotEditorTarget, onSave: @escaping (HealthLogEntry) -> Void) {
+        self.target = target
+        self.onSave = onSave
+
+        let parsed = Self.parseMeasurementValue(
+            target.existingEntry?.value ?? "",
+            defaultUnit: target.option.id == "height" ? "cm" : "Kg"
+        )
+        self._timestamp = State(initialValue: target.existingEntry?.timestamp ?? Date())
+        self._measurementValue = State(initialValue: parsed.value)
+        self._selectedUnit = State(initialValue: parsed.unit)
+        self._notes = State(initialValue: target.existingEntry?.comments ?? "")
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack(spacing: 12) {
+                                Text(localizedAppString("Measurement time"))
+                                    .font(.headline.weight(.bold))
+                                    .foregroundStyle(AppTheme.text)
+
+                                Spacer()
+
+                                DatePicker(localizedAppString("Measurement time"), selection: $timestamp, displayedComponents: [.date, .hourAndMinute])
+                                    .datePickerStyle(.compact)
+                                    .labelsHidden()
+                            }
+                            .padding(14)
+                            .background(AppTheme.fieldBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+                        .authPanel()
+
+                        VStack(alignment: .leading, spacing: 12) {
+                            CyclicVomitingMeasurementField(
+                                title: target.option.title,
+                                units: units,
+                                text: $measurementValue,
+                                selectedUnit: $selectedUnit
+                            )
+                        }
+                        .authPanel()
+
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(localizedAppString("Notes"))
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            TextField(localizedAppString("Add measurement notes"), text: $notes, axis: .vertical)
+                                .textInputAutocapitalization(.sentences)
+                                .lineLimit(3...6)
+                                .padding(14)
+                                .background(AppTheme.fieldBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+                        .authPanel()
+                    }
+                    .padding(18)
+                }
+
+                StickyBottomSaveButton(title: "Save", tint: target.option.tint, isDisabled: !canSave) {
+                    save()
+                }
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarCloseButton {
+                        dismiss()
+                    }
+                }
+
+                ToolbarItem(placement: .principal) {
+                    ModalToolbarTitle(icon: target.option.icon, title: target.option.title, tint: target.option.tint)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func save() {
+        let value = "\(measurementValue.trimmingCharacters(in: .whitespacesAndNewlines)) \(selectedUnit)"
+        let entry = HealthLogEntry(
+            id: UUID(),
+            type: .snapshot,
+            categoryID: target.option.id,
+            title: target.option.title,
+            timestamp: timestamp,
+            severity: 1,
+            value: value,
+            comments: notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        onSave(entry)
+        dismiss()
+    }
+
+    private static func parseMeasurementValue(_ value: String, defaultUnit: String) -> (value: String, unit: String) {
+        let pieces = value.split(separator: " ").map(String.init)
+        guard let first = pieces.first else {
+            return ("", defaultUnit)
+        }
+
+        return (first, pieces.dropFirst().first ?? defaultUnit)
     }
 }
 

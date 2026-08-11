@@ -178,10 +178,15 @@
 "Pain" = "Pain";
 "Discomfort" = "Discomfort";
 "Medicine" = "Medicine";
+"Sleep" = "Sleep";
 "Sleep & Rest" = "Sleep & Rest";
 "Gut & Digestion" = "Gut & Digestion";
 "Skin" = "Skin";
 "Nutrition" = "Nutrition";
+"Height" = "Height";
+"Weight" = "Weight";
+"Measurement time" = "Measurement time";
+"Add measurement notes" = "Add measurement notes";
 "Tap to log" = "Tap to log";
 "Normal" = "Normal";
 "Eczema check" = "Eczema check";

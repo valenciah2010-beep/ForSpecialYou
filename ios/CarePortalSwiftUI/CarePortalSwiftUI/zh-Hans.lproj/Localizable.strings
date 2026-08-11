@@ -178,10 +178,15 @@
 "Pain" = "疼痛";
 "Discomfort" = "不适";
 "Medicine" = "药物";
+"Sleep" = "睡眠";
 "Sleep & Rest" = "睡眠与休息";
 "Gut & Digestion" = "肠胃与消化";
 "Skin" = "皮肤";
 "Nutrition" = "营养";
+"Height" = "身高";
+"Weight" = "体重";
+"Measurement time" = "测量时间";
+"Add measurement notes" = "添加测量备注";
 "Tap to log" = "点击记录";
 "Normal" = "正常";
 "Eczema check" = "湿疹检查";
