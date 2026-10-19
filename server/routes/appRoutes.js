@@ -9,7 +9,7 @@ import {
   normalizeResponseLanguage,
   requestOpenAIJSON
 } from '../services/openaiReports.js';
-import { normalizeNutrientDailyLimit } from '../utils/validators.js';
+import { isValidPassword, normalizeNutrientDailyLimit } from '../utils/validators.js';
 import { activeBlockMessage, blockFieldsSQL, serializeUser } from '../utils/users.js';
 
 function parseStoredJSON(value, fallback) {
@@ -375,10 +375,11 @@ export function createAppRoutes() {
 
   router.post('/api/login', async (ctx) => {
     const { username, password } = ctx.request.body || {};
+    const identifier = String(username || '').trim();
 
-    if (!username || !password) {
+    if (!identifier || !password) {
       ctx.status = 400;
-      ctx.body = { message: 'Please enter your nickname and password.' };
+      ctx.body = { message: 'Please enter your email or username and password.' };
       return;
     }
 
@@ -397,21 +398,23 @@ export function createAppRoutes() {
           blocked_indefinitely,
           DATE_FORMAT(blocked_until, '%Y-%m-%d %H:%i') AS blocked_until
          FROM users
-         WHERE username = ?`,
-        [username.trim()]
+         WHERE username = ? OR LOWER(email) = LOWER(?)
+         ORDER BY LOWER(email) = LOWER(?) DESC
+         LIMIT 1`,
+        [identifier, identifier, identifier]
       );
 
       const user = rows[0];
       if (!user) {
         ctx.status = 401;
-        ctx.body = { message: 'Invalid nickname or password.' };
+        ctx.body = { message: 'Invalid email, username, or password.' };
         return;
       }
 
       const validPassword = await bcrypt.compare(password, user.password_hash);
       if (!validPassword) {
         ctx.status = 401;
-        ctx.body = { message: 'Invalid nickname or password.' };
+        ctx.body = { message: 'Invalid email, username, or password.' };
         return;
       }
 
@@ -429,6 +432,53 @@ export function createAppRoutes() {
       console.error(error);
       ctx.status = 500;
       ctx.body = { message: 'Could not log in right now.' };
+    }
+  });
+
+  router.post('/api/change-password', async (ctx) => {
+    const userId = Number(ctx.request.body?.userId);
+    const currentPassword = String(ctx.request.body?.currentPassword || '');
+    const newPassword = String(ctx.request.body?.newPassword || '');
+
+    if (!Number.isInteger(userId) || userId <= 0 || !currentPassword || !newPassword) {
+      ctx.status = 400;
+      ctx.body = { message: 'Please complete every password field.' };
+      return;
+    }
+
+    if (!isValidPassword(newPassword)) {
+      ctx.status = 400;
+      ctx.body = { message: 'Password must be at least 6 characters and include one number.' };
+      return;
+    }
+
+    try {
+      await ensureDatabaseShapeReady();
+      const [rows] = await pool.execute(
+        'SELECT id, password_hash FROM users WHERE id = ? LIMIT 1',
+        [userId]
+      );
+      const user = rows[0];
+
+      if (!user) {
+        ctx.status = 404;
+        ctx.body = { message: 'Please log in again.' };
+        return;
+      }
+
+      if (!(await bcrypt.compare(currentPassword, user.password_hash))) {
+        ctx.status = 401;
+        ctx.body = { message: 'Your current password is incorrect.' };
+        return;
+      }
+
+      const passwordHash = await bcrypt.hash(newPassword, 12);
+      await pool.execute('UPDATE users SET password_hash = ? WHERE id = ?', [passwordHash, userId]);
+      ctx.body = { message: 'Password changed successfully.' };
+    } catch (error) {
+      console.error(error);
+      ctx.status = 500;
+      ctx.body = { message: 'Could not change your password right now.' };
     }
   });
 

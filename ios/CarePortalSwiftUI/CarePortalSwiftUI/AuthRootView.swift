@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 struct AuthRootView: View {
-    @StateObject private var viewModel = AuthViewModel()
+    @ObservedObject var viewModel: AuthViewModel
 
     var body: some View {
         NavigationStack {
@@ -33,11 +33,6 @@ struct AuthRootView: View {
             }
             .animation(.easeInOut(duration: 0.2), value: viewModel.screen)
             .animation(.easeInOut(duration: 0.2), value: viewModel.currentUser?.id)
-            // Only validate the session restored at launch. A newly authenticated user
-            // has already been validated by the login request.
-            .task {
-                await viewModel.validateSavedSession()
-            }
         }
     }
 }

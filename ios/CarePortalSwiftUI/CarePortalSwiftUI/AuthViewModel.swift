@@ -56,7 +56,7 @@ final class AuthViewModel: ObservableObject {
 
         guard !loginNickname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !loginPassword.isEmpty else {
-            showError(localizedAppString("Please enter your parent username and password."))
+            showError(localizedAppString("Please enter your email or username and password."))
             return
         }
 
@@ -65,11 +65,11 @@ final class AuthViewModel: ObservableObject {
 
         do {
             let user = try await api.login(username: loginNickname, password: loginPassword)
-            await restoreServerAppData(for: user)
             currentUser = user
             saveUser(user)
             loginPassword = ""
             resetLoginProtection()
+            await restoreServerAppData(for: user)
         } catch {
             if isInvalidCredentialError(error) {
                 failedLoginAttempts += 1
@@ -133,27 +133,6 @@ final class AuthViewModel: ObservableObject {
             screen = .login
         } catch {
             showError(error.localizedDescription)
-        }
-    }
-
-    func validateSavedSession() async {
-        guard let savedUser = currentUser else { return }
-
-        do {
-            let user = try await api.validateSavedSession(userId: savedUser.id)
-            await restoreServerAppData(for: user)
-            currentUser = user
-            saveUser(user)
-        } catch {
-            if case AuthAPIError.server(let message) = error,
-                message.localizedCaseInsensitiveContains("blocked")
-                    || message.localizedCaseInsensitiveContains("log in again") {
-                logout()
-                showError(localizedServerMessage(message))
-                screen = .login
-            } else {
-                print("Saved session validation failed: \(error.localizedDescription)")
-            }
         }
     }
 

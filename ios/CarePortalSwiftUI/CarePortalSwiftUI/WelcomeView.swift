@@ -8,7 +8,7 @@ import UserNotifications
 struct WelcomeView: View {
     let user: CarePortalUser
     let logout: () -> Void
-    @State private var selectedTab = 0
+    @State private var selectedTab = 1
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -771,6 +771,127 @@ struct DiagnosisCategoryTimelineItem: Identifiable {
         case .note:
             return Color(red: 0.82, green: 0.58, blue: 0.10)
         }
+    }
+
+}
+
+private enum ExportLogCategory: String, CaseIterable, Identifiable, Hashable {
+    case diagnosisConditions
+    case diagnosisVisits
+    case diagnosisNotes
+    case healthSleep
+    case healthBowelMovement
+    case healthMood
+    case healthNutrition
+    case healthHeight
+    case healthWeight
+    case healthOther
+    case quickLogSeizure
+    case quickLogMeltdown
+    case quickLogStimming
+    case quickLogAccident
+    case quickLogDeescalation
+    case quickLogAllergy
+    case quickLogPain
+    case quickLogSkin
+    case quickLogCyclicVomiting
+    case quickLogDiscomfort
+    case quickLogMedicine
+    case therapyMilestones
+    case nutritionMeals
+
+    var id: String { rawValue }
+
+    var page: ExportLogPage {
+        switch self {
+        case .diagnosisConditions, .diagnosisVisits, .diagnosisNotes:
+            .diagnosis
+        case .healthSleep, .healthBowelMovement, .healthMood, .healthNutrition, .healthHeight, .healthWeight, .healthOther,
+                .quickLogSeizure, .quickLogMeltdown, .quickLogStimming, .quickLogAccident, .quickLogDeescalation,
+                .quickLogAllergy, .quickLogPain, .quickLogSkin, .quickLogCyclicVomiting, .quickLogDiscomfort,
+                .quickLogMedicine:
+            .health
+        case .therapyMilestones:
+            .therapy
+        case .nutritionMeals:
+            .nutrition
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .diagnosisConditions: "Conditions"
+        case .diagnosisVisits: "Doctor Visits"
+        case .diagnosisNotes: "Notes"
+        case .healthSleep: "Sleep"
+        case .healthBowelMovement: "Bowel Movement"
+        case .healthMood: "Mood"
+        case .healthNutrition: "Nutrition"
+        case .healthHeight: "Height"
+        case .healthWeight: "Weight"
+        case .healthOther: "Other Health Logs"
+        case .quickLogSeizure: "Seizure Track"
+        case .quickLogMeltdown: "Meltdown"
+        case .quickLogStimming: "Stimming/Tics"
+        case .quickLogAccident: "Accident"
+        case .quickLogDeescalation: "De-escalation"
+        case .quickLogAllergy: "Allergic Reaction"
+        case .quickLogPain: "Pain"
+        case .quickLogSkin: "Skin"
+        case .quickLogCyclicVomiting: "Cyclic Vomiting"
+        case .quickLogDiscomfort: "Discomfort"
+        case .quickLogMedicine: "Medicine"
+        case .therapyMilestones: "Milestones"
+        case .nutritionMeals: "Past Meal History"
+        }
+    }
+
+    init?(healthLog: HealthLogEntry) {
+        let normalizedID = Self.normalizedIdentifier(healthLog.categoryID)
+        let normalizedTitle = Self.normalizedIdentifier(healthLog.title)
+
+        switch (healthLog.type, normalizedID) {
+        case (.snapshot, "sleep"): self = .healthSleep
+        case (.snapshot, "digestion"), (.snapshot, "bowel"), (.snapshot, "bowelmovement"), (.snapshot, "gutanddigestion"): self = .healthBowelMovement
+        case (.snapshot, "mood"): self = .healthMood
+        case (.snapshot, "nutrition"): self = .healthNutrition
+        case (.snapshot, "height"): self = .healthHeight
+        case (.snapshot, "weight"): self = .healthWeight
+        case (.quickLog, "seizure"): self = .quickLogSeizure
+        case (.quickLog, "meltdown"): self = .quickLogMeltdown
+        case (.quickLog, "stimming"): self = .quickLogStimming
+        case (.quickLog, "accident"): self = .quickLogAccident
+        case (.quickLog, "deescalation"): self = .quickLogDeescalation
+        case (.quickLog, "allergy"): self = .quickLogAllergy
+        case (.quickLog, "pain"): self = .quickLogPain
+        case (.quickLog, "skin"): self = .quickLogSkin
+        case (.quickLog, "cyclicvomiting"): self = .quickLogCyclicVomiting
+        case (.quickLog, "discomfort"): self = .quickLogDiscomfort
+        case (.quickLog, "medsfood"), (.quickLog, "medicine"), (.quickLog, "medication"), (.quickLog, "medications"): self = .quickLogMedicine
+        default:
+            if normalizedTitle.contains("sleep") {
+                self = .healthSleep
+            } else if normalizedTitle.contains("bowel") || normalizedTitle.contains("digestion") || normalizedTitle.contains("gut") {
+                self = .healthBowelMovement
+            } else if normalizedTitle.contains("mood") {
+                self = .healthMood
+            } else if normalizedTitle.contains("nutrition") {
+                self = .healthNutrition
+            } else if normalizedTitle.contains("height") {
+                self = .healthHeight
+            } else if normalizedTitle.contains("weight") {
+                self = .healthWeight
+            } else if normalizedTitle.contains("medicine") || normalizedTitle.contains("medication") {
+                self = .quickLogMedicine
+            } else {
+                // Retain legacy and future log types rather than silently omitting them from an export.
+                self = .healthOther
+            }
+        }
+    }
+
+    private static func normalizedIdentifier(_ value: String) -> String {
+        value.lowercased().filter { $0.isLetter || $0.isNumber }
     }
 }
 
@@ -4002,6 +4123,10 @@ struct HealthLogEntry: Identifiable, Codable {
         comments = try container.decode(String.self, forKey: .comments)
         imageData = try container.decodeIfPresent(Data.self, forKey: .imageData)
     }
+
+    var includesSeverityInExport: Bool {
+        ["allergy", "discomfort", "meltdown", "pain", "skin"].contains(categoryID)
+    }
 }
 
 struct CyclicVomitingBackgroundData: Codable {
@@ -5017,13 +5142,13 @@ struct MeasurementSnapshotSheet: View {
                     VStack(alignment: .leading, spacing: 14) {
                         VStack(alignment: .leading, spacing: 12) {
                             HStack(spacing: 12) {
-                                Text(localizedAppString("Measurement time"))
+                                Text(localizedAppString("Time"))
                                     .font(.headline.weight(.bold))
                                     .foregroundStyle(AppTheme.text)
 
                                 Spacer()
 
-                                DatePicker(localizedAppString("Measurement time"), selection: $timestamp, displayedComponents: [.date, .hourAndMinute])
+                                DatePicker(localizedAppString("Time"), selection: $timestamp, displayedComponents: [.date, .hourAndMinute])
                                     .datePickerStyle(.compact)
                                     .labelsHidden()
                             }
@@ -5179,6 +5304,7 @@ struct SleepRestSnapshotSheet: View {
     let target: SleepSnapshotEditorTarget
     let onSave: (HealthLogEntry) -> Void
 
+    @State private var logDate: Date
     @State private var fellAsleepAt: Date
     @State private var wokeUpAt: Date
     @State private var selectedQuality: SleepRestQuality
@@ -5194,6 +5320,7 @@ struct SleepRestSnapshotSheet: View {
         self.onSave = onSave
 
         let prefill = Self.prefill(from: target.existingEntry)
+        self._logDate = State(initialValue: target.existingEntry?.timestamp ?? Date())
         self._fellAsleepAt = State(initialValue: prefill.fellAsleepAt)
         self._wokeUpAt = State(initialValue: prefill.wokeUpAt)
         self._selectedQuality = State(initialValue: prefill.quality)
@@ -5238,24 +5365,18 @@ struct SleepRestSnapshotSheet: View {
             VStack(spacing: 0) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
-                        HStack(spacing: 12) {
-                            Text(durationText)
-                                .font(.title.weight(.black))
+                        HStack {
+                            Text(localizedAppString("Date"))
+                                .font(.headline.weight(.bold))
                                 .foregroundStyle(AppTheme.text)
-                                .frame(width: 82, height: 58)
-                                .background(option.tint.opacity(0.18))
-                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(localizedAppString("Sleep & Rest"))
-                                    .font(.title3.weight(.bold))
-                                    .foregroundStyle(AppTheme.text)
-
-                                Text(String(format: localizedAppString("%@ tracked"), durationText))
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.secondary)
-                            }
+                            Spacer()
+                            DatePicker(localizedAppString("Date"), selection: $logDate, displayedComponents: .date)
+                                .labelsHidden()
+                                .datePickerStyle(.compact)
                         }
+                        .padding(14)
+                        .background(AppTheme.panel)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                         VStack(alignment: .leading, spacing: 16) {
                             Text(localizedAppString("Sleep Times"))
@@ -5391,7 +5512,7 @@ struct SleepRestSnapshotSheet: View {
             type: .snapshot,
             categoryID: option.id,
             title: option.title,
-            timestamp: target.existingEntry?.timestamp ?? Date(),
+            timestamp: logDate,
             severity: selectedQuality.severity,
             value: value,
             comments: noteText
@@ -5511,6 +5632,8 @@ struct TimeWheelPicker: View {
                 .datePickerStyle(.wheel)
                 .labelsHidden()
                 .frame(maxWidth: .infinity)
+                .frame(height: 132)
+                .clipped()
                 .background(AppTheme.fieldBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
@@ -5903,14 +6026,15 @@ struct StoolTypePickerCard: View {
                     .font(.caption.weight(.black))
                     .foregroundStyle(AppTheme.text)
 
-                Text(localizedAppString(BristolStoolGuide.group(for: type)))
-                    .font(.caption2.weight(.bold))
+                Text(localizedAppString(BristolStoolGuide.description(for: type)))
+                    .font(.caption2.weight(.medium))
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                    .minimumScaleFactor(0.8)
             }
             .padding(10)
-            .frame(width: 120, height: 132)
+            .frame(width: 120, height: 156)
             .background(isSelected ? tint.opacity(0.18) : AppTheme.fieldBackground)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
@@ -7084,7 +7208,7 @@ struct StimmingTicsLogEntrySheet: View {
     ]
 
     private var apparentStateText: String {
-        stateValue < 0.5 ? "Joyful/Regulating (Happy)" : "Anxious/Stressed"
+        stateValue < 0.5 ? "Joyful/Regulating" : "Anxious/Stressed"
     }
 
     private var severityFromFrequency: Int {
@@ -7204,7 +7328,7 @@ struct StimmingTicsLogEntrySheet: View {
             }
 
             Picker(localizedAppString("Apparent State"), selection: $stateValue) {
-                Text(localizedAppString("Joyful/Regulating (Happy)")).tag(0.0)
+                Text(localizedAppString("Joyful/Regulating")).tag(0.0)
                 Text(localizedAppString("Anxious/Stressed")).tag(1.0)
             }
             .pickerStyle(.segmented)
@@ -13384,17 +13508,15 @@ struct QuickLogTrendPreviewCard: View {
                 medicineHistoryCard
             }
             .buttonStyle(.plain)
-        } else if option.id == "mood" || option.id == "pain" || option.id == "cyclicVomiting" {
+        } else {
             NavigationLink {
                 QuickLogHistoryDetailView(option: option, entries: entries)
             } label: {
-                quickLogListCard
-            }
-            .buttonStyle(.plain)
-        } else {
-            Button {
-            } label: {
-                trendChartCard
+                if option.id == "mood" || option.id == "pain" || option.id == "cyclicVomiting" {
+                    quickLogListCard
+                } else {
+                    trendChartCard
+                }
             }
             .buttonStyle(.plain)
         }
@@ -13696,16 +13818,21 @@ struct SnapshotHistoryPreviewCard: View {
             }
             .buttonStyle(.plain)
         } else {
-            VStack(alignment: .leading, spacing: 14) {
-                cardHeader
+            NavigationLink {
+                SnapshotHistoryDetailView(option: option, entries: entries)
+            } label: {
+                VStack(alignment: .leading, spacing: 14) {
+                    cardHeader
 
-                chartPreview
-                    .frame(height: 110)
-                    .padding(10)
-                    .background(AppTheme.fieldBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    chartPreview
+                        .frame(height: 110)
+                        .padding(10)
+                        .background(AppTheme.fieldBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .snapshotHistoryCardStyle()
             }
-            .snapshotHistoryCardStyle()
+            .buttonStyle(.plain)
         }
     }
 
@@ -13805,6 +13932,76 @@ struct SnapshotHistoryPreviewCard: View {
 
     private var averageSeverityText: String {
         averageSeverity == 0 ? "0" : String(format: "%.1f", averageSeverity)
+    }
+}
+
+struct SnapshotHistoryDetailView: View {
+    let option: SnapshotOption
+    let entries: [HealthLogEntry]
+
+    private var sortedEntries: [HealthLogEntry] {
+        entries.sorted { $0.timestamp > $1.timestamp }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                if sortedEntries.isEmpty {
+                    Text(localizedAppString("No saved logs yet"))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .authPanel()
+                } else {
+                    ForEach(sortedEntries) { entry in
+                        SnapshotHistoryLogCard(entry: entry, option: option)
+                    }
+                }
+            }
+            .padding(18)
+        }
+        .background(AppTheme.background.ignoresSafeArea())
+        .navigationTitle(String(format: localizedAppString("%@ History"), localizedAppString(option.title)))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct SnapshotHistoryLogCard: View {
+    let entry: HealthLogEntry
+    let option: SnapshotOption
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: option.icon)
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(option.tint)
+                    .frame(width: 42, height: 42)
+                    .background(option.tint.opacity(0.15))
+                    .clipShape(Circle())
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(entry.timestamp, format: .dateTime.month().day().year())
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(AppTheme.text)
+                    Text(entry.timestamp, format: .dateTime.hour().minute())
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            if !entry.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                SeizureHistoryDetailRow(title: "Details", value: entry.value)
+            }
+            if !entry.comments.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                SeizureHistoryDetailRow(title: "Notes", value: entry.comments)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.panel)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(color: Color.black.opacity(0.08), radius: 14, x: 0, y: 8)
     }
 }
 
@@ -17119,6 +17316,18 @@ struct MealNutritionEstimateView: View {
                     }
                 }
             }
+
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(localizedAppString("This is an AI-generated nutrition estimate and may be inaccurate. It is not medical advice. Check food labels and consult a qualified healthcare professional for dietary or health decisions."))
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(12)
+            .background(Color.orange.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
     }
 }
@@ -17330,6 +17539,8 @@ struct ProfileView: View {
     let logout: () -> Void
 
     @State private var selectedPhoto: PhotosPickerItem?
+    @State private var pendingProfileImageData: Data?
+    @State private var isCameraPresented = false
     @AppStorage private var profileImageData: Data
 
     init(user: CarePortalUser, logout: @escaping () -> Void) {
@@ -17342,7 +17553,12 @@ struct ProfileView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
-                    ProfileHeader(user: user, imageData: profileImageData, selectedPhoto: $selectedPhoto)
+                    ProfileHeader(
+                        user: user,
+                        imageData: profileImageData,
+                        selectedPhoto: $selectedPhoto,
+                        showCamera: { isCameraPresented = true }
+                    )
 
                     VStack(alignment: .leading, spacing: 14) {
                         Text(localizedAppString("Parent Account"))
@@ -17355,7 +17571,7 @@ struct ProfileView: View {
                     .authPanel()
 
                     NavigationLink {
-                        SettingsMenuView()
+                        SettingsMenuView(user: user)
                     } label: {
                         Text(localizedAppString("Settings"))
                             .font(.headline.weight(.bold))
@@ -17373,6 +17589,19 @@ struct ProfileView: View {
                     }
                     .buttonStyle(.plain)
 
+                    NavigationLink {
+                        ExportLogView(user: user)
+                    } label: {
+                        Label(localizedAppString("Export Log"), systemImage: "square.and.arrow.up")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.accent)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(AppTheme.accent.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+
                     Button(role: .destructive, action: logout) {
                         Text(localizedAppString("Log Out"))
                             .font(.headline.weight(.bold))
@@ -17386,26 +17615,52 @@ struct ProfileView: View {
             }
             .background(AppTheme.background.ignoresSafeArea())
             .navigationTitle(localizedAppString("Profile"))
-            .task(id: selectedPhoto) {
-                await loadSelectedProfileImage()
+            .onChange(of: selectedPhoto) { _, newPhoto in
+                guard let newPhoto else { return }
+                Task {
+                    await loadSelectedProfileImage(newPhoto)
+                }
+            }
+            .sheet(isPresented: $isCameraPresented) {
+                CameraPhotoPicker { data in
+                    pendingProfileImageData = data
+                }
+                .ignoresSafeArea()
+            }
+            .sheet(isPresented: Binding(
+                get: { pendingProfileImageData != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        pendingProfileImageData = nil
+                    }
+                }
+            )) {
+                if let pendingProfileImageData {
+                    ProfileImageEditor(imageData: pendingProfileImageData) { editedImageData in
+                        profileImageData = editedImageData
+                        self.pendingProfileImageData = nil
+                    }
+                }
             }
         }
     }
 
-    private func loadSelectedProfileImage() async {
-        guard let selectedPhoto else { return }
-
+    private func loadSelectedProfileImage(_ selectedPhoto: PhotosPickerItem) async {
         do {
             if let data = try await selectedPhoto.loadTransferable(type: Data.self) {
-                profileImageData = data
+                pendingProfileImageData = data
             }
         } catch {
             // The picker is user-driven; keeping the current image is the least surprising fallback.
         }
+
+        // A PhotosPickerItem is a one-time import request, not persistent profile state.
+        self.selectedPhoto = nil
     }
 }
 
 struct SettingsMenuView: View {
+    let user: CarePortalUser
     @AppStorage(AppLanguage.storageKey) private var languageCode = AppLanguage.english.rawValue
     @State private var isShowingLanguagePicker = false
 
@@ -17416,6 +17671,33 @@ struct SettingsMenuView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 14) {
+                NavigationLink {
+                    ChangePasswordView(user: user)
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "key.fill")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.accent)
+                            .frame(width: 34, height: 34)
+                            .background(AppTheme.accent.opacity(0.12))
+                            .clipShape(Circle())
+
+                        Text(localizedAppString("Change Password"))
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+
+                        Spacer()
+
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.black))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(14)
+                    .background(AppTheme.fieldBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+
                 Button {
                     isShowingLanguagePicker = true
                 } label: {
@@ -17465,10 +17747,90 @@ struct SettingsMenuView: View {
     }
 }
 
+struct ChangePasswordView: View {
+    let user: CarePortalUser
+
+    @State private var currentPassword = ""
+    @State private var newPassword = ""
+    @State private var confirmPassword = ""
+    @State private var message = ""
+    @State private var isError = false
+    @State private var isSaving = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                AuthSecureField(title: "Current Password", text: $currentPassword, contentType: .password)
+                AuthSecureField(title: "New Password", text: $newPassword, contentType: .newPassword)
+                AuthSecureField(title: "Confirm New Password", text: $confirmPassword, contentType: .newPassword)
+
+                Text(localizedAppString("Use at least 6 characters and include one number."))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                MessageBanner(message: message, isError: isError)
+
+                Button {
+                    Task { await changePassword() }
+                } label: {
+                    ButtonLabel(title: isSaving ? "Changing Password..." : "Change Password")
+                }
+                .disabled(isSaving)
+            }
+            .padding(20)
+        }
+        .background(AppTheme.background.ignoresSafeArea())
+        .navigationTitle(localizedAppString("Change Password"))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func changePassword() async {
+        message = ""
+        isError = false
+
+        guard !currentPassword.isEmpty, !newPassword.isEmpty, !confirmPassword.isEmpty else {
+            showError("Please complete every password field.")
+            return
+        }
+
+        guard newPassword.count >= 6, newPassword.contains(where: { $0.isNumber }) else {
+            showError("Password must be at least 6 characters and include one number.")
+            return
+        }
+
+        guard newPassword == confirmPassword else {
+            showError("New passwords do not match.")
+            return
+        }
+
+        isSaving = true
+        defer { isSaving = false }
+
+        do {
+            message = try await AuthAPI().changePassword(
+                userId: user.id,
+                currentPassword: currentPassword,
+                newPassword: newPassword
+            )
+            currentPassword = ""
+            newPassword = ""
+            confirmPassword = ""
+        } catch {
+            showError(error.localizedDescription)
+        }
+    }
+
+    private func showError(_ text: String) {
+        message = localizedAppString(text)
+        isError = true
+    }
+}
+
 struct ProfileHeader: View {
     let user: CarePortalUser
     let imageData: Data
     @Binding var selectedPhoto: PhotosPickerItem?
+    let showCamera: () -> Void
 
     private var initials: String {
         user.nickname
@@ -17481,30 +17843,18 @@ struct ProfileHeader: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            PhotosPicker(selection: $selectedPhoto, matching: .images) {
-                ZStack(alignment: .bottomTrailing) {
-                    ZStack {
-                        Circle()
-                            .fill(AppTheme.accent.opacity(0.12))
-                            .frame(width: 96, height: 96)
+            ZStack(alignment: .bottomTrailing) {
+                PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                    profileAvatar
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(localizedAppString("Choose Profile Photo"))
 
-                        if let image = profileImage {
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFill()
-                                .frame(width: 96, height: 96)
-                                .clipShape(Circle())
-                        } else {
-                            Text(initials)
-                                .font(.title.weight(.black))
-                                .foregroundStyle(AppTheme.accent)
-                        }
-                    }
-
+                Button(action: showCamera) {
                     Image(systemName: "camera.fill")
                         .font(.caption.weight(.bold))
                         .foregroundStyle(.white)
-                        .frame(width: 28, height: 28)
+                        .frame(width: 30, height: 30)
                         .background(AppTheme.accent)
                         .clipShape(Circle())
                         .overlay {
@@ -17512,9 +17862,9 @@ struct ProfileHeader: View {
                                 .stroke(AppTheme.panel, lineWidth: 3)
                         }
                 }
-                .accessibilityLabel(localizedAppString("Change child profile picture"))
+                .buttonStyle(.plain)
+                .accessibilityLabel(localizedAppString("Take Profile Photo"))
             }
-            .buttonStyle(.plain)
 
             VStack(spacing: 6) {
                 NavigationLink {
@@ -17546,6 +17896,192 @@ struct ProfileHeader: View {
     private var profileImage: UIImage? {
         guard !imageData.isEmpty else { return nil }
         return UIImage(data: imageData)
+    }
+
+    private var profileAvatar: some View {
+        ZStack {
+            Circle()
+                .fill(AppTheme.accent.opacity(0.12))
+                .frame(width: 96, height: 96)
+
+            if let image = profileImage {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 96, height: 96)
+                    .clipShape(Circle())
+            } else {
+                Text(initials)
+                    .font(.title.weight(.black))
+                    .foregroundStyle(AppTheme.accent)
+            }
+        }
+    }
+}
+
+struct CameraPhotoPicker: UIViewControllerRepresentable {
+    let onImageCaptured: (Data) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onImageCaptured: onImageCaptured, dismiss: dismiss)
+    }
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.delegate = context.coordinator
+        picker.sourceType = UIImagePickerController.isSourceTypeAvailable(.camera) ? .camera : .photoLibrary
+        picker.cameraCaptureMode = .photo
+        picker.allowsEditing = false
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {
+    }
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        private let onImageCaptured: (Data) -> Void
+        private let dismiss: DismissAction
+
+        init(onImageCaptured: @escaping (Data) -> Void, dismiss: DismissAction) {
+            self.onImageCaptured = onImageCaptured
+            self.dismiss = dismiss
+        }
+
+        func imagePickerController(
+            _ picker: UIImagePickerController,
+            didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
+        ) {
+            if let image = info[.originalImage] as? UIImage,
+               let data = image.jpegData(compressionQuality: 0.92) {
+                onImageCaptured(data)
+            }
+            dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            dismiss()
+        }
+    }
+}
+
+struct ProfileImageEditor: View {
+    let imageData: Data
+    let save: (Data) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var scale: CGFloat = 1
+    @State private var magnification: CGFloat = 1
+    @State private var offset = CGSize.zero
+    @State private var dragOffset = CGSize.zero
+
+    private let cropSize: CGFloat = 280
+
+    private var image: UIImage? {
+        UIImage(data: imageData)
+    }
+
+    private var currentScale: CGFloat {
+        min(max(scale * magnification, 1), 5)
+    }
+
+    private var currentOffset: CGSize {
+        CGSize(width: offset.width + dragOffset.width, height: offset.height + dragOffset.height)
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 24) {
+                Text(localizedAppString("Pinch to zoom and drag to reposition your photo."))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+
+                ZStack {
+                    Circle()
+                        .fill(AppTheme.fieldBackground)
+                        .frame(width: cropSize, height: cropSize)
+
+                    if let image {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: cropSize, height: cropSize)
+                            .scaleEffect(currentScale)
+                            .offset(currentOffset)
+                            .clipShape(Circle())
+                            .gesture(editGesture)
+                    }
+
+                    Circle()
+                        .stroke(AppTheme.panel, lineWidth: 4)
+                        .frame(width: cropSize, height: cropSize)
+                        .allowsHitTesting(false)
+                }
+                .frame(width: cropSize, height: cropSize)
+                .clipShape(Circle())
+                .shadow(color: .black.opacity(0.12), radius: 12, x: 0, y: 6)
+
+                Spacer()
+            }
+            .padding(24)
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle(localizedAppString("Adjust Profile Photo"))
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(localizedAppString("Cancel")) {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(localizedAppString("Save")) {
+                        if let data = croppedImageData() {
+                            save(data)
+                        }
+                    }
+                    .fontWeight(.bold)
+                }
+            }
+        }
+    }
+
+    private var editGesture: some Gesture {
+        SimultaneousGesture(
+            MagnificationGesture()
+                .onChanged { magnification = $0 }
+                .onEnded { value in
+                    scale = min(max(scale * value, 1), 5)
+                    magnification = 1
+                },
+            DragGesture()
+                .onChanged { dragOffset = $0.translation }
+                .onEnded { value in
+                    offset.width += value.translation.width
+                    offset.height += value.translation.height
+                    dragOffset = .zero
+                }
+        )
+    }
+
+    private func croppedImageData() -> Data? {
+        guard let image else { return nil }
+        let outputSize = CGSize(width: 600, height: 600)
+        let renderer = UIGraphicsImageRenderer(size: outputSize)
+        let rendered = renderer.image { _ in
+            let baseScale = max(outputSize.width / image.size.width, outputSize.height / image.size.height)
+            let imageSize = CGSize(
+                width: image.size.width * baseScale * currentScale,
+                height: image.size.height * baseScale * currentScale
+            )
+            let rect = CGRect(
+                x: (outputSize.width - imageSize.width) / 2 + currentOffset.width * 2,
+                y: (outputSize.height - imageSize.height) / 2 + currentOffset.height * 2,
+                width: imageSize.width,
+                height: imageSize.height
+            )
+            image.draw(in: rect)
+        }
+        return rendered.jpegData(compressionQuality: 0.9)
     }
 }
 
@@ -17831,5 +18367,621 @@ struct InfoRow: View {
                 .multilineTextAlignment(.trailing)
         }
         .font(.subheadline)
+    }
+}
+
+struct ExportLogView: View {
+    let user: CarePortalUser
+
+    @AppStorage private var healthLogData: Data
+    @AppStorage private var savedMealHistoryData: Data
+    @AppStorage private var conditionData: Data
+    @AppStorage private var doctorVisitData: Data
+    @AppStorage private var diagnosisNoteData: Data
+    @AppStorage private var therapyMilestoneData: Data
+    @State private var startDate = Calendar.current.date(byAdding: .month, value: -1, to: Date()) ?? Date()
+    @State private var endDate = Date()
+    @State private var selectedPages = Set<ExportLogPage>(ExportLogPage.allCases)
+    @State private var expandedPages = Set<ExportLogPage>()
+    @State private var selectedCategories = Set<ExportLogCategory>(ExportLogCategory.allCases)
+    @State private var message = ""
+    @State private var isError = false
+    @State private var shareItem: LogExportShareItem?
+
+    init(user: CarePortalUser) {
+        self.user = user
+        self._healthLogData = AppStorage(wrappedValue: Data(), "health.\(user.id).logData")
+        self._savedMealHistoryData = AppStorage(wrappedValue: Data(), "nutrient.\(user.id).savedMealHistoryData")
+        self._conditionData = AppStorage(wrappedValue: Data(), "diagnosis.\(user.id).conditions")
+        self._doctorVisitData = AppStorage(wrappedValue: Data(), "diagnosis.\(user.id).doctorVisits")
+        self._diagnosisNoteData = AppStorage(wrappedValue: Data(), "diagnosis.\(user.id).generalNotes")
+        self._therapyMilestoneData = AppStorage(wrappedValue: Data(), "therapy.\(user.id).milestoneData")
+    }
+
+    private var healthLogs: [HealthLogEntry] {
+        guard !healthLogData.isEmpty else { return [] }
+        return (try? JSONDecoder().decode([HealthLogEntry].self, from: healthLogData)) ?? []
+    }
+
+    private var savedMeals: [SavedMealEstimate] {
+        guard !savedMealHistoryData.isEmpty else { return [] }
+        return (try? JSONDecoder().decode([SavedMealEstimate].self, from: savedMealHistoryData)) ?? []
+    }
+
+    private var diagnosisConditions: [DiagnosisCondition] {
+        (try? JSONDecoder().decode([DiagnosisCondition].self, from: conditionData)) ?? []
+    }
+
+    private var doctorVisits: [DiagnosisDoctorVisit] {
+        (try? JSONDecoder().decode([DiagnosisDoctorVisit].self, from: doctorVisitData)) ?? []
+    }
+
+    private var diagnosisNotes: [DiagnosisGeneralNote] {
+        (try? JSONDecoder().decode([DiagnosisGeneralNote].self, from: diagnosisNoteData)) ?? []
+    }
+
+    private var therapyMilestones: [TherapyMilestone] {
+        (try? JSONDecoder().decode([TherapyMilestone].self, from: therapyMilestoneData)) ?? []
+    }
+
+    private var dateRange: ClosedRange<Date> {
+        let calendar = Calendar.current
+        let lower = calendar.startOfDay(for: min(startDate, endDate))
+        let upper = calendar.date(byAdding: DateComponents(day: 1, second: -1), to: calendar.startOfDay(for: max(startDate, endDate))) ?? endDate
+        return lower...upper
+    }
+
+    private var selectedLogs: [HealthLogEntry] {
+        guard selectedPages.contains(.health) else { return [] }
+        return healthLogs
+            .filter { dateRange.contains($0.timestamp) && isHealthCategorySelected(for: $0) }
+            .sorted { $0.timestamp > $1.timestamp }
+    }
+
+    private var selectedMeals: [SavedMealEstimate] {
+        guard selectedPages.contains(.nutrition), selectedCategories.contains(.nutritionMeals) else { return [] }
+        return savedMeals
+            .filter { dateRange.contains($0.savedAt) }
+            .sorted { $0.savedAt > $1.savedAt }
+    }
+
+    private var selectionCount: Int {
+        selectedLogs.count + selectedMeals.count + selectedAdditionalRecords.count
+    }
+
+    private var selectedAdditionalRecords: [ExportTextRecord] {
+        var records: [ExportTextRecord] = []
+
+        if selectedPages.contains(.diagnosis), selectedCategories.contains(.diagnosisConditions) {
+            records += diagnosisConditions.filter { dateRange.contains($0.createdAt) }.map {
+                ExportTextRecord(type: "Diagnosis", title: $0.name, date: $0.createdAt, detail: [$0.categoryText, $0.notes].filter { !$0.isEmpty }.joined(separator: "\n"), photoData: $0.photos.filter { $0.kind == .photo }.map(\.data))
+            }
+        }
+        if selectedPages.contains(.diagnosis), selectedCategories.contains(.diagnosisVisits) {
+            records += doctorVisits.filter { dateRange.contains($0.date) }.map {
+                ExportTextRecord(type: "Diagnosis", title: $0.displayTitle, date: $0.date, detail: [$0.categoryText, $0.doctorName, $0.clinicLocation, $0.notes].filter { !$0.isEmpty }.joined(separator: "\n"), photoData: $0.attachments.filter { $0.kind == .photo }.map(\.data))
+            }
+        }
+        if selectedPages.contains(.diagnosis), selectedCategories.contains(.diagnosisNotes) {
+            records += diagnosisNotes.filter { dateRange.contains($0.date ?? $0.createdAt) }.map {
+                ExportTextRecord(type: "Diagnosis", title: "Note", date: $0.date ?? $0.createdAt, detail: [$0.categoryText, $0.notes].filter { !$0.isEmpty }.joined(separator: "\n"), photoData: $0.attachments.filter { $0.kind == .photo }.map(\.data))
+            }
+        }
+
+        if selectedPages.contains(.therapy), selectedCategories.contains(.therapyMilestones) {
+            records += therapyMilestones.filter { dateRange.contains($0.date) }.map {
+                ExportTextRecord(type: "Therapy", title: $0.categoryTitle, date: $0.date, detail: [$0.milestone, $0.supportLevel, $0.notes].filter { !$0.isEmpty }.joined(separator: "\n"))
+            }
+        }
+
+        return records.sorted { $0.date > $1.date }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(spacing: 12) {
+                    DatePicker(localizedAppString("Start Date"), selection: $startDate, displayedComponents: .date)
+                    DatePicker(localizedAppString("End Date"), selection: $endDate, displayedComponents: .date)
+                }
+                .padding(14)
+                .background(AppTheme.panel)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                HStack {
+                    Text(localizedAppString("Pages to Include"))
+                        .font(.headline.weight(.bold))
+                    Spacer()
+                    Button(localizedAppString("Select All")) {
+                        selectedPages = Set(ExportLogPage.allCases)
+                        selectedCategories = Set(ExportLogCategory.allCases)
+                    }
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(AppTheme.accent)
+                }
+
+                ForEach(ExportLogPage.allCases) { page in
+                    VStack(spacing: 0) {
+                        HStack(spacing: 12) {
+                            Button {
+                                togglePageSelection(page)
+                            } label: {
+                                Image(systemName: selectedPages.contains(page) ? "checkmark.circle.fill" : "circle")
+                                    .font(.title3)
+                                    .foregroundStyle(selectedPages.contains(page) ? AppTheme.accent : .secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(localizedAppString(page.title))
+                            .accessibilityValue(selectedPages.contains(page) ? localizedAppString("Selected") : localizedAppString("Not selected"))
+
+                            Button {
+                                togglePageExpansion(page)
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Label(localizedAppString(page.title), systemImage: page.icon)
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(AppTheme.text)
+                                    Spacer()
+                                    Image(systemName: expandedPages.contains(page) ? "chevron.down" : "chevron.right")
+                                        .font(.subheadline.weight(.bold))
+                                        .foregroundStyle(.secondary)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(14)
+
+                        if expandedPages.contains(page) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                if page == .health {
+                                    Text(localizedAppString("Health snapshots"))
+                                        .font(.caption.weight(.bold))
+                                        .foregroundStyle(.secondary)
+                                        .padding(.top, 2)
+                                }
+                                ForEach(page.categories) { category in
+                                    if category == .quickLogSeizure {
+                                        Text(localizedAppString("Quick Logs"))
+                                            .font(.caption.weight(.bold))
+                                            .foregroundStyle(.secondary)
+                                            .padding(.top, 8)
+                                    }
+                                    categorySelectionRow(category)
+                                }
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.bottom, 12)
+                        }
+                    }
+                    .background(AppTheme.panel)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+
+                HStack(spacing: 12) {
+                    Image(systemName: "checklist")
+                        .foregroundStyle(AppTheme.accent)
+                    Text("\(selectionCount) \(localizedAppString("records selected"))")
+                        .font(.subheadline.weight(.bold))
+                    Spacer()
+                }
+                .padding(14)
+                .background(AppTheme.accent.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                MessageBanner(message: message, isError: isError)
+
+                VStack(spacing: 10) {
+                    Button { exportPDF() } label: {
+                        Label(localizedAppString("Export PDF"), systemImage: "doc.richtext.fill")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(AppTheme.accent)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .disabled(selectionCount == 0)
+
+                    Button { exportFile() } label: {
+                        Label(localizedAppString("Export File"), systemImage: "doc.text.fill")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.accent)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(AppTheme.accent.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .disabled(selectionCount == 0)
+
+                }
+            }
+            .padding(20)
+        }
+        .background(AppTheme.background.ignoresSafeArea())
+        .navigationTitle(localizedAppString("Export Log"))
+        .sheet(item: $shareItem) { item in
+            ExportShareSheet(items: item.items)
+        }
+    }
+
+    @ViewBuilder
+    private func categorySelectionRow(_ category: ExportLogCategory) -> some View {
+        Button {
+            toggleCategorySelection(category)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: selectedCategories.contains(category) ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(selectedCategories.contains(category) ? AppTheme.accent : .secondary)
+                Text(localizedAppString(category.title))
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(AppTheme.text)
+                Spacer()
+            }
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func togglePageSelection(_ page: ExportLogPage) {
+        if selectedPages.contains(page) {
+            selectedPages.remove(page)
+            selectedCategories.subtract(page.categories)
+        } else {
+            selectedPages.insert(page)
+            selectedCategories.formUnion(page.categories)
+        }
+    }
+
+    private func togglePageExpansion(_ page: ExportLogPage) {
+        if expandedPages.contains(page) {
+            expandedPages.remove(page)
+        } else {
+            expandedPages.insert(page)
+        }
+    }
+
+    private func toggleCategorySelection(_ category: ExportLogCategory) {
+        if selectedCategories.contains(category) {
+            selectedCategories.remove(category)
+            if !category.page.categories.contains(where: { selectedCategories.contains($0) }) {
+                selectedPages.remove(category.page)
+            }
+        } else {
+            selectedCategories.insert(category)
+            selectedPages.insert(category.page)
+        }
+    }
+
+    private func isHealthCategorySelected(for log: HealthLogEntry) -> Bool {
+        guard let category = ExportLogCategory(healthLog: log) else { return false }
+        return selectedCategories.contains(category)
+    }
+
+    private func exportPDF() {
+        clearMessage()
+        guard let url = LogPDFExporter.export(user: user, logs: selectedLogs, meals: selectedMeals, additionalRecords: selectedAdditionalRecords, dateRange: dateRange) else {
+            showError("Unable to create PDF.")
+            return
+        }
+        shareItem = LogExportShareItem(items: [url])
+    }
+
+    private func exportFile() {
+        clearMessage()
+        guard let url = LogCSVExporter.export(logs: selectedLogs, meals: selectedMeals, additionalRecords: selectedAdditionalRecords) else {
+            showError("Unable to create export file.")
+            return
+        }
+        shareItem = LogExportShareItem(items: [url])
+    }
+
+    private func clearMessage() {
+        message = ""
+        isError = false
+    }
+
+    private func showError(_ text: String) {
+        message = localizedAppString(text)
+        isError = true
+    }
+}
+
+private enum ExportLogPage: String, CaseIterable, Identifiable, Hashable {
+    case diagnosis
+    case health
+    case therapy
+    case nutrition
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .diagnosis: "Diagnosis"
+        case .health: "Health"
+        case .therapy: "Therapy"
+        case .nutrition: "Nutrition"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .diagnosis: "stethoscope"
+        case .health: "heart.text.square"
+        case .therapy: "figure.mind.and.body"
+        case .nutrition: "leaf.fill"
+        }
+    }
+
+    fileprivate var categories: [ExportLogCategory] {
+        ExportLogCategory.allCases.filter { $0.page == self }
+    }
+}
+
+private struct ExportTextRecord {
+    let type: String
+    let title: String
+    let date: Date
+    let detail: String
+    let photoData: [Data]
+
+    init(type: String, title: String, date: Date, detail: String, photoData: [Data] = []) {
+        self.type = type
+        self.title = title
+        self.date = date
+        self.detail = detail
+        self.photoData = photoData
+    }
+}
+
+private struct LogExportShareItem: Identifiable {
+    let id = UUID()
+    let items: [Any]
+}
+
+private struct ExportShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {
+    }
+}
+
+private enum LogCSVExporter {
+    static func export(logs: [HealthLogEntry], meals: [SavedMealEstimate], additionalRecords: [ExportTextRecord]) -> URL? {
+        let header = "record_type,category,date,severity,value,comments,calories,protein_g,carbs_g,fat_g,fiber_g,sugar_g,summary\n"
+        let formatter = ISO8601DateFormatter()
+        let logRows = logs.map { log in
+            ["health", log.title, formatter.string(from: log.timestamp), log.includesSeverityInExport ? "\(log.severity)" : "", log.value, log.comments, "", "", "", "", "", "", ""]
+                .map(csvField)
+                .joined(separator: ",")
+        }
+        let mealRows = meals.map { meal in
+            let estimate = meal.estimate
+            return ["nutrient", "Meal estimate", formatter.string(from: meal.savedAt), "", "", "", "\(estimate.calories)", "\(estimate.protein)", "\(estimate.carbs)", "\(estimate.fat)", "\(estimate.fiber)", "\(estimate.sugar)", estimate.summary]
+                .map(csvField)
+                .joined(separator: ",")
+        }
+        let additionalRows = additionalRecords.map { record in
+            [record.type.lowercased(), record.title, formatter.string(from: record.date), "", "", record.detail, "", "", "", "", "", "", ""]
+                .map(csvField)
+                .joined(separator: ",")
+        }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Care-Portal-Log-\(Int(Date().timeIntervalSince1970)).csv")
+        do {
+            try (header + (logRows + mealRows + additionalRows).joined(separator: "\n")).write(to: url, atomically: true, encoding: .utf8)
+            return url
+        } catch {
+            return nil
+        }
+    }
+
+    private static func csvField(_ value: String) -> String {
+        "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
+    }
+}
+
+private enum LogPDFExporter {
+    static func export(user: CarePortalUser, logs: [HealthLogEntry], meals: [SavedMealEstimate], additionalRecords: [ExportTextRecord], dateRange: ClosedRange<Date>) -> URL? {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Care-Portal-Log-\(Int(Date().timeIntervalSince1970)).pdf")
+        let pageRect = CGRect(x: 0, y: 0, width: 792, height: 612)
+        let renderer = UIGraphicsPDFRenderer(bounds: pageRect)
+
+        do {
+            try renderer.writePDF(to: url) { context in
+                let leftMargin: CGFloat = 26
+                let rightMargin: CGFloat = 26
+                let topMargin: CGFloat = 24
+                let bottomMargin: CGFloat = 24
+                let tableWidth = pageRect.width - leftMargin - rightMargin
+                let titleColor = UIColor(red: 0.12, green: 0.17, blue: 0.16, alpha: 1)
+                let accentColor = UIColor(red: 0.15, green: 0.41, blue: 0.36, alpha: 1)
+                let gridColor = UIColor(white: 0.82, alpha: 1)
+                let headerFill = UIColor(red: 0.91, green: 0.95, blue: 0.92, alpha: 1)
+                var y: CGFloat = topMargin
+
+                func textHeight(_ text: String, font: UIFont, width: CGFloat) -> CGFloat {
+                    let attributes: [NSAttributedString.Key: Any] = [.font: font]
+                    let attributed = NSAttributedString(string: text, attributes: attributes)
+                    return ceil(attributed.boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil).height)
+                }
+
+                func drawText(_ text: String, in rect: CGRect, font: UIFont, color: UIColor, alignment: NSTextAlignment = .left) {
+                    let style = NSMutableParagraphStyle()
+                    style.alignment = alignment
+                    style.lineBreakMode = .byWordWrapping
+                    let attributed = NSAttributedString(string: text, attributes: [
+                        .font: font,
+                        .foregroundColor: color,
+                        .paragraphStyle: style
+                    ])
+                    attributed.draw(in: rect)
+                }
+
+                func startPage(sectionTitle: String) {
+                    context.beginPage()
+                    y = topMargin
+                    drawText("Care Portal Log", in: CGRect(x: leftMargin, y: y, width: tableWidth, height: 26), font: .boldSystemFont(ofSize: 20), color: titleColor)
+                    y += 24
+                    let subtitle = "\(user.nickname) | \(localizedDateString(dateRange.lowerBound, dateStyle: .medium, timeStyle: .none)) - \(localizedDateString(dateRange.upperBound, dateStyle: .medium, timeStyle: .none))"
+                    drawText(subtitle, in: CGRect(x: leftMargin, y: y, width: tableWidth, height: 18), font: .systemFont(ofSize: 10, weight: .semibold), color: .secondaryLabel)
+                    y += 26
+                    drawText(sectionTitle, in: CGRect(x: leftMargin, y: y, width: tableWidth, height: 22), font: .boldSystemFont(ofSize: 15), color: accentColor)
+                    y += 28
+                }
+
+                func drawTable(sectionTitle: String, headers: [String], widths: [CGFloat], rows: [[String]]) {
+                    guard headers.count == widths.count else { return }
+                    let actualWidths = widths.map { $0 * tableWidth }
+
+                    func drawTableRow(_ cells: [String], isHeader: Bool) -> CGFloat {
+                        let font = isHeader ? UIFont.boldSystemFont(ofSize: 9) : UIFont.systemFont(ofSize: 9)
+                        let cellHeights = zip(cells, actualWidths).map { textHeight($0.0, font: font, width: max($0.1 - 12, 20)) + 12 }
+                        let rowHeight = max(isHeader ? 27 : 24, cellHeights.max() ?? 24)
+                        var x = leftMargin
+                        for index in cells.indices {
+                            let rect = CGRect(x: x, y: y, width: actualWidths[index], height: rowHeight)
+                            if isHeader {
+                                headerFill.setFill()
+                                context.cgContext.fill(rect)
+                            }
+                            gridColor.setStroke()
+                            context.cgContext.stroke(rect, width: 0.75)
+                            drawText(cells[index], in: rect.insetBy(dx: 6, dy: 6), font: font, color: titleColor, alignment: isHeader ? .center : .left)
+                            x += actualWidths[index]
+                        }
+                        y += rowHeight
+                        return rowHeight
+                    }
+
+                    startPage(sectionTitle: sectionTitle)
+                    _ = drawTableRow(headers, isHeader: true)
+                    for row in rows {
+                        let rowFont = UIFont.systemFont(ofSize: 9)
+                        let rowHeight = max(24, zip(row, actualWidths).map { textHeight($0.0, font: rowFont, width: max($0.1 - 12, 20)) + 12 }.max() ?? 24)
+                        if y + rowHeight > pageRect.height - bottomMargin {
+                            startPage(sectionTitle: sectionTitle)
+                            _ = drawTableRow(headers, isHeader: true)
+                        }
+                        _ = drawTableRow(row, isHeader: false)
+                    }
+                }
+
+                let healthGroups = Dictionary(grouping: logs, by: { $0.categoryID })
+                for categoryID in healthGroups.keys.sorted() {
+                    guard let categoryLogs = healthGroups[categoryID] else { continue }
+                    let sortedLogs = categoryLogs.sorted { $0.timestamp < $1.timestamp }
+                    if categoryID == "sleep" {
+                        let rows = sortedLogs.map { log -> [String] in
+                            let sleep = sleepFields(from: log)
+                            return [
+                                localizedDateString(log.timestamp, dateStyle: .short, timeStyle: .none),
+                                sleep.sleepTime,
+                                sleep.wakeTime,
+                                sleep.totalSleep,
+                                sleep.wakeUps,
+                                sleep.quality,
+                                sleep.notes
+                            ]
+                        }
+                        drawTable(
+                            sectionTitle: "Sleep & Rest Daily Log",
+                            headers: ["Day", "Sleep Time", "Wake Time", "Total Sleep", "Wake-Ups", "Rest Quality", "Notes"],
+                            widths: [0.12, 0.13, 0.13, 0.13, 0.11, 0.14, 0.24],
+                            rows: rows
+                        )
+                    } else {
+                        let rows = sortedLogs.map { log in
+                            [
+                                localizedDateString(log.timestamp, dateStyle: .short, timeStyle: .none),
+                                localizedDateString(log.timestamp, dateStyle: .none, timeStyle: .short),
+                                log.title,
+                                log.value,
+                                log.includesSeverityInExport ? "\(log.severity)/5" : "",
+                                log.comments
+                            ]
+                        }
+                        drawTable(
+                            sectionTitle: "\(sortedLogs.first?.title ?? "Health") Log",
+                            headers: ["Day", "Time", "Category", "Details", "Severity", "Notes"],
+                            widths: [0.12, 0.12, 0.18, 0.22, 0.11, 0.25],
+                            rows: rows
+                        )
+                    }
+                }
+
+                if !meals.isEmpty {
+                    let rows = meals.sorted { $0.savedAt < $1.savedAt }.map { meal -> [String] in
+                        let estimate = meal.estimate
+                        return [
+                            localizedDateString(meal.savedAt, dateStyle: .short, timeStyle: .none),
+                            localizedDateString(meal.savedAt, dateStyle: .none, timeStyle: .short),
+                            "\(estimate.calories)",
+                            "\(estimate.protein) g",
+                            "\(estimate.carbs) g",
+                            "\(estimate.fat) g",
+                            "\(estimate.fiber) g",
+                            "\(estimate.sugar) g",
+                            estimate.summary
+                        ]
+                    }
+                    drawTable(
+                        sectionTitle: "Nutrition - Past Meal History",
+                        headers: ["Day", "Time", "Calories", "Protein", "Carbs", "Fat", "Fiber", "Sugar", "Meal Summary"],
+                        widths: [0.1, 0.1, 0.09, 0.09, 0.09, 0.08, 0.08, 0.08, 0.29],
+                        rows: rows
+                    )
+                }
+
+                let recordGroups = Dictionary(grouping: additionalRecords, by: { $0.type })
+                for type in recordGroups.keys.sorted() {
+                    let records = (recordGroups[type] ?? []).sorted { $0.date < $1.date }
+                    let rows = records.map { record in
+                        [
+                            localizedDateString(record.date, dateStyle: .short, timeStyle: .none),
+                            localizedDateString(record.date, dateStyle: .none, timeStyle: .short),
+                            record.title,
+                            record.detail
+                        ]
+                    }
+                    drawTable(
+                        sectionTitle: "\(type) Records",
+                        headers: ["Day", "Time", "Entry", "Details"],
+                        widths: [0.14, 0.14, 0.24, 0.48],
+                        rows: rows
+                    )
+                }
+            }
+            return url
+        } catch {
+            return nil
+        }
+    }
+
+    private static func sleepFields(from log: HealthLogEntry) -> (sleepTime: String, wakeTime: String, totalSleep: String, wakeUps: String, quality: String, notes: String) {
+        let valueParts = log.value.components(separatedBy: "·").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let lines = log.comments.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let sleepTime = lineValue(lines, prefix: "Fell asleep at")
+        let wakeTime = lineValue(lines, prefix: "Woke up at")
+        let notes = lines.filter {
+            !$0.localizedCaseInsensitiveContains("fell asleep at") && !$0.localizedCaseInsensitiveContains("woke up at")
+        }.joined(separator: "\n")
+        return (
+            sleepTime,
+            wakeTime,
+            valueParts.first ?? "",
+            valueParts.first { $0.localizedCaseInsensitiveContains("wake") } ?? "",
+            valueParts.first { ["Restless", "Normal", "Deep"].contains($0) } ?? "",
+            notes
+        )
+    }
+
+    private static func lineValue(_ lines: [String], prefix: String) -> String {
+        lines.first { $0.localizedCaseInsensitiveContains(prefix) }
+            .map { $0.replacingOccurrences(of: prefix, with: "", options: [.caseInsensitive]).trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
     }
 }

@@ -121,23 +121,26 @@ export function createUserRoutes() {
         return;
       }
 
-      const [emailRows] = await pool.execute('SELECT id FROM users WHERE email = ? LIMIT 1', [
-        requestedEmail
-      ]);
+      const [identifierRows] = await pool.execute(
+        `SELECT username, email
+         FROM users
+         WHERE username IN (?, ?)
+            OR LOWER(email) IN (LOWER(?), LOWER(?))
+         LIMIT 1`,
+        [requestedNickname, requestedEmail, requestedEmail, requestedNickname]
+      );
 
-      if (emailRows.length > 0) {
+      const existingIdentifier = identifierRows[0];
+      if (existingIdentifier?.email.toLowerCase() === requestedEmail
+          || existingIdentifier?.username.toLowerCase() === requestedEmail) {
         ctx.status = 409;
         ctx.body = { message: 'This email has already been used.' };
         return;
       }
 
-      const [nicknameRows] = await pool.execute('SELECT id FROM users WHERE username = ? LIMIT 1', [
-        requestedNickname
-      ]);
-
-      if (nicknameRows.length > 0) {
+      if (existingIdentifier) {
         ctx.status = 409;
-        ctx.body = { message: 'This nickname is already in use.' };
+        ctx.body = { message: 'This username is already in use.' };
         return;
       }
 

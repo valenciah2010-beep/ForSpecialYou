@@ -6,12 +6,13 @@ import UserNotifications
 struct CarePortalSwiftUIApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @AppStorage(AppLanguage.storageKey) private var languageCode = AppLanguage.english.rawValue
+    @StateObject private var authViewModel = AuthViewModel()
 
     var body: some Scene {
         WindowGroup {
-            AuthRootView()
+            AuthRootView(viewModel: authViewModel)
                 .environment(\.locale, AppLanguage(code: languageCode).locale)
-                .id(languageCode)
+                .preferredColorScheme(.light)
         }
     }
 }

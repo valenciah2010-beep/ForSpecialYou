@@ -31,16 +31,6 @@ struct AuthAPI {
         return user
     }
 
-    func validateSavedSession(userId: Int) async throws -> CarePortalUser {
-        let response: AuthResponse = try await post("/api/app-session", body: AppSessionRequest(userId: userId))
-
-        guard let user = response.user else {
-            throw AuthAPIError.invalidResponse
-        }
-
-        return user
-    }
-
     func signup(nickname: String, email: String, password: String, verifyPassword: String) async throws -> String {
         let body = SignupRequest(
             nickname: nickname,
@@ -51,6 +41,16 @@ struct AuthAPI {
             role: "parent"
         )
         let response: MessageResponse = try await post("/api/signup", body: body)
+        return response.message
+    }
+
+    func changePassword(userId: Int, currentPassword: String, newPassword: String) async throws -> String {
+        let body = ChangePasswordRequest(
+            userId: userId,
+            currentPassword: currentPassword,
+            newPassword: newPassword
+        )
+        let response: MessageResponse = try await post("/api/change-password", body: body)
         return response.message
     }
 
@@ -203,6 +203,12 @@ private struct HealthInsightsRequest: Encodable {
 
 private struct AppSessionRequest: Encodable {
     let userId: Int
+}
+
+private struct ChangePasswordRequest: Encodable {
+    let userId: Int
+    let currentPassword: String
+    let newPassword: String
 }
 
 private struct HealthInsightsResponse: Decodable {
