@@ -20,7 +20,7 @@ struct DiagnosisSelectionSheet: View {
                 .padding(18)
             }
             .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle(localizedAppString("Diagnosis"))
+            .navigationTitle(localizedAppString("Category"))
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(localizedAppString("Done")) {

@@ -33,7 +33,9 @@ struct AuthRootView: View {
             }
             .animation(.easeInOut(duration: 0.2), value: viewModel.screen)
             .animation(.easeInOut(duration: 0.2), value: viewModel.currentUser?.id)
-            .task(id: viewModel.currentUser?.id) {
+            // Only validate the session restored at launch. A newly authenticated user
+            // has already been validated by the login request.
+            .task {
                 await viewModel.validateSavedSession()
             }
             .onReceive(NotificationCenter.default.publisher(for: APITransport.sessionExpired)) { _ in
