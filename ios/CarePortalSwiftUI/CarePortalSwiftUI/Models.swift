@@ -23,6 +23,7 @@ struct SignupRequest: Encodable {
 }
 
 struct AuthResponse: Decodable {
+    let token: String?
     let message: String
     let user: CarePortalUser?
 }

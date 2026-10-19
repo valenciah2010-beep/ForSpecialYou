@@ -1,0 +1,27 @@
+{
+  "name": "forspecialyou-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "nodemon --watch src --ext js src/index.js",
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js",
+    "db:init": "node scripts/migrate.js",
+    "db:create-admin": "node scripts/createAdmin.js",
+    "storage:check": "node scripts/checkObjectStorage.js",
+    "test:integration": "node scripts/testIntegration.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1152.0",
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.4.7",
+    "koa": "^2.15.4",
+    "mysql2": "^3.24.6",
+    "sharp": "^0.35.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}

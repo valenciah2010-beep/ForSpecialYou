@@ -1,6 +1,6 @@
 # CarePortalSwiftUI
 
-Native SwiftUI login and sign-up screens for the Care Portal app.
+Native SwiftUI care app with authentication, diagnosis, health tracking, therapy, nutrition, and parent profiles.
 
 ## Files
 
@@ -8,9 +8,11 @@ Native SwiftUI login and sign-up screens for the Care Portal app.
 - `AuthRootView.swift`: switches between login, sign-up, and welcome screens.
 - `LoginView.swift`: login form.
 - `SignupView.swift`: sign-up form with account type picker.
-- `WelcomeView.swift`: signed-in confirmation screen.
+- `WelcomeView.swift`: signed-in tab container; feature views live under `Features/`.
 - `AuthViewModel.swift`: form state, validation, and actions.
-- `AuthAPI.swift`: `URLSession` client for the existing backend.
+- `AuthAPI.swift`: typed API models and endpoints.
+- `APITransport.swift`: authenticated requests, AI consent, and resumable image uploads.
+- `SessionStore.swift`: device-only Keychain session storage.
 - `Models.swift`: request, response, user, and role models.
 - `AuthComponents.swift`: shared fields, buttons, message banner, and colors.
 - `APIConfig.swift`: backend API base URL.
@@ -21,7 +23,7 @@ Native SwiftUI login and sign-up screens for the Care Portal app.
 The app is pointed at:
 
 ```text
-Debug: http://127.0.0.1:3002
+Debug: http://127.0.0.1:4223
 Release: https://fsyadmin.top
 ```
 
@@ -30,7 +32,7 @@ Debug builds use the local Koa backend for development. Release builds use the d
 For real-device local testing, change the Debug URL in `APIConfig.swift` to the Mac's LAN IP address, such as:
 
 ```swift
-URL(string: "http://192.168.1.20:3002")
+URL(string: "http://192.168.1.20:4223")
 ```
 
 ## Xcode

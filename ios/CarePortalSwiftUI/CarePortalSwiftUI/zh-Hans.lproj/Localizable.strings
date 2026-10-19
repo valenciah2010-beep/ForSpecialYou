@@ -934,3 +934,7 @@
 "Add Dose" = "添加剂量";
 "You hit the maximum number of doses for one day." = "已达到当天剂量次数上限。";
 "Close" = "关闭";
+
+"AI analysis" = "AI 分析";
+"Selected photos and structured health records will be sent to OpenAI. Continue?" = "所选照片和结构化健康记录将发送至 OpenAI，是否继续？";
+"Continue" = "继续";

@@ -36,6 +36,13 @@ struct AuthRootView: View {
             .task(id: viewModel.currentUser?.id) {
                 await viewModel.validateSavedSession()
             }
+            .onReceive(NotificationCenter.default.publisher(for: APITransport.sessionExpired)) { _ in
+                guard viewModel.currentUser != nil, SessionStore.token == nil else { return }
+                viewModel.logout()
+                viewModel.showLogin()
+                viewModel.message = localizedServerMessage("Please log in again.")
+                viewModel.isError = true
+            }
         }
     }
 }

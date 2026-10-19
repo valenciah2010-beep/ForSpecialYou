@@ -28,7 +28,7 @@ final class AuthViewModel: ObservableObject {
     private let api = AuthAPI()
 
     init() {
-        currentUser = Self.loadSavedUser()
+        currentUser = SessionStore.token == nil ? nil : Self.loadSavedUser()
     }
 
     func showHome() {
@@ -66,6 +66,7 @@ final class AuthViewModel: ObservableObject {
         do {
             let user = try await api.login(username: loginNickname, password: loginPassword)
             await restoreServerAppData(for: user)
+            guard SessionStore.token != nil else { throw AuthAPIError.server("Please log in again.") }
             currentUser = user
             saveUser(user)
             loginPassword = ""
@@ -142,6 +143,7 @@ final class AuthViewModel: ObservableObject {
         do {
             let user = try await api.validateSavedSession(userId: savedUser.id)
             await restoreServerAppData(for: user)
+            guard SessionStore.token != nil else { throw AuthAPIError.server("Please log in again.") }
             currentUser = user
             saveUser(user)
         } catch {
@@ -158,6 +160,17 @@ final class AuthViewModel: ObservableObject {
     }
 
     func logout() {
+        let token = SessionStore.token
+        SessionStore.token = nil
+        if let token {
+            Task {
+                guard let url = APIConfig.baseURL?.appending(path: "/api/app-logout") else { return }
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                _ = try? await URLSession.shared.data(for: request)
+            }
+        }
         currentUser = nil
         UserDefaults.standard.removeObject(forKey: Self.savedUserKey)
         loginNickname = ""

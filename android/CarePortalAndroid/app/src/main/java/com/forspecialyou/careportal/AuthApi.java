@@ -1,6 +1,11 @@
 package com.forspecialyou.careportal;
 
 import android.os.Handler;
+import android.content.Context;
+import android.app.AlertDialog;
+import android.util.Base64;
+import java.security.MessageDigest;
+import java.util.Arrays;
 import android.os.Looper;
 
 import org.json.JSONArray;
@@ -27,15 +32,25 @@ final class AuthApi {
         void onError(String message);
     }
 
+    private final Context context;
+    private final SessionStore session;
+    private Runnable sessionExpiredListener;
+    private String consentToken = "";
     private final String baseUrl;
     private final I18n i18n;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
-    AuthApi(I18n i18n) {
+    AuthApi(Context context, I18n i18n) {
+        this.context = context;
+        this.session = new SessionStore(context);
         this.baseUrl = BuildConfig.API_BASE_URL;
         this.i18n = i18n;
     }
+
+    boolean hasSession() { return !session.token().isEmpty(); }
+
+    void onSessionExpired(Runnable listener) { sessionExpiredListener = listener; }
 
     void login(String username, String password, Callback<CarePortalUser> callback) {
         JSONObject body = new JSONObject();
@@ -191,9 +206,28 @@ final class AuthApi {
     }
 
     private void postAsync(String path, JSONObject body, Callback<JSONObject> callback) {
+        if ((path.equals("/api/analyze-meal") || path.equals("/api/health-insights")) && !session.token().equals(consentToken)) {
+            new AlertDialog.Builder(context).setTitle(i18n.t("AI analysis"))
+                .setMessage(i18n.t("Selected photos and structured health records will be sent to OpenAI. Continue?"))
+                .setNegativeButton(i18n.t("Cancel"), (dialog, which) -> callback.onError(i18n.t("Cancelled")))
+                .setPositiveButton(i18n.t("Continue"), (dialog, which) -> { consentToken = session.token(); postAsync(path, body, callback); }).show();
+            return;
+        }
         executor.execute(() -> {
             try {
-                JSONObject result = post(path, body);
+                JSONObject requestBody = body;
+                if (path.equals("/api/analyze-meal") || path.equals("/api/health-insights")) body.put("aiConsent", true);
+                if (path.equals("/api/analyze-meal")) {
+                    requestBody = new JSONObject(body.toString());
+                    requestBody.put("imageId", upload(body.getString("imageData")));
+                    requestBody.remove("imageData");
+                }
+                JSONObject result = post(path, requestBody);
+                if (path.equals("/api/login")) {
+                    String token = result.optString("token");
+                    if (token.isEmpty()) throw new ApiException("Please log in again.");
+                    session.save(token);
+                }
                 mainHandler.post(() -> callback.onSuccess(result));
             } catch (ApiException e) {
                 mainHandler.post(() -> callback.onError(i18n.server(e.getMessage())));
@@ -203,22 +237,76 @@ final class AuthApi {
         });
     }
 
+    void logout() {
+        final String token = session.token(); session.clear(); consentToken = "";
+        executor.execute(() -> { try { request("/api/app-logout", new JSONObject(), "POST", token); } catch (Exception ignored) {} });
+    }
+
+    private String upload(String image) throws Exception {
+        byte[] bytes = Base64.decode(image.substring(image.indexOf(',') + 1), Base64.DEFAULT);
+        if (bytes.length > 20 * 1024 * 1024) throw new ApiException("Image is too large.");
+        StringBuilder digest = new StringBuilder();
+        for (byte part : MessageDigest.getInstance("SHA-256").digest(bytes)) digest.append(String.format(java.util.Locale.ROOT, "%02x", part & 0xff));
+        android.content.SharedPreferences progress = context.getSharedPreferences("upload_progress", Context.MODE_PRIVATE);
+        String owner = Integer.toHexString(session.token().hashCode());
+        String cacheKey = owner + ":" + digest;
+        String id = progress.getString(cacheKey, "");
+        java.util.Set<Integer> received = new java.util.HashSet<>();
+        if (!id.isEmpty()) {
+            try {
+                JSONObject status = request("/api/uploads/" + id, new JSONObject(), "GET", session.token());
+                if (status.optBoolean("completed")) return id;
+                JSONArray chunks = status.optJSONArray("chunks");
+                if (chunks != null) for (int i=0;i<chunks.length();i++) received.add(chunks.getInt(i));
+            } catch (Exception error) { id = ""; }
+        }
+        if (id.isEmpty()) {
+            JSONObject init = new JSONObject().put("size", bytes.length).put("checksum", digest.toString());
+            id = post("/api/uploads", init).getString("id");
+            progress.edit().putString(cacheKey, id).apply();
+        }
+        int chunkBytes = 512 * 1024;
+        for (int offset=0;offset<bytes.length;offset+=chunkBytes) {
+            int index=offset/chunkBytes;
+            if (received.contains(index)) continue;
+            JSONObject chunk = new JSONObject().put("data", Base64.encodeToString(Arrays.copyOfRange(bytes, offset, Math.min(offset+chunkBytes,bytes.length)),Base64.NO_WRAP));
+            request("/api/uploads/"+id+"/chunks/"+index, chunk, "PUT", session.token());
+        }
+        post("/api/uploads/"+id+"/complete", new JSONObject());
+        return id;
+    }
+
     private JSONObject post(String path, JSONObject body) throws IOException, JSONException, ApiException {
+        return request(path, body, "POST", session.token());
+    }
+
+    private JSONObject request(String path, JSONObject body, String method, String token) throws IOException, JSONException, ApiException {
         URL url = new URL(baseUrl + path);
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-        connection.setRequestMethod("POST");
+        connection.setRequestMethod(method);
         connection.setConnectTimeout(12000);
-        connection.setReadTimeout(20000);
-        connection.setDoOutput(true);
+        connection.setReadTimeout(60000);
+        connection.setDoOutput(!method.equals("GET"));
+        if (!token.isEmpty()) connection.setRequestProperty("Authorization", "Bearer " + token);
         connection.setRequestProperty("Content-Type", "application/json");
 
-        try (OutputStream output = connection.getOutputStream();
+        try {
+        if (!method.equals("GET")) try (OutputStream output = connection.getOutputStream();
              BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(output, StandardCharsets.UTF_8))) {
             writer.write(body.toString());
         }
 
         int status = connection.getResponseCode();
         String response = read(status >= 200 && status < 300 ? connection.getInputStream() : connection.getErrorStream());
+        if (status == 401) {
+            if (!token.isEmpty() && token.equals(session.token())) {
+                session.clear();
+                mainHandler.post(() -> {
+                    if (!hasSession() && sessionExpiredListener != null) sessionExpiredListener.run();
+                });
+            }
+            throw new ApiException("Please log in again.");
+        }
         if (status >= 200 && status < 300) {
             return response.isEmpty() ? new JSONObject() : new JSONObject(response);
         }
@@ -229,6 +317,7 @@ final class AuthApi {
         } catch (JSONException e) {
             throw new ApiException("Request failed with status " + status);
         }
+        } finally { connection.disconnect(); }
     }
 
     private String read(InputStream input) throws IOException {

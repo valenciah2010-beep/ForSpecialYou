@@ -1,109 +1,65 @@
-# Care Portal Auth App
+# ForSpecialYou / Care Portal
 
-This project has a Vue + Vite frontend, a Node.js + Koa2 backend, and a MySQL users table for sign up and log in.
-
-## Setup
-
-1. Install packages:
-
-   ```bash
-   npm install
-   ```
-
-2. Create the MySQL database and table:
-
-   ```bash
-   npm run db:setup
-   ```
-
-   If you already created the database before the admin role was added, update the role column:
-
-   ```bash
-   /usr/local/mysql/bin/mysql -h 127.0.0.1 -P 3306 -u root -proot123456 < database/add-admin-role.sql
-   ```
-
-   If you already created the database before profile images were added, update the users table:
-
-   ```bash
-   /usr/local/mysql/bin/mysql -h 127.0.0.1 -P 3306 -u root -proot123456 < database/add-profile-image.sql
-   ```
-
-   If MySQL is not running yet, start it first:
-
-   ```bash
-   sudo /usr/local/mysql/support-files/mysql.server start
-   ```
-
-   If MySQL says it quit without updating the PID file, repair the data folder ownership and remove any stale PID file:
-
-   ```bash
-   sudo chown -R _mysql:_mysql /usr/local/mysql/data
-   sudo rm -f /usr/local/mysql/data/*.pid
-   sudo /usr/local/mysql/support-files/mysql.server start
-   ```
-
-   To see the exact MySQL startup error:
-
-   ```bash
-   sudo tail -80 /usr/local/mysql/data/*.err
-   ```
-
-3. Create a `.env` file from the example:
-
-   ```bash
-   cp .env.example .env
-   ```
-
-4. Update `.env` with your MySQL username and password.
-   - For local backend development, keep `HOST=127.0.0.1`, `PORT=3002`, `COOKIE_SECURE=false`, and leave `VITE_API_BASE_URL` empty.
-   - For server deployment behind Nginx, use `HOST=127.0.0.1`, `PORT=3002`, `PUBLIC_ORIGIN=https://fsyadmin.top`, and `COOKIE_SECURE=true`.
-
-## Run
-
-Start the backend:
-
-```bash
-npm run server
-```
-
-The backend uses port `3002` by default so it does not conflict with older servers on `3000` or `3001`.
-If you do not create a `.env` file, the backend still defaults to `3002`.
-
-In another terminal, start the frontend:
-
-```bash
-npm run dev
-```
-
-Open the frontend at:
-
-```text
-http://localhost:5173/
-```
-
-The frontend is now an admin-only portal. Log in with a user whose role is `admin` to view simulator app users.
-During local Vite development, `/api` is proxied to `http://127.0.0.1:3002`.
-Production builds call `https://fsyadmin.top` by default. Override `VITE_API_BASE_URL` only if you intentionally want a different backend.
-
-Simulator app parent sign-up and log-in still use the backend API, but website user-list and user-management routes require an admin session.
-
-## fsyadmin.top Deployment
-
-Build the admin site and run the Koa backend on the server:
-
-```bash
-npm install
-npm run build
-PORT=3002 HOST=127.0.0.1 PUBLIC_ORIGIN=https://fsyadmin.top COOKIE_SECURE=true npm run server
-```
-
-Point Nginx for `fsyadmin.top` to the Koa backend on `127.0.0.1:3002`. The backend serves the built admin site from `dist` and all `/api/*` routes from the same origin.
+Special-needs care records: Vue admin portal, Koa API, MySQL, native iOS and Android clients.
 
 ## Structure
 
-- `server/app.js` creates the Koa app and mounts middleware/routes.
-- `server/routes/` contains admin, app, and user API route groups.
-- `server/services/` contains database shape checks, admin sessions, OpenAI response handling, and report record shaping.
-- `src/composables/` contains portal state and UI state helpers.
-- `src/components/` contains reusable page panels, layout, and parent-history presentation.
-- `src/utils/` contains date, validation, and history formatting helpers.
+- `admin-web/`: Vue 3 + Vite admin portal; page and dialog components, composables, shared API client.
+- `server/src/`: API, authentication, image uploads, AI quotas and audit services.
+- `server/migrations/`: ordered, recorded, repeatable database migrations.
+- `server/scripts/`: migration runner, initial administrator and isolated integration tests.
+- `ios/CarePortalSwiftUI/`: SwiftUI features grouped by Diagnosis, Health, Therapy, Nutrition and Profile.
+- `android/CarePortalAndroid/`: Java native app; screen/form modules and shared API/session storage.
+- `deploy/`: DeployDesk configuration, PM2, Nginx HTTP and HTTPS location snippet.
+- `tmp/`: ignored test data, exports and one-time manual SQL. Never deploy this directory.
+
+## Local development
+
+Requires Node.js 22+, MySQL 5.7+ and a database user with access to the configured schema. A migration user additionally needs database/schema DDL permissions. The application user needs normal data access only.
+
+```bash
+npm ci
+cp server/.env.example server/.env
+# Configure DB_HOST, DB_PORT, DB_USER, DB_PASSWORD and DB_NAME.
+npm run db:init
+npm run dev
+```
+
+Ports registered in `/Users/zjy/Desktop/project/端口号管理.xlsx`: admin **5223**, API **4223**. Vite uses strictPort and proxies `/api` to the API. `npm run dev` runs the API with nodemon. The server refuses to start with missing DB credentials or unapplied migrations. No credentials are committed.
+
+Create the first administrator by setting `ADMIN_USERNAME`, `ADMIN_EMAIL` and `ADMIN_PASSWORD` (12+ characters) in the command's environment, then running `npm run db:create-admin`. The command only creates a new account; it never resets an existing password. Do not store these one-time values in tracked files or shell history.
+
+```bash
+npm run build
+npm test
+npm run test:integration
+```
+
+Integration tests create and remove an isolated MySQL data directory with networking disabled. Set `MYSQLD_BINARY` if MySQL is installed outside a detected path. They never use your application database. Unit tests require no database.
+
+## Deployment
+
+Current topology (confirmed 2026-10-19): one US production server, `154.40.41.179`, serving all production clients at `https://fsyadmin.top`. Web uses same-origin `/api`; native Release builds use that HTTPS origin. Nginx forwards requests to `127.0.0.1:3002`, with MySQL on the same server. China/US routing, regional account assignment and `cn.fsyadmin.top` are deferred and are not active. Data is currently stored in the US. Debug builds continue to use the local development API.
+
+DeployDesk detects workspaces `admin-web` and `server`, root `db:init`, four ordered SQL migrations, PM2 `server` and `deploy/fsyadmin.top.conf`. The existing production directory is `/www/wwwroot/default`, API port is 3002 and public HTTP port is 80.
+
+1. Back up the current database and preserve the existing TLS configuration.
+2. Install dependencies and build: `npm ci && npm run build`.
+3. Configure `server/.env`; in production set `COOKIE_SECURE=true`, `PUBLIC_ORIGIN=https://fsyadmin.top`, `CORS_ORIGINS=https://fsyadmin.top`. Set `TRUST_PROXY=true` only behind the local Nginx proxy.
+4. Run `npm run db:init` before restarting the API. Startup never performs `ALTER TABLE`.
+5. Keep the existing HTTPS certificate configuration and include `deploy/https-locations.inc` inside that HTTPS server block. `fsyadmin.top.conf` provides the HTTP-to-HTTPS redirect. Validate with `nginx -t` before reload.
+6. For this existing site publish Web files to `/www/wwwroot/default/dist`; set `ADMIN_SITE_PATH=/www/wwwroot/default/dist`. Local development continues to use ports 5223/4223. Release iOS/Android and Web use HTTPS port 443; Nginx forwards `/api/` internally to 127.0.0.1:3002.
+7. This production site currently uses the hosting panel's existing Node project `server`, running `server/index.js` as `www` with Node 22.22.3. The compatibility entry forwards to `src/index.js`; `server/node_modules` links to workspace dependencies. Restart through that existing manager. The PM2 file supports DeployDesk deployments, but migrate process management explicitly before using it; never run both managers for port 3002. Preserve `server/.env` and `server/storage/` across deployments.
+8. Deploy updated iOS and Android clients together. Old clients that send only `userId` will receive 401 and must update/re-login. API authentication cannot be safely made backward compatible with those requests.
+
+AI is **disabled by default**. After confirming your privacy policy, OpenAI processing terms and operational retention requirements, configure `OPENAI_API_KEY` and `AI_PROCESSING_ENABLED=true`. Clients ask before sending photos/records. Request payloads exclude direct identity fields and free-text comments; photos and structured medical records remain sensitive. OpenAI requests use `store:false`. See [security notes](docs/SECURITY.md).
+
+## Native clients
+
+Private R2 storage for chunk-uploaded images is enabled in production through server-side `IMAGE_STORAGE=r2` configuration. Existing database avatars and health records remain unchanged. See [object storage configuration, retention and rollback](docs/OBJECT_STORAGE.md) and the [R2 deployment record](docs/DEPLOYMENT_2026-10-19_R2.md). Integration tests run both local and simulated S3 storage without cloud credentials.
+
+- iOS: open the Xcode project; Debug uses `http://127.0.0.1:4223`, Release uses `https://fsyadmin.top`. Tokens are stored in Keychain.
+- Android: open the Gradle project; Debug uses `http://10.0.2.2:4223`, Release uses HTTPS. Session tokens are encrypted with Android Keystore. `local.properties`, `.gradle` and signing files stay local.
+- Physical-device development requires a reachable LAN address and backend bind address. Restrict cleartext exceptions to local development; never change Release to HTTP.
+
+No real AI calls or external deployment are part of the test suite. See [local validation results and remaining limits](docs/VALIDATION.md) and the [production deployment record](docs/DEPLOYMENT_2026-10-14.md).

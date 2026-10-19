@@ -28,6 +28,8 @@ struct AuthAPI {
             throw AuthAPIError.invalidResponse
         }
 
+        guard let token = response.token else { throw AuthAPIError.invalidResponse }
+        SessionStore.token = token
         return user
     }
 
@@ -98,34 +100,10 @@ struct AuthAPI {
     }
 
     private func post<Request: Encodable, Response: Decodable>(_ path: String, body: Request) async throws -> Response {
-        guard let url = baseURL?.appending(path: path) else {
-            throw AuthAPIError.invalidURL
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        request.httpBody = try encoder.encode(body)
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw AuthAPIError.invalidResponse
-        }
-
-        if (200..<300).contains(httpResponse.statusCode) {
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            return try decoder.decode(Response.self, from: data)
-        }
-
-        if let errorBody = try? JSONDecoder().decode(MessageResponse.self, from: data) {
-            throw AuthAPIError.server(errorBody.message)
-        }
-
-        throw AuthAPIError.server(String(format: localizedAppString("Request failed with status %@"), "\(httpResponse.statusCode)"))
+        if path == "/api/health-insights" { try await APITransport.confirmAI() }
+        return try await APITransport.send(path, body: encoder.encode(body))
     }
 }
 
@@ -133,29 +111,12 @@ struct NutritionAPI {
     var baseURL = APIConfig.baseURL
 
     func analyzeMeal(imageData: String, language: String) async throws -> MealNutritionEstimate {
-        guard let url = baseURL?.appending(path: "/api/analyze-meal") else {
-            throw AuthAPIError.invalidURL
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(MealAnalysisRequest(imageData: imageData, language: language))
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw AuthAPIError.invalidResponse
-        }
-
-        if (200..<300).contains(httpResponse.statusCode) {
-            return try JSONDecoder().decode(MealNutritionEstimate.self, from: data)
-        }
-
-        if let errorBody = try? JSONDecoder().decode(MessageResponse.self, from: data) {
-            throw AuthAPIError.server(errorBody.message)
-        }
-
-        throw AuthAPIError.server(String(format: localizedAppString("Meal analysis failed with status %@"), "\(httpResponse.statusCode)"))
+        try await APITransport.confirmAI()
+        let raw = imageData.components(separatedBy: ",").last ?? imageData
+        guard let data = Data(base64Encoded: raw) else { throw AuthAPIError.invalidResponse }
+        let imageID = try await APITransport.upload(data)
+        let body = try JSONSerialization.data(withJSONObject: ["imageId": imageID, "language": language])
+        return try await APITransport.send("/api/analyze-meal", body: body)
     }
 }
 
@@ -173,6 +134,19 @@ struct ChildProfileSync: Codable {
     let careNotes: String
 }
 
+extension ChildProfileSync {
+    // New accounts and legacy snapshots can contain an empty or partial profile.
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        fullName = try values.decodeIfPresent(String.self, forKey: .fullName) ?? ""
+        birthDate = try values.decodeIfPresent(String.self, forKey: .birthDate) ?? ""
+        supportNeeds = try values.decodeIfPresent(String.self, forKey: .supportNeeds) ?? ""
+        homeSchoolNotes = try values.decodeIfPresent(String.self, forKey: .homeSchoolNotes) ?? ""
+        emergencyContact = try values.decodeIfPresent(String.self, forKey: .emergencyContact) ?? ""
+        careNotes = try values.decodeIfPresent(String.self, forKey: .careNotes) ?? ""
+    }
+}
+
 private struct ParentAppDataSyncRequest: Encodable {
     let userId: Int
     let childProfile: ChildProfileSync?
@@ -182,6 +156,7 @@ private struct ParentAppDataSyncRequest: Encodable {
 }
 
 struct ParentAppSettings: Decodable {
+    let nutrientDailyUsage: NutrientDailyUsage?
     let nutrientDailyLimit: Int
 }
 
