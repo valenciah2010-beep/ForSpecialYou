@@ -41,3 +41,12 @@ temp/
 # Android release signing
 android/CarePortalAndroid/keystore.properties
 android/CarePortalAndroid/app/signing/
+
+# Native and server local state
+.gradle/
+local.properties
+server/storage/
+
+# QA artifacts
+.playwright-cli/
+output/playwright/

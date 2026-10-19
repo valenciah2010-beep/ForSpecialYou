@@ -19,7 +19,7 @@ Native Android version of the existing `ios/CarePortalSwiftUI` app.
 The debug build uses:
 
 ```text
-http://10.0.2.2:3002
+http://10.0.2.2:4223
 ```
 
 `10.0.2.2` is the Android Emulator address for the Mac host machine. Start the existing Node backend from the project root before testing login, sign-up, meal analysis, or sync:
