@@ -1,4 +1,41 @@
 import Foundation
+import Security
+
+enum AppSessionToken {
+    private static let service = "com.forspecialyou.careportal.session"
+    private static let account = "parent-api-token"
+
+    static var value: String? {
+        get {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: account,
+                kSecReturnData as String: true,
+                kSecMatchLimit as String: kSecMatchLimitOne
+            ]
+            var result: CFTypeRef?
+            guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+                  let data = result as? Data else {
+                return nil
+            }
+            return String(data: data, encoding: .utf8)
+        }
+        set {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: account
+            ]
+            SecItemDelete(query as CFDictionary)
+            guard let newValue else { return }
+            var item = query
+            item[kSecValueData as String] = Data(newValue.utf8)
+            item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            SecItemAdd(item as CFDictionary, nil)
+        }
+    }
+}
 
 enum AuthAPIError: LocalizedError {
     case invalidURL
@@ -24,11 +61,18 @@ struct AuthAPI {
         let body = LoginRequest(username: username, password: password)
         let response: AuthResponse = try await post("/api/login", body: body)
 
-        guard let user = response.user else {
+        guard let user = response.user,
+              let token = response.token,
+              !token.isEmpty else {
             throw AuthAPIError.invalidResponse
         }
 
+        AppSessionToken.value = token
         return user
+    }
+
+    static func clearSession() {
+        AppSessionToken.value = nil
     }
 
     func signup(nickname: String, email: String, password: String, verifyPassword: String) async throws -> String {
@@ -105,6 +149,9 @@ struct AuthAPI {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = AppSessionToken.value {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
 
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -139,8 +186,12 @@ struct NutritionAPI {
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.timeoutInterval = 60
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(MealAnalysisRequest(imageData: imageData, language: language))
+        if let token = AppSessionToken.value {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try JSONEncoder().encode(MealAnalysisRequest(imageData: imageData, language: language, aiConsent: true))
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -162,6 +213,7 @@ struct NutritionAPI {
 private struct MealAnalysisRequest: Encodable {
     let imageData: String
     let language: String
+    let aiConsent: Bool
 }
 
 struct ChildProfileSync: Codable {

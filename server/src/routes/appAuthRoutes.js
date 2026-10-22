@@ -97,14 +97,16 @@ export function createAppAuthRoutes() {
           blocked_indefinitely,
           DATE_FORMAT(blocked_until, '%Y-%m-%d %H:%i') AS blocked_until
          FROM users
-         WHERE username = ?`,
-          [username.trim()],
+         WHERE username = ? OR LOWER(email) = LOWER(?)
+         ORDER BY LOWER(email) = LOWER(?) DESC
+         LIMIT 1`,
+          [username.trim(), username.trim(), username.trim()],
         );
 
         const user = rows[0];
         if (!user) {
           ctx.status = 401;
-          ctx.body = { message: "Invalid nickname or password." };
+          ctx.body = { message: "Invalid email, username, or password." };
           return;
         }
 
@@ -114,7 +116,7 @@ export function createAppAuthRoutes() {
         );
         if (!validPassword) {
           ctx.status = 401;
-          ctx.body = { message: "Invalid nickname or password." };
+          ctx.body = { message: "Invalid email, username, or password." };
           return;
         }
 

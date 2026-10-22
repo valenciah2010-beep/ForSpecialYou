@@ -28,7 +28,7 @@ final class AuthViewModel: ObservableObject {
     private let api = AuthAPI()
 
     init() {
-        currentUser = Self.loadSavedUser()
+        currentUser = AppSessionToken.value == nil ? nil : Self.loadSavedUser()
     }
 
     func showHome() {
@@ -137,6 +137,7 @@ final class AuthViewModel: ObservableObject {
     }
 
     func logout() {
+        AuthAPI.clearSession()
         currentUser = nil
         UserDefaults.standard.removeObject(forKey: Self.savedUserKey)
         loginNickname = ""
