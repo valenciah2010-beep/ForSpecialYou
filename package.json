@@ -8,7 +8,8 @@
     "server"
   ],
   "scripts": {
-    "dev": "concurrently -n api,admin \"npm run dev -w server\" \"npm run dev -w admin-web\"",
+    "dev": "npm run dev -w admin-web",
+    "dev:all": "concurrently -n api,admin \"npm run dev -w server\" \"npm run dev -w admin-web\"",
     "server": "npm run dev -w server",
     "start": "npm run start -w server",
     "build": "npm run build -w admin-web",

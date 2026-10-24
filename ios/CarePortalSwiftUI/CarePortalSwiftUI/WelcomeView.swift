@@ -4,6 +4,17 @@ import UIKit
 import Charts
 import UniformTypeIdentifiers
 import UserNotifications
+import AVFoundation
+import AVKit
+import CoreTransferable
+
+private func attachmentStatusColor(_ message: String) -> Color {
+    let limitMessages = [
+        localizedAppString("Videos must be smaller than 100 MB."),
+        localizedAppString("Videos can be no longer than 30 seconds.")
+    ]
+    return limitMessages.contains(message) ? .red : .secondary
+}
 
 struct WelcomeView: View {
     let user: CarePortalUser
@@ -32,9 +43,9 @@ struct WelcomeView: View {
                 }
                 .tag(2)
 
-            NutrientView(user: user)
+            MilestonesView(user: user)
                 .tabItem {
-                    Label(localizedAppString("Nutrient"), systemImage: "leaf")
+                    Label(localizedAppString("Milestones"), systemImage: "star.fill")
                 }
                 .tag(3)
 
@@ -1014,6 +1025,7 @@ struct DiagnosisConditionFormSheet: View {
     @State private var photos: [DiagnosisAttachment]
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var isCameraPresented = false
+    @State private var selectedVideos: [PhotosPickerItem] = []
     @State private var isCategoryExpanded = false
     @State private var statusMessage = ""
 
@@ -1137,7 +1149,7 @@ struct DiagnosisConditionFormSheet: View {
                         .diagnosisDetailCard()
 
                         VStack(alignment: .leading, spacing: 12) {
-                            Text(localizedAppString("Photos"))
+                            Text(localizedAppString("Photos and Videos"))
                                 .font(.headline.weight(.bold))
                                 .foregroundStyle(AppTheme.text)
 
@@ -1158,12 +1170,17 @@ struct DiagnosisConditionFormSheet: View {
                                     DiagnosisAttachmentAction(title: "Upload Photo", icon: "photo.on.rectangle")
                                 }
                                 .buttonStyle(.plain)
+
+                                PhotosPicker(selection: $selectedVideos, matching: .videos) {
+                                    DiagnosisAttachmentAction(title: "Upload Video", icon: "video.fill")
+                                }
+                                .buttonStyle(.plain)
                             }
 
                             if !statusMessage.isEmpty {
                                 Text(statusMessage)
                                     .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(attachmentStatusColor(statusMessage))
                             }
 
                             if !photos.isEmpty {
@@ -1171,6 +1188,7 @@ struct DiagnosisConditionFormSheet: View {
                                     HStack(spacing: 10) {
                                         ForEach(photos) { photo in
                                             DiagnosisConditionPhotoThumb(photo: photo) {
+                                                DiagnosisAttachment.removeStoredVideo(for: photo)
                                                 photos.removeAll { $0.id == photo.id }
                                             }
                                         }
@@ -1207,6 +1225,17 @@ struct DiagnosisConditionFormSheet: View {
             guard !newValue.isEmpty else { return }
             Task {
                 await loadSelectedPhotos(newValue)
+            }
+        }
+        .onChange(of: selectedVideos) { _, newValue in
+            guard !newValue.isEmpty else { return }
+            Task {
+                let imported = await DiagnosisAttachmentHelper.videoAttachments(from: newValue)
+                await MainActor.run {
+                    photos.append(contentsOf: imported.0)
+                    statusMessage = imported.1
+                    selectedVideos = []
+                }
             }
         }
         .fullScreenCover(isPresented: $isCameraPresented) {
@@ -1272,6 +1301,7 @@ struct DiagnosisConditionFormSheet: View {
         return data
     }
 
+
     private func save() {
         let condition = DiagnosisCondition(
             id: existingCondition?.id ?? UUID(),
@@ -1292,7 +1322,16 @@ struct DiagnosisConditionPhotoThumb: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            if let image = UIImage(data: photo.data) {
+            if photo.kind == .video {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(AppTheme.fieldBackground)
+                    .frame(width: 92, height: 92)
+                    .overlay {
+                        Image(systemName: "video.fill")
+                            .font(.title2.weight(.bold))
+                            .foregroundStyle(AppTheme.accent)
+                    }
+            } else if let image = UIImage(data: photo.data) {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
@@ -1321,6 +1360,17 @@ struct DiagnosisConditionPhotoThumb: View {
 struct DiagnosisCategoryDropdown: View {
     @Binding var selectedCategoryIDs: Set<String>
     @Binding var isExpanded: Bool
+    let closesAfterSelection: Bool
+
+    init(
+        selectedCategoryIDs: Binding<Set<String>>,
+        isExpanded: Binding<Bool>,
+        closesAfterSelection: Bool = false
+    ) {
+        self._selectedCategoryIDs = selectedCategoryIDs
+        self._isExpanded = isExpanded
+        self.closesAfterSelection = closesAfterSelection
+    }
 
     private var selectedCategoryText: String {
         let selected = DiagnosisOption.all
@@ -1402,6 +1452,27 @@ struct DiagnosisCategoryDropdown: View {
         } else {
             selectedCategoryIDs.insert(id)
         }
+
+        if closesAfterSelection {
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.86)) {
+                isExpanded = false
+            }
+        }
+    }
+}
+
+private struct DiagnosisVideoTransferable: Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(importedContentType: .movie) { received in
+            let fileExtension = received.file.pathExtension.isEmpty ? "mov" : received.file.pathExtension
+            let destination = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension(fileExtension)
+            try FileManager.default.copyItem(at: received.file, to: destination)
+            return DiagnosisVideoTransferable(url: destination)
+        }
     }
 }
 
@@ -1428,6 +1499,35 @@ private enum DiagnosisAttachmentHelper {
         }
     }
 
+    static func videoAttachments(from selectedItems: [PhotosPickerItem]) async -> ([DiagnosisAttachment], String) {
+        var attachments: [DiagnosisAttachment] = []
+        var messages: [String] = []
+
+        for item in selectedItems {
+            do {
+                guard let video = try await item.loadTransferable(type: DiagnosisVideoTransferable.self) else {
+                    messages.append(localizedAppString("Unable to import this video."))
+                    continue
+                }
+                defer { try? FileManager.default.removeItem(at: video.url) }
+
+                switch DiagnosisAttachment.videoAttachment(from: video.url) {
+                case .success(let attachment):
+                    attachments.append(attachment)
+                case .failure(let error):
+                    messages.append(error.message)
+                }
+            } catch {
+                messages.append(localizedAppString("Unable to import this video."))
+            }
+        }
+
+        if !messages.isEmpty {
+            return (attachments, messages.joined(separator: " "))
+        }
+        return (attachments, attachments.isEmpty ? "" : localizedAppString("Attachment added."))
+    }
+
     static func compressedPhotoData(_ data: Data) -> Data {
         if let image = UIImage(data: data),
            let jpegData = image.resizedForMealAnalysis(maxDimension: 1000).jpegData(compressionQuality: 0.74) {
@@ -1441,11 +1541,16 @@ private enum DiagnosisAttachmentHelper {
         switch result {
         case .success(let urls):
             var attachments: [DiagnosisAttachment] = []
-            var blockedVideoCount = 0
+            var messages: [String] = []
 
             for url in urls {
-                guard !DiagnosisAttachment.isVideoFile(url) else {
-                    blockedVideoCount += 1
+                if DiagnosisAttachment.isVideoFile(url) {
+                    switch DiagnosisAttachment.videoAttachment(from: url) {
+                    case .success(let attachment):
+                        attachments.append(attachment)
+                    case .failure(let error):
+                        messages.append(error.message)
+                    }
                     continue
                 }
 
@@ -1463,11 +1568,11 @@ private enum DiagnosisAttachmentHelper {
                 attachments.append(DiagnosisAttachment(kind: .file, name: url.lastPathComponent, data: data))
             }
 
-            if blockedVideoCount > 0 {
-                return (attachments, localizedAppString("Videos cannot be uploaded. Please choose photos or supported documents."))
+            if !messages.isEmpty {
+                return (attachments, messages.joined(separator: " "))
             }
 
-            return (attachments, attachments.isEmpty ? "" : localizedAppString("File added."))
+            return (attachments, attachments.isEmpty ? "" : localizedAppString("Attachment added."))
         case .failure:
             return ([], localizedAppString("Unable to import this file."))
         }
@@ -1488,14 +1593,16 @@ struct DiagnosisDoctorVisitFormSheet: View {
     @State private var notes: String
     @State private var attachments: [DiagnosisAttachment]
     @State private var selectedPhotos: [PhotosPickerItem] = []
+    @State private var selectedVideos: [PhotosPickerItem] = []
     @State private var isCategoryExpanded = false
     @State private var isCameraPresented = false
     @State private var isFileImporterPresented = false
     @State private var statusMessage = ""
 
     private var canSave: Bool {
-        !visitTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !doctorName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !selectedCategoryIDs.isEmpty
+            && (!visitTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !doctorName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
     init(
@@ -1534,7 +1641,11 @@ struct DiagnosisDoctorVisitFormSheet: View {
                         .diagnosisDetailCard()
 
                         VStack(alignment: .leading, spacing: 12) {
-                            DiagnosisCategoryDropdown(selectedCategoryIDs: $selectedCategoryIDs, isExpanded: $isCategoryExpanded)
+                            DiagnosisCategoryDropdown(
+                                selectedCategoryIDs: $selectedCategoryIDs,
+                                isExpanded: $isCategoryExpanded,
+                                closesAfterSelection: true
+                            )
 
                             HStack(spacing: 12) {
                                 Text(localizedAppString("Date of Visit"))
@@ -1578,14 +1689,27 @@ struct DiagnosisDoctorVisitFormSheet: View {
                             onTakePhoto: openCamera,
                             onUploadFile: { isFileImporterPresented = true },
                             selectedPhotos: $selectedPhotos,
+                            selectedVideos: $selectedVideos,
                             onDelete: deleteAttachment
                         )
                     }
                     .padding(18)
                 }
 
-                StickyBottomSaveButton(title: "Save", tint: AppTheme.accent, isDisabled: !canSave) {
-                    save()
+                VStack(spacing: 0) {
+                    StickyBottomSaveButton(title: "Save", tint: AppTheme.accent, isDisabled: !canSave) {
+                        save()
+                    }
+
+                    if selectedCategoryIDs.isEmpty {
+                        Text(localizedAppString("Select at least one category to save this visit."))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.red)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 18)
+                            .padding(.bottom, 12)
+                            .background(.ultraThinMaterial)
+                    }
                 }
             }
             .background(AppTheme.background.ignoresSafeArea())
@@ -1607,6 +1731,17 @@ struct DiagnosisDoctorVisitFormSheet: View {
                 await MainActor.run {
                     addPhotos(loaded)
                     selectedPhotos = []
+                }
+            }
+        }
+        .onChange(of: selectedVideos) { _, newValue in
+            guard !newValue.isEmpty else { return }
+            Task {
+                let imported = await DiagnosisAttachmentHelper.videoAttachments(from: newValue)
+                await MainActor.run {
+                    attachments.append(contentsOf: imported.0)
+                    statusMessage = imported.1
+                    selectedVideos = []
                 }
             }
         }
@@ -1649,6 +1784,7 @@ struct DiagnosisDoctorVisitFormSheet: View {
     }
 
     private func deleteAttachment(_ attachment: DiagnosisAttachment) {
+        DiagnosisAttachment.removeStoredVideo(for: attachment)
         attachments.removeAll { $0.id == attachment.id }
     }
 
@@ -1681,6 +1817,7 @@ struct DiagnosisGeneralNoteFormSheet: View {
     @State private var notes: String
     @State private var attachments: [DiagnosisAttachment]
     @State private var selectedPhotos: [PhotosPickerItem] = []
+    @State private var selectedVideos: [PhotosPickerItem] = []
     @State private var isCategoryExpanded = false
     @State private var isCameraPresented = false
     @State private var isFileImporterPresented = false
@@ -1737,6 +1874,7 @@ struct DiagnosisGeneralNoteFormSheet: View {
                             onTakePhoto: openCamera,
                             onUploadFile: { isFileImporterPresented = true },
                             selectedPhotos: $selectedPhotos,
+                            selectedVideos: $selectedVideos,
                             onDelete: deleteAttachment
                         )
                     }
@@ -1766,6 +1904,17 @@ struct DiagnosisGeneralNoteFormSheet: View {
                 await MainActor.run {
                     addPhotos(loaded)
                     selectedPhotos = []
+                }
+            }
+        }
+        .onChange(of: selectedVideos) { _, newValue in
+            guard !newValue.isEmpty else { return }
+            Task {
+                let imported = await DiagnosisAttachmentHelper.videoAttachments(from: newValue)
+                await MainActor.run {
+                    attachments.append(contentsOf: imported.0)
+                    statusMessage = imported.1
+                    selectedVideos = []
                 }
             }
         }
@@ -1808,6 +1957,7 @@ struct DiagnosisGeneralNoteFormSheet: View {
     }
 
     private func deleteAttachment(_ attachment: DiagnosisAttachment) {
+        DiagnosisAttachment.removeStoredVideo(for: attachment)
         attachments.removeAll { $0.id == attachment.id }
     }
 
@@ -1852,11 +2002,12 @@ struct DiagnosisRecordAttachmentCard: View {
     let onTakePhoto: () -> Void
     let onUploadFile: () -> Void
     @Binding var selectedPhotos: [PhotosPickerItem]
+    @Binding var selectedVideos: [PhotosPickerItem]
     let onDelete: (DiagnosisAttachment) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(localizedAppString("Documents and Photos"))
+            Text(localizedAppString("Documents, Photos and Videos"))
                 .font(.headline.weight(.bold))
                 .foregroundStyle(AppTheme.text)
 
@@ -1871,13 +2022,18 @@ struct DiagnosisRecordAttachmentCard: View {
                     DiagnosisAttachmentAction(title: "Upload Photo", icon: "photo.on.rectangle")
                 }
                 .buttonStyle(.plain)
+
+                PhotosPicker(selection: $selectedVideos, matching: .videos) {
+                    DiagnosisAttachmentAction(title: "Upload Video", icon: "video.fill")
+                }
+                .buttonStyle(.plain)
             }
 
             Button(action: onUploadFile) {
                 HStack(spacing: 10) {
                     Image(systemName: "doc.fill")
                         .font(.headline.weight(.bold))
-                    Text(localizedAppString("Upload File"))
+                    Text(localizedAppString("Upload File or Video"))
                         .font(.headline.weight(.bold))
                     Spacer()
                 }
@@ -1891,11 +2047,11 @@ struct DiagnosisRecordAttachmentCard: View {
             if !statusMessage.isEmpty {
                 Text(statusMessage)
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(attachmentStatusColor(statusMessage))
             }
 
             if attachments.isEmpty {
-                Text(localizedAppString("No photos or files added yet."))
+                Text(localizedAppString("No photos, videos or files added yet."))
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1984,10 +2140,18 @@ struct DiagnosisSelectionSheet: View {
 }
 
 struct DiagnosisAttachment: Codable, Identifiable, Equatable {
+    struct VideoImportError: Error {
+        let message: String
+    }
+
     enum Kind: String, Codable {
         case photo
         case file
+        case video
     }
+
+    static let maxVideoBytes = 100 * 1024 * 1024
+    static let maxVideoDuration: TimeInterval = 30
 
     static let allowedFileTypes: [UTType] = [
         .image,
@@ -1997,7 +2161,8 @@ struct DiagnosisAttachment: Codable, Identifiable, Equatable {
         .rtf,
         .commaSeparatedText,
         .json,
-        .xml
+        .xml,
+        .movie
     ]
 
     static func isVideoFile(_ url: URL) -> Bool {
@@ -2012,14 +2177,96 @@ struct DiagnosisAttachment: Codable, Identifiable, Equatable {
     let kind: Kind
     let name: String
     let data: Data
+    let videoFileName: String?
+    let videoDuration: TimeInterval?
     let createdAt: Date
 
-    init(id: UUID = UUID(), kind: Kind, name: String, data: Data, createdAt: Date = Date()) {
+    init(
+        id: UUID = UUID(),
+        kind: Kind,
+        name: String,
+        data: Data,
+        videoFileName: String? = nil,
+        videoDuration: TimeInterval? = nil,
+        createdAt: Date = Date()
+    ) {
         self.id = id
         self.kind = kind
         self.name = name
         self.data = data
+        self.videoFileName = videoFileName
+        self.videoDuration = videoDuration
         self.createdAt = createdAt
+    }
+
+    static func videoAttachment(from url: URL) -> Result<DiagnosisAttachment, VideoImportError> {
+        let didAccess = url.startAccessingSecurityScopedResource()
+        defer {
+            if didAccess {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
+              let fileSize = values.fileSize,
+              fileSize < maxVideoBytes else {
+            return .failure(VideoImportError(message: localizedAppString("Videos must be smaller than 100 MB.")))
+        }
+
+        let duration = CMTimeGetSeconds(AVURLAsset(url: url).duration)
+        guard duration.isFinite, duration > 0, duration <= maxVideoDuration else {
+            return .failure(VideoImportError(message: localizedAppString("Videos can be no longer than 30 seconds.")))
+        }
+
+        let id = UUID()
+        let fileName = "\(id.uuidString).\(url.pathExtension.isEmpty ? "mov" : url.pathExtension.lowercased())"
+        do {
+            let directory = try videoDirectory()
+            try FileManager.default.copyItem(at: url, to: directory.appendingPathComponent(fileName))
+            return .success(
+                DiagnosisAttachment(
+                    id: id,
+                    kind: .video,
+                    name: url.lastPathComponent,
+                    data: Data(),
+                    videoFileName: fileName,
+                    videoDuration: duration
+                )
+            )
+        } catch {
+            return .failure(VideoImportError(message: localizedAppString("Unable to import this video.")))
+        }
+    }
+
+    static func removeStoredVideo(for attachment: DiagnosisAttachment) {
+        guard attachment.kind == .video,
+              let fileName = attachment.videoFileName,
+              let directory = try? videoDirectory() else {
+            return
+        }
+        try? FileManager.default.removeItem(at: directory.appendingPathComponent(fileName))
+    }
+
+    static func storedVideoURL(for attachment: DiagnosisAttachment) -> URL? {
+        guard attachment.kind == .video,
+              let fileName = attachment.videoFileName,
+              let directory = try? videoDirectory() else {
+            return nil
+        }
+
+        let url = directory.appendingPathComponent(fileName)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    private static func videoDirectory() throws -> URL {
+        let directory = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        ).appendingPathComponent("DiagnosisVideos", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
     }
 }
 
@@ -2033,6 +2280,7 @@ struct DiagnosisDetailView: View {
     @AppStorage private var diagnosisNoteData: Data
     @AppStorage private var selectedDiagnosisOptionData: String
     @State private var selectedPhotos: [PhotosPickerItem] = []
+    @State private var selectedVideos: [PhotosPickerItem] = []
     @State private var isCameraPresented = false
     @State private var isFileImporterPresented = false
     @State private var isDoctorVisitFormPresented = false
@@ -2186,6 +2434,11 @@ struct DiagnosisDetailView: View {
                             DiagnosisAttachmentAction(title: "Upload Photo", icon: "photo.on.rectangle")
                         }
                         .buttonStyle(.plain)
+
+                        PhotosPicker(selection: $selectedVideos, matching: .videos) {
+                            DiagnosisAttachmentAction(title: "Upload Video", icon: "video.fill")
+                        }
+                        .buttonStyle(.plain)
                     }
 
                     Button {
@@ -2208,7 +2461,7 @@ struct DiagnosisDetailView: View {
                     if !statusMessage.isEmpty {
                         Text(statusMessage)
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(attachmentStatusColor(statusMessage))
                     }
 
                     if attachments.isEmpty {
@@ -2240,6 +2493,19 @@ struct DiagnosisDetailView: View {
             guard !newValue.isEmpty else { return }
             Task {
                 await loadSelectedPhotos(newValue)
+            }
+        }
+        .onChange(of: selectedVideos) { _, newValue in
+            guard !newValue.isEmpty else { return }
+            Task {
+                let imported = await DiagnosisAttachmentHelper.videoAttachments(from: newValue)
+                await MainActor.run {
+                    var updated = attachments
+                    updated.insert(contentsOf: imported.0, at: 0)
+                    attachments = updated
+                    statusMessage = imported.1
+                    selectedVideos = []
+                }
             }
         }
         .fullScreenCover(isPresented: $isCameraPresented) {
@@ -2358,46 +2624,13 @@ struct DiagnosisDetailView: View {
     }
 
     private func importFiles(_ result: Result<[URL], Error>) {
-        switch result {
-        case .success(let urls):
-            var updated = attachments
-            var blockedVideoCount = 0
-
-            for url in urls {
-                guard !DiagnosisAttachment.isVideoFile(url) else {
-                    blockedVideoCount += 1
-                    continue
-                }
-
-                let didAccess = url.startAccessingSecurityScopedResource()
-                defer {
-                    if didAccess {
-                        url.stopAccessingSecurityScopedResource()
-                    }
-                }
-
-                guard let data = try? Data(contentsOf: url) else {
-                    continue
-                }
-
-                updated.insert(
-                    DiagnosisAttachment(kind: .file, name: url.lastPathComponent, data: data),
-                    at: 0
-                )
-            }
-
-            attachments = updated
-            if blockedVideoCount > 0 {
-                statusMessage = localizedAppString("Videos cannot be uploaded. Please choose photos or supported documents.")
-            } else {
-                statusMessage = urls.isEmpty ? "" : localizedAppString("File added.")
-            }
-        case .failure:
-            statusMessage = localizedAppString("Unable to import this file.")
-        }
+        let imported = DiagnosisAttachmentHelper.importedFiles(from: result)
+        attachments.insert(contentsOf: imported.0, at: 0)
+        statusMessage = imported.1
     }
 
     private func deleteAttachment(_ attachment: DiagnosisAttachment) {
+        DiagnosisAttachment.removeStoredVideo(for: attachment)
         attachments = attachments.filter { $0.id != attachment.id }
     }
 }
@@ -2427,36 +2660,51 @@ struct DiagnosisAttachmentAction: View {
 struct DiagnosisAttachmentRow: View {
     let attachment: DiagnosisAttachment
     let onDelete: () -> Void
+    @State private var isPreviewPresented = false
 
     var body: some View {
         HStack(spacing: 12) {
-            if attachment.kind == .photo, let image = UIImage(data: attachment.data) {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 54, height: 54)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            } else {
-                Image(systemName: "doc.fill")
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(AppTheme.accent)
-                    .frame(width: 54, height: 54)
-                    .background(AppTheme.accent.opacity(0.10))
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            Button {
+                isPreviewPresented = true
+            } label: {
+                HStack(spacing: 12) {
+                    if attachment.kind == .photo, let image = UIImage(data: attachment.data) {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 54, height: 54)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    } else {
+                        Image(systemName: attachment.kind == .video ? "video.fill" : "doc.fill")
+                            .font(.title3.weight(.bold))
+                            .foregroundStyle(AppTheme.accent)
+                            .frame(width: 54, height: 54)
+                            .background(AppTheme.accent.opacity(0.10))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(attachment.name)
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+                            .lineLimit(1)
+
+                        Text(attachmentDetail)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    if attachment.kind != .file {
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(attachment.name)
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(AppTheme.text)
-                    .lineLimit(1)
-
-                Text(localizedDateString(attachment.createdAt, dateStyle: .medium, timeStyle: .short))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
+            .buttonStyle(.plain)
+            .disabled(attachment.kind == .file)
 
             Button(action: onDelete) {
                 Image(systemName: "trash")
@@ -2471,6 +2719,61 @@ struct DiagnosisAttachmentRow: View {
         .padding(12)
         .background(AppTheme.fieldBackground)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .sheet(isPresented: $isPreviewPresented) {
+            DiagnosisAttachmentPreview(attachment: attachment)
+        }
+    }
+
+    private var attachmentDetail: String {
+        var detail = localizedDateString(attachment.createdAt, dateStyle: .medium, timeStyle: .short)
+        if attachment.kind == .video, let duration = attachment.videoDuration {
+            detail += " \u{2022} " + String(format: localizedAppString("%.0f sec"), duration)
+        }
+        return detail
+    }
+}
+
+private struct DiagnosisAttachmentPreview: View {
+    @Environment(\.dismiss) private var dismiss
+    let attachment: DiagnosisAttachment
+    @State private var player: AVPlayer?
+
+    init(attachment: DiagnosisAttachment) {
+        self.attachment = attachment
+        self._player = State(initialValue: DiagnosisAttachment.storedVideoURL(for: attachment).map(AVPlayer.init(url:)))
+    }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if attachment.kind == .photo, let image = UIImage(data: attachment.data) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color.black)
+                } else if attachment.kind == .video, let player {
+                    VideoPlayer(player: player)
+                        .onAppear { player.play() }
+                        .onDisappear { player.pause() }
+                } else {
+                    ContentUnavailableView(
+                        localizedAppString("Unable to import this video."),
+                        systemImage: "exclamationmark.triangle"
+                    )
+                }
+            }
+            .background(Color.black)
+            .navigationTitle(localizedAppString(attachment.kind == .video ? "Video" : "Photo"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(localizedAppString("Done")) {
+                        dismiss()
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -2531,6 +2834,7 @@ struct BasicHealthView: View {
     @AppStorage private var healthLogData: Data
     @AppStorage private var medicationData: Data
     @AppStorage private var medicationCheckData: Data
+    @AppStorage private var therapyScheduleData: Data
     @AppStorage private var clearedNotificationData: Data
     @AppStorage private var healthInsightCacheData: Data
     @AppStorage private var nutritionGoalsData: Data
@@ -2548,7 +2852,7 @@ struct BasicHealthView: View {
     @State private var activeCyclicVomitingLog: QuickLogOption?
     @State private var activeSleepSnapshot: SleepSnapshotEditorTarget?
     @State private var activeDigestionSnapshot: SnapshotOption?
-    @State private var activeNutritionSnapshot: SnapshotOption?
+    @State private var isNutritionHubPresented = false
     @State private var activeMeasurementSnapshot: MeasurementSnapshotEditorTarget?
     @State private var draggingQuickLogID: String?
     @State private var isSyncingParentAppData = false
@@ -2556,8 +2860,10 @@ struct BasicHealthView: View {
     @State private var isLoadingHealthInsights = false
     @State private var areHealthInsightsUnavailable = false
     @State private var lastHealthInsightRequestKey: String?
+    @State private var isAIInsightNoticePresented = false
     @State private var isDailyNotificationsPresented = false
     @State private var dailyNotifications: [DailyNotificationItem] = []
+    @State private var hasDailyNotifications = false
 
     init(user: CarePortalUser, openProfile: @escaping () -> Void = {}) {
         self.user = user
@@ -2576,6 +2882,7 @@ struct BasicHealthView: View {
         self._healthLogData = AppStorage(wrappedValue: Data(), "health.\(user.id).logData")
         self._medicationData = AppStorage(wrappedValue: Data(), "health.\(user.id).medicationData")
         self._medicationCheckData = AppStorage(wrappedValue: Data(), "health.\(user.id).medicationCheckData")
+        self._therapyScheduleData = AppStorage(wrappedValue: Data(), "therapy.\(user.id).scheduleData")
         self._clearedNotificationData = AppStorage(wrappedValue: Data(), "health.\(user.id).clearedNotificationData")
         self._healthInsightCacheData = AppStorage(wrappedValue: Data(), "health.\(user.id).insightCacheData")
         self._nutritionGoalsData = AppStorage(wrappedValue: Data(), "nutrient.\(user.id).nutritionGoalsData")
@@ -2591,7 +2898,8 @@ struct BasicHealthView: View {
                         parentName: user.nickname,
                         imageData: profileImageData,
                         onProfileTap: openProfile,
-                        onNotificationTap: showDailyNotifications
+                        onNotificationTap: showDailyNotifications,
+                        hasNotifications: hasDailyNotifications
                     )
 
                     HStack {
@@ -2727,7 +3035,7 @@ struct BasicHealthView: View {
                                 } else if option.id == "digestion" {
                                     activeDigestionSnapshot = option
                                 } else if option.id == "nutrition" {
-                                    activeNutritionSnapshot = option
+                                    isNutritionHubPresented = true
                                 } else if option.id == "mood" {
                                     activeMoodLog = QuickLogOption.moodSnapshotOption
                                 } else {
@@ -2739,15 +3047,13 @@ struct BasicHealthView: View {
 
                     HStack(spacing: 10) {
                         ForEach(SnapshotOption.measurements) { option in
-                            let snapshotSummary = todaysSnapshotSummary(for: option)
-
                             CompactSnapshotCard(
                                 option: option,
-                                displayValue: snapshotSummary.isLoggedToday ? snapshotSummary.value : nil
+                                displayValue: nil
                             ) {
                                 activeMeasurementSnapshot = MeasurementSnapshotEditorTarget(
                                     option: option,
-                                    existingEntry: latestTodaySnapshotEntry(for: option.id)
+                                    existingEntry: nil
                                 )
                             }
                         }
@@ -2782,10 +3088,8 @@ struct BasicHealthView: View {
                     saveLogEntry(entry)
                 }
             }
-            .sheet(item: $activeNutritionSnapshot) { option in
-                NutritionSnapshotSheet(userID: user.id, option: option) { entry in
-                    saveNutritionEntry(entry)
-                }
+            .navigationDestination(isPresented: $isNutritionHubPresented) {
+                NutrientView(user: user, isEmbedded: true)
             }
             .sheet(item: $activeMeasurementSnapshot) { target in
                 MeasurementSnapshotSheet(target: target) { entry in
@@ -2857,9 +3161,22 @@ struct BasicHealthView: View {
             .onAppear {
                 syncParentAppDataIfLocalDataExists()
                 MedicationReminderScheduler.reschedule(medications: medications)
+                refreshDailyNotifications()
             }
+            .onChange(of: medicationData) { _, _ in refreshDailyNotifications() }
+            .onChange(of: therapyScheduleData) { _, _ in refreshDailyNotifications() }
             .task(id: healthInsightRefreshKey) {
                 await refreshHealthInsightsIfNeeded()
+            }
+            .alert("AI Insight Notice", isPresented: $isAIInsightNoticePresented) {
+                Button("Cancel", role: .cancel) {}
+                Button("Request Insight") {
+                    Task {
+                        await requestHealthInsight()
+                    }
+                }
+            } message: {
+                Text("This AI-generated insight is for general informational purposes only. Do not use it as medical advice or to make important health decisions. Consult a qualified healthcare professional for medical guidance.")
             }
         }
     }
@@ -2921,6 +3238,11 @@ struct BasicHealthView: View {
     private var medications: [MedicationSchedule] {
         guard !medicationData.isEmpty else { return [] }
         return (try? JSONDecoder().decode([MedicationSchedule].self, from: medicationData)) ?? []
+    }
+
+    private var therapySessions: [TherapyScheduledSession] {
+        guard !therapyScheduleData.isEmpty else { return [] }
+        return (try? JSONDecoder().decode([TherapyScheduledSession].self, from: therapyScheduleData)) ?? []
     }
 
     private var medicationsBinding: Binding<[MedicationSchedule]> {
@@ -3117,7 +3439,7 @@ struct BasicHealthView: View {
     }
 
     private var healthInsightRefreshKey: String {
-        "\(healthInsightDateKey)-\(isDailyHealthComplete)"
+        healthInsightDateKey
     }
 
     private var healthInsightDateKey: String {
@@ -3128,23 +3450,38 @@ struct BasicHealthView: View {
     @ViewBuilder
     private var insightsAndAlertsSection: some View {
         VStack(spacing: 10) {
-            if !isDailyHealthComplete {
-                InsightCard(
-                    title: "Notice",
-                    message: "Complete all quick-log and daily snapshot buttons to get AI insights and alerts."
-                )
-            } else if isLoadingHealthInsights {
+            if isLoadingHealthInsights {
                 InsightCard(
                     title: "AI",
-                    message: "Reviewing today's completed logs for insights and alerts."
+                    message: "Preparing today's AI insight from the logs you have entered."
                 )
             } else if areHealthInsightsUnavailable {
                 InsightUnavailableIndicator()
             } else if healthInsights.isEmpty {
-                InsightCard(
-                    title: "AI",
-                    message: "AI insights and alerts will appear after today's completed logs are reviewed."
-                )
+                if hasRequestedHealthInsightToday {
+                    InsightCard(
+                        title: "AI",
+                        message: "Today's AI insight request has been used. A new request will be available tomorrow."
+                    )
+                } else {
+                    Button {
+                        isAIInsightNoticePresented = true
+                    } label: {
+                        Label("Request AI Insight", systemImage: "sparkles")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 13)
+                            .background(AppTheme.accent)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+
+                    Text(localizedAppString("One AI insight request is available each day."))
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
             } else {
                 ForEach(healthInsights) { insight in
                     InsightCard(title: insight.title, message: insight.message)
@@ -3154,6 +3491,10 @@ struct BasicHealthView: View {
     }
 
     private func showDailyNotifications() {
+        refreshDailyNotifications(presentSheet: true)
+    }
+
+    private func refreshDailyNotifications(presentSheet: Bool = false) {
         UNUserNotificationCenter.current().getDeliveredNotifications { notifications in
             let calendar = Calendar.current
             let clearedIDs = clearedDailyNotificationIDs
@@ -3178,12 +3519,18 @@ struct BasicHealthView: View {
                 .filter { !clearedIDs.contains($0.clearKey) }
                 .filter { !deliveredChecklistIDs.contains($0.medicationChecklistID ?? "") }
 
-            let items = (deliveredItems + scheduledItems)
+            let therapyItems = scheduledTherapyNotificationItems()
+                .filter { !clearedIDs.contains($0.clearKey) }
+
+            let items = (deliveredItems + scheduledItems + therapyItems)
                 .sorted { $0.date > $1.date }
 
             DispatchQueue.main.async {
                 dailyNotifications = items
-                isDailyNotificationsPresented = true
+                hasDailyNotifications = !items.isEmpty
+                if presentSheet {
+                    isDailyNotificationsPresented = true
+                }
             }
         }
     }
@@ -3192,6 +3539,7 @@ struct BasicHealthView: View {
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [notification.notificationIdentifier])
         saveClearedDailyNotificationID(notification.clearKey)
         dailyNotifications.removeAll { $0.id == notification.id }
+        hasDailyNotifications = !dailyNotifications.isEmpty
     }
 
     private func markNotificationMedicationTaken(_ notification: DailyNotificationItem) {
@@ -3287,13 +3635,11 @@ struct BasicHealthView: View {
     }
 
     private func scheduledMedicineNotificationItems(calendar: Calendar = .current) -> [DailyNotificationItem] {
-        let currentMinutes = calendar.component(.hour, from: Date()) * 60 + calendar.component(.minute, from: Date())
         let checkedIDs = medicationCheckState.dateKey == MedicationCheckState.todayKey
             ? Set(medicationCheckState.checkedIDs)
             : []
 
         return todayMedicationChecklistRows
-            .filter { $0.sortMinutes <= currentMinutes }
             .filter { !checkedIDs.contains($0.id) }
             .map { row in
                 DailyNotificationItem(
@@ -3303,6 +3649,28 @@ struct BasicHealthView: View {
                     body: medicineReminderBody(for: row),
                     isMedicineReminder: true,
                     medicationChecklistID: row.id
+                )
+            }
+    }
+
+    private func scheduledTherapyNotificationItems(calendar: Calendar = .current) -> [DailyNotificationItem] {
+        therapySessions
+            .filter { calendar.isDateInToday($0.date) }
+            .map { session in
+                let startTime = calendar.date(
+                    bySettingHour: calendar.component(.hour, from: session.startTime),
+                    minute: calendar.component(.minute, from: session.startTime),
+                    second: 0,
+                    of: session.date
+                ) ?? session.date
+
+                return DailyNotificationItem(
+                    notificationIdentifier: "scheduled-therapy.\(session.id.uuidString)",
+                    date: startTime,
+                    title: localizedAppString("Therapy Session"),
+                    body: "\(session.title) - \(startTime.formatted(date: .omitted, time: .shortened))",
+                    isMedicineReminder: false,
+                    medicationChecklistID: nil
                 )
             }
     }
@@ -3392,13 +3760,6 @@ struct BasicHealthView: View {
 
     @MainActor
     private func refreshHealthInsightsIfNeeded() async {
-        guard isDailyHealthComplete else {
-            healthInsights = []
-            areHealthInsightsUnavailable = false
-            lastHealthInsightRequestKey = nil
-            return
-        }
-
         if let cachedInsights = todaysHealthInsightCache {
             let dailyInsights = oneDailyHealthInsight(from: cachedInsights.insights)
             healthInsights = dailyInsights
@@ -3415,6 +3776,15 @@ struct BasicHealthView: View {
             }
             return
         }
+
+        healthInsights = []
+        areHealthInsightsUnavailable = false
+        lastHealthInsightRequestKey = nil
+    }
+
+    @MainActor
+    private func requestHealthInsight() async {
+        guard todaysHealthInsightCache == nil, !isLoadingHealthInsights else { return }
 
         let requestKey = healthInsightRefreshKey
         guard lastHealthInsightRequestKey != requestKey else { return }
@@ -3467,6 +3837,10 @@ struct BasicHealthView: View {
 
         let legacyLanguageKeys = AppLanguage.allCases.map { "\(healthInsightDateKey)-\($0.rawValue)" }
         return cache.dateKey == healthInsightDateKey || legacyLanguageKeys.contains(cache.dateKey) ? cache : nil
+    }
+
+    private var hasRequestedHealthInsightToday: Bool {
+        todaysHealthInsightCache != nil
     }
 
     private func oneDailyHealthInsight(from insights: [HealthInsight]) -> [HealthInsight] {
@@ -3542,11 +3916,7 @@ struct BasicHealthView: View {
     }
 
     private func saveDailySnapshotEntry(_ entry: HealthLogEntry) {
-        var updatedEntries = logEntries.filter { savedEntry in
-            !(savedEntry.type == .snapshot
-              && savedEntry.categoryID == entry.categoryID
-              && Calendar.current.isDate(savedEntry.timestamp, inSameDayAs: entry.timestamp))
-        }
+        var updatedEntries = logEntries
         updatedEntries.append(entry)
         updatedEntries.sort { $0.timestamp < $1.timestamp }
 
@@ -3658,6 +4028,7 @@ struct HealthDashboardHeader: View {
     let imageData: Data
     let onProfileTap: () -> Void
     let onNotificationTap: () -> Void
+    let hasNotifications: Bool
 
     var body: some View {
         HStack(spacing: 12) {
@@ -3698,10 +4069,23 @@ struct HealthDashboardHeader: View {
             Spacer()
 
             Button(action: onNotificationTap) {
-                Image(systemName: "bell.badge")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(AppTheme.text)
-                    .frame(width: 38, height: 38)
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: "bell")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(AppTheme.text)
+                        .frame(width: 38, height: 38)
+
+                    if hasNotifications {
+                        Circle()
+                            .fill(.red)
+                            .frame(width: 9, height: 9)
+                            .overlay {
+                                Circle()
+                                    .stroke(Color(red: 0.82, green: 0.94, blue: 0.94), lineWidth: 2)
+                            }
+                            .offset(x: -1, y: 2)
+                    }
+                }
             }
             .buttonStyle(.plain)
             .accessibilityLabel(localizedAppString("Open notifications"))
@@ -4126,6 +4510,10 @@ struct HealthLogEntry: Identifiable, Codable {
 
     var includesSeverityInExport: Bool {
         ["allergy", "discomfort", "meltdown", "pain", "skin"].contains(categoryID)
+    }
+
+    var hasSeverityRating: Bool {
+        includesSeverityInExport || categoryID == "mood"
     }
 }
 
@@ -5068,6 +5456,8 @@ struct CompactSnapshotCard: View {
                 Text(LocalizedStringKey(option.title))
                     .font(.subheadline.weight(.bold))
                     .foregroundStyle(AppTheme.text)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
 
                 Spacer(minLength: 6)
 
@@ -5127,7 +5517,7 @@ struct MeasurementSnapshotSheet: View {
 
         let parsed = Self.parseMeasurementValue(
             target.existingEntry?.value ?? "",
-            defaultUnit: target.option.id == "height" ? "cm" : "Kg"
+            defaultUnit: target.option.id == "height" ? "in" : "lbs"
         )
         self._timestamp = State(initialValue: target.existingEntry?.timestamp ?? Date())
         self._measurementValue = State(initialValue: parsed.value)
@@ -10064,14 +10454,6 @@ struct NutritionGoalsPage: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    PageHeader(
-                        icon: "leaf.fill",
-                        title: "Nutrition Goals",
-                        subtitle: "Calories, macros, supplements, and hydration"
-                    )
-
-                    NutritionGoalsSummary(goals: goals)
-
                     NutritionGoalsEditor(goals: $goals)
                         .padding(16)
                         .background(AppTheme.panel)
@@ -13493,6 +13875,10 @@ struct QuickLogTrendPreviewCard: View {
         return Double(total) / Double(entries.count)
     }
 
+    private var showsAverage: Bool {
+        entries.contains(where: \.hasSeverityRating)
+    }
+
     var body: some View {
         if option.id == "seizure" {
             NavigationLink {
@@ -13512,7 +13898,7 @@ struct QuickLogTrendPreviewCard: View {
             NavigationLink {
                 QuickLogHistoryDetailView(option: option, entries: entries)
             } label: {
-                if option.id == "mood" || option.id == "pain" || option.id == "cyclicVomiting" {
+                if !showsAverage || option.id == "mood" || option.id == "pain" || option.id == "cyclicVomiting" {
                     quickLogListCard
                 } else {
                     trendChartCard
@@ -13536,7 +13922,7 @@ struct QuickLogTrendPreviewCard: View {
                     .font(.title3.weight(.bold))
                     .foregroundStyle(AppTheme.text)
 
-                Text(String(format: localizedAppString("%d entries · Avg %@/%d"), entries.count, averageSeverityText, scaleMax))
+                Text(historySummary)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
@@ -13751,6 +14137,14 @@ struct QuickLogTrendPreviewCard: View {
         averageSeverity == 0 ? "0" : String(format: "%.1f", averageSeverity)
     }
 
+    private var historySummary: String {
+        guard showsAverage else {
+            return String(format: localizedAppString("%d entries"), entries.count)
+        }
+
+        return String(format: localizedAppString("%d entries · Avg %@/%d"), entries.count, averageSeverityText, scaleMax)
+    }
+
     private var scaleMax: Int {
         option.id == "mood" ? 7 : 5
     }
@@ -13809,6 +14203,10 @@ struct SnapshotHistoryPreviewCard: View {
         return Double(total) / Double(entries.count)
     }
 
+    private var showsAverage: Bool {
+        option.id == "mood"
+    }
+
     var body: some View {
         if option.id == "sleep" {
             NavigationLink {
@@ -13817,7 +14215,7 @@ struct SnapshotHistoryPreviewCard: View {
                 sleepTrackerCard
             }
             .buttonStyle(.plain)
-        } else {
+        } else if showsAverage {
             NavigationLink {
                 SnapshotHistoryDetailView(option: option, entries: entries)
             } label: {
@@ -13831,6 +14229,13 @@ struct SnapshotHistoryPreviewCard: View {
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
                 .snapshotHistoryCardStyle()
+            }
+            .buttonStyle(.plain)
+        } else {
+            NavigationLink {
+                SnapshotHistoryDetailView(option: option, entries: entries)
+            } label: {
+                snapshotListCard
             }
             .buttonStyle(.plain)
         }
@@ -13850,7 +14255,7 @@ struct SnapshotHistoryPreviewCard: View {
                     .font(.title3.weight(.bold))
                     .foregroundStyle(AppTheme.text)
 
-                Text(String(format: localizedAppString("%d entries · Avg %@/5"), entries.count, averageSeverityText))
+                Text(historySummary)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
@@ -13894,6 +14299,47 @@ struct SnapshotHistoryPreviewCard: View {
         .snapshotHistoryCardStyle()
     }
 
+    private var snapshotListCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            cardHeader
+
+            if recentEntries.isEmpty {
+                Text(localizedAppString("No saved logs yet"))
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .background(AppTheme.fieldBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(recentEntries.reversed().prefix(3)) { entry in
+                        HStack(spacing: 10) {
+                            Text(entry.timestamp, format: .dateTime.month(.abbreviated).day())
+                                .font(.caption.weight(.black))
+                                .foregroundStyle(AppTheme.text)
+                                .frame(width: 54, alignment: .leading)
+
+                            Text(entry.value.isEmpty ? localizedAppString("Saved") : entry.value)
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+                                .lineLimit(1)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+
+                            Text(entry.timestamp, format: .dateTime.hour().minute())
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .padding(12)
+                .background(AppTheme.fieldBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+        }
+        .snapshotHistoryCardStyle()
+    }
+
     @ViewBuilder
     private var chartPreview: some View {
         if recentEntries.isEmpty {
@@ -13932,6 +14378,12 @@ struct SnapshotHistoryPreviewCard: View {
 
     private var averageSeverityText: String {
         averageSeverity == 0 ? "0" : String(format: "%.1f", averageSeverity)
+    }
+
+    private var historySummary: String {
+        showsAverage
+            ? String(format: localizedAppString("%d entries · Avg %@/5"), entries.count, averageSeverityText)
+            : String(format: localizedAppString("%d entries"), entries.count)
     }
 }
 
@@ -14962,13 +15414,15 @@ struct QuickLogHistoryLogCard: View {
 
                 Spacer()
 
-                Text("\(entry.severity)/\(scaleMax)")
-                    .font(.caption.weight(.black))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(option.tint)
-                    .clipShape(Capsule())
+                if entry.hasSeverityRating {
+                    Text("\(entry.severity)/\(scaleMax)")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(option.tint)
+                        .clipShape(Capsule())
+                }
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -15263,26 +15717,26 @@ struct TherapyTrackingView: View {
                         subtitle: "Log milestones and therapy wins to see your child's progress over time."
                     )
 
-                    Button {
-                        activeCategory = .therapySession
+                    NavigationLink {
+                        TherapyScheduleView(user: user)
                     } label: {
                         HStack(spacing: 12) {
-                            Image(systemName: TherapyCategory.therapySession.icon)
+                            Image(systemName: "calendar")
                                 .font(.headline.weight(.bold))
                                 .foregroundStyle(TherapyCategory.therapySession.tint)
                                 .frame(width: 40, height: 40)
                                 .background(TherapyCategory.therapySession.tint.opacity(0.14))
                                 .clipShape(Circle())
 
-                            Text(localizedAppString("Therapy Session"))
+                            Text(localizedAppString("Therapy Schedule"))
                                 .font(.headline.weight(.bold))
                                 .foregroundStyle(AppTheme.text)
 
                             Spacer()
 
-                            Image(systemName: "plus")
+                            Image(systemName: "chevron.right")
                                 .font(.headline.weight(.bold))
-                                .foregroundStyle(AppTheme.accent)
+                                .foregroundStyle(TherapyCategory.therapySession.tint)
                         }
                         .padding(14)
                         .frame(maxWidth: .infinity)
@@ -15290,7 +15744,7 @@ struct TherapyTrackingView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .overlay {
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(TherapyCategory.therapySession.tint.opacity(0.18), lineWidth: 1)
+                                .stroke(TherapyCategory.therapySession.tint.opacity(0.25), lineWidth: 1)
                         }
                     }
                     .buttonStyle(.plain)
@@ -15308,7 +15762,7 @@ struct TherapyTrackingView: View {
 
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
-                            Text(localizedAppString("Recent Milestones"))
+                            Text(localizedAppString("Recent Sessions"))
                                 .font(.headline.weight(.bold))
                                 .foregroundStyle(AppTheme.text)
 
@@ -15329,15 +15783,15 @@ struct TherapyTrackingView: View {
                         }
 
                         if recentMilestones.isEmpty {
-                            Text(localizedAppString("No milestones logged yet."))
-                                .font(.subheadline.weight(.semibold))
+                            Text(localizedAppString("No therapy sessions reflections logged yet."))
+                                .font(.footnote.weight(.semibold))
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(14)
                                 .background(AppTheme.panel)
                                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         } else {
-                            ForEach(recentMilestones.prefix(5)) { milestone in
+                            ForEach(recentMilestones.prefix(3)) { milestone in
                                 TherapyMilestoneRow(milestone: milestone)
                             }
                         }
@@ -15363,6 +15817,1012 @@ struct TherapyTrackingView: View {
 
         if let data = try? JSONEncoder().encode(updatedMilestones) {
             milestoneData = data
+        }
+    }
+}
+
+struct TherapyScheduledSession: Identifiable, Codable {
+    let id: UUID
+    var title: String
+    var date: Date
+    var startTime: Date
+    var endTime: Date
+    var therapyType: String?
+    var notes: String
+    var recurrenceID: UUID?
+
+    init(id: UUID = UUID(), title: String, date: Date, startTime: Date, endTime: Date, therapyType: String = "Other", notes: String = "", recurrenceID: UUID? = nil) {
+        self.id = id
+        self.title = title
+        self.date = date
+        self.startTime = startTime
+        self.endTime = endTime
+        self.therapyType = therapyType
+        self.notes = notes
+        self.recurrenceID = recurrenceID
+    }
+}
+
+struct TherapyScheduleView: View {
+    let user: CarePortalUser
+
+    @AppStorage private var sessionData: Data
+    @State private var weekStart: Date
+    @State private var isSessionEditorPresented = false
+    @State private var selectedSession: TherapyScheduledSession?
+
+    init(user: CarePortalUser) {
+        self.user = user
+        self._sessionData = AppStorage(wrappedValue: Data(), "therapy.\(user.id).scheduleData")
+        self._weekStart = State(initialValue: Self.startOfWeek(for: Date()))
+    }
+
+    private var sessions: [TherapyScheduledSession] {
+        guard !sessionData.isEmpty else { return [] }
+        return (try? JSONDecoder().decode([TherapyScheduledSession].self, from: sessionData)) ?? []
+    }
+
+    private var weekDays: [Date] {
+        (0..<7).compactMap { Calendar.current.date(byAdding: .day, value: $0, to: weekStart) }
+    }
+
+    private var weekEnd: Date {
+        Calendar.current.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(spacing: 14) {
+                    Button {
+                        moveWeek(by: -1)
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .frame(width: 42, height: 42)
+                    }
+
+                    Button {
+                        weekStart = Self.startOfWeek(for: Date())
+                    } label: {
+                        VStack(spacing: 2) {
+                            Image(systemName: "calendar")
+                            Text(localizedAppString("Today"))
+                                .font(.caption2.weight(.bold))
+                        }
+                        .frame(width: 46, height: 52)
+                    }
+
+                    Button {
+                        moveWeek(by: 1)
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .frame(width: 42, height: 42)
+                    }
+
+                    Spacer()
+                }
+                .font(.title2.weight(.bold))
+                .foregroundStyle(AppTheme.accent)
+                .buttonStyle(.plain)
+
+                ForEach(weekDays, id: \.self) { day in
+                    HStack(alignment: .top, spacing: 14) {
+                        VStack(spacing: 3) {
+                            Text(day, format: .dateTime.weekday(.abbreviated))
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+                            Text(day, format: .dateTime.month(.abbreviated).day())
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(width: 58)
+
+                        VStack(spacing: 9) {
+                            let daySessions = sessionsForDay(day)
+                            if daySessions.isEmpty {
+                                Color.clear
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 52)
+                                    .background(AppTheme.panel)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            } else {
+                                ForEach(daySessions) { session in
+                                    TherapyScheduleSessionCard(session: session) {
+                                        selectedSession = session
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(20)
+        }
+        .background(AppTheme.background.ignoresSafeArea())
+        .navigationTitle(weekRangeTitle)
+        .navigationBarTitleDisplayMode(.inline)
+        .overlay(alignment: .bottomTrailing) {
+            Button {
+                isSessionEditorPresented = true
+            } label: {
+                Image(systemName: "plus")
+                    .font(.title2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 58, height: 58)
+                    .background(AppTheme.accent)
+                    .clipShape(Circle())
+                    .shadow(color: AppTheme.accent.opacity(0.28), radius: 10, x: 0, y: 5)
+            }
+            .buttonStyle(.plain)
+            .padding(24)
+        }
+        .sheet(isPresented: $isSessionEditorPresented) {
+            TherapyScheduleSessionSheet(initialDate: weekStart) { sessions in
+                save(sessions)
+            }
+        }
+        .sheet(item: $selectedSession) { session in
+            TherapyScheduleSessionDetailSheet(
+                session: session,
+                seriesSessions: seriesSessions(for: session),
+                onSave: { request in
+                    update(request)
+                },
+                onDelete: { scope in
+                    delete(session, relatedSessions: seriesSessions(for: session), scope: scope)
+                }
+            )
+        }
+    }
+
+    private var weekRangeTitle: String {
+        "\(localizedDateString(weekStart, dateStyle: .medium, timeStyle: .none)) - \(localizedDateString(weekEnd, dateStyle: .medium, timeStyle: .none))"
+    }
+
+    private func sessionsForDay(_ day: Date) -> [TherapyScheduledSession] {
+        sessions
+            .filter { Calendar.current.isDate($0.date, inSameDayAs: day) }
+            .sorted { $0.startTime < $1.startTime }
+    }
+
+    private func moveWeek(by amount: Int) {
+        weekStart = Calendar.current.date(byAdding: .day, value: amount * 7, to: weekStart) ?? weekStart
+    }
+
+    private func save(_ newSessions: [TherapyScheduledSession]) {
+        var updated = sessions
+        updated.append(contentsOf: newSessions)
+        updated.sort { $0.date < $1.date }
+        sessionData = (try? JSONEncoder().encode(updated)) ?? Data()
+    }
+
+    private func update(_ request: TherapyScheduleSessionEditRequest) {
+        let updatedSession = request.session
+
+        if request.scope == .one, request.wasRepeating {
+            var standaloneSession = updatedSession
+            standaloneSession.recurrenceID = nil
+            saveReplacingSession(standaloneSession)
+            return
+        }
+
+        let shouldReplaceSeries = request.scope == .all || (request.mode == .repeating && !request.wasRepeating)
+        guard shouldReplaceSeries else {
+            saveReplacingSession(updatedSession)
+            return
+        }
+
+        var updatedSessions = sessions.filter { existing in
+            !request.originalSeriesSessionIDs.contains(existing.id)
+        }
+
+        let dates = scheduledDates(
+            startDate: request.startDate,
+            endDate: request.endDate,
+            mode: request.mode,
+            weekdays: request.weekdays
+        )
+        let recurrenceID = request.mode == .repeating ? (updatedSession.recurrenceID ?? UUID()) : nil
+        let replacementSessions = dates.map { date in
+            TherapyScheduledSession(
+                title: updatedSession.title,
+                date: date,
+                startTime: updatedSession.startTime,
+                endTime: updatedSession.endTime,
+                therapyType: updatedSession.therapyType ?? "Other",
+                notes: updatedSession.notes,
+                recurrenceID: recurrenceID
+            )
+        }
+        updatedSessions.append(contentsOf: replacementSessions)
+        updatedSessions.sort { $0.date < $1.date }
+        sessionData = (try? JSONEncoder().encode(updatedSessions)) ?? Data()
+    }
+
+    private func saveReplacingSession(_ session: TherapyScheduledSession) {
+        var updatedSessions = sessions
+        if let index = updatedSessions.firstIndex(where: { $0.id == session.id }) {
+            updatedSessions[index] = session
+        }
+        updatedSessions.sort { $0.date < $1.date }
+        sessionData = (try? JSONEncoder().encode(updatedSessions)) ?? Data()
+    }
+
+    private func delete(_ session: TherapyScheduledSession, relatedSessions: [TherapyScheduledSession], scope: TherapyScheduleSessionEditScope) {
+        let updatedSessions: [TherapyScheduledSession]
+        if scope == .all, !relatedSessions.isEmpty {
+            let relatedIDs = Set(relatedSessions.map(\.id))
+            updatedSessions = sessions.filter { !relatedIDs.contains($0.id) }
+        } else {
+            updatedSessions = sessions.filter { $0.id != session.id }
+        }
+        sessionData = (try? JSONEncoder().encode(updatedSessions)) ?? Data()
+    }
+
+    private func seriesSessions(for session: TherapyScheduledSession) -> [TherapyScheduledSession] {
+        if let recurrenceID = session.recurrenceID {
+            return sessions.filter { $0.recurrenceID == recurrenceID }
+        }
+
+        let matches = sessions.filter {
+            $0.title == session.title
+                && $0.therapyType == session.therapyType
+                && $0.notes == session.notes
+                && $0.startTime == session.startTime
+                && $0.endTime == session.endTime
+        }
+        return matches.count > 1 ? matches : []
+    }
+
+    private func scheduledDates(startDate: Date, endDate: Date, mode: TherapyScheduleMode, weekdays: Set<Int>) -> [Date] {
+        let calendar = Calendar.current
+        let finalDate = mode == .repeating ? max(startDate, endDate) : startDate
+        var dates: [Date] = []
+        var nextDate = calendar.startOfDay(for: startDate)
+
+        while nextDate <= finalDate {
+            if mode == .oneTime || weekdays.contains(calendar.component(.weekday, from: nextDate)) {
+                dates.append(nextDate)
+            }
+            guard mode == .repeating else { break }
+            nextDate = calendar.date(byAdding: .day, value: 1, to: nextDate) ?? finalDate.addingTimeInterval(1)
+        }
+        return dates
+    }
+
+    private static func startOfWeek(for date: Date) -> Date {
+        Calendar.current.dateInterval(of: .weekOfYear, for: date)?.start ?? Calendar.current.startOfDay(for: date)
+    }
+}
+
+private struct TherapyScheduleSessionCard: View {
+    let session: TherapyScheduledSession
+    let onSelect: () -> Void
+
+    private var appearance: TherapyScheduleSessionAppearance {
+        TherapyScheduleSessionAppearance(therapyType: session.therapyType)
+    }
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(session.title)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(AppTheme.text)
+                        .lineLimit(1)
+
+                    Text("\(session.startTime.formatted(date: .omitted, time: .shortened)) - \(session.endTime.formatted(date: .omitted, time: .shortened))")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppTheme.text.opacity(0.62))
+                }
+
+                Spacer(minLength: 8)
+
+                Image(systemName: appearance.icon)
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 38, height: 38)
+                    .background(appearance.tint)
+                    .clipShape(Circle())
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(appearance.tint.opacity(0.16))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct TherapyScheduleSessionAppearance {
+    let tint: Color
+    let icon: String
+    let title: String
+
+    init(therapyType: String?) {
+        switch therapyType?.lowercased() {
+        case "physical":
+            tint = TherapyCategory.all[0].tint
+            icon = TherapyCategory.all[0].icon
+            title = "Physical"
+        case "occupational":
+            tint = TherapyCategory.all[1].tint
+            icon = TherapyCategory.all[1].icon
+            title = "Occupational"
+        case "speech":
+            tint = TherapyCategory.all[2].tint
+            icon = TherapyCategory.all[2].icon
+            title = "Speech"
+        case "behavioral", "behavioral/rdi":
+            tint = TherapyCategory.all[3].tint
+            icon = TherapyCategory.all[3].icon
+            title = "Behavioral/RDI"
+        case "social":
+            tint = TherapyCategory.all[4].tint
+            icon = TherapyCategory.all[4].icon
+            title = "Social"
+        default:
+            tint = .gray
+            icon = "ellipsis"
+            title = "Other"
+        }
+    }
+}
+
+private struct TherapyScheduleSessionDetailSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let session: TherapyScheduledSession
+    let seriesSessions: [TherapyScheduledSession]
+    let onSave: (TherapyScheduleSessionEditRequest) -> Void
+    let onDelete: (TherapyScheduleSessionEditScope) -> Void
+    @State private var isEditorPresented = false
+    @State private var pendingDeletion: TherapyScheduleSessionEditScope?
+
+    private var appearance: TherapyScheduleSessionAppearance {
+        TherapyScheduleSessionAppearance(therapyType: session.therapyType)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    HStack(spacing: 14) {
+                        Image(systemName: appearance.icon)
+                            .font(.title2.weight(.bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 54, height: 54)
+                            .background(appearance.tint)
+                            .clipShape(Circle())
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(session.title)
+                                .font(.title3.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+                            Text(localizedAppString(appearance.title))
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(appearance.tint)
+                        }
+                    }
+
+                    VStack(spacing: 0) {
+                        detailRow(title: "Date", value: localizedDateString(session.date, dateStyle: .medium, timeStyle: .none))
+                        Divider().padding(.leading, 14)
+                        detailRow(
+                            title: "Time",
+                            value: "\(session.startTime.formatted(date: .omitted, time: .shortened)) - \(session.endTime.formatted(date: .omitted, time: .shortened))"
+                        )
+                    }
+                    .padding(.horizontal, 14)
+                    .background(AppTheme.panel)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                    if !session.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(localizedAppString("Notes"))
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+                            Text(session.notes)
+                                .font(.body)
+                                .foregroundStyle(AppTheme.text)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(14)
+                                .background(AppTheme.panel)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+                    }
+
+                    HStack(spacing: 18) {
+                        deleteButton(title: "Delete", scope: .one)
+                        deleteButton(title: "Delete All", scope: .all)
+                    }
+                }
+                .padding(20)
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle(localizedAppString("Therapy Session"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        isEditorPresented = true
+                    } label: {
+                        Image(systemName: "pencil")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.accent)
+                            .frame(width: 34, height: 34)
+                            .background(AppTheme.accent.opacity(0.10))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(localizedAppString("Edit"))
+
+                    ToolbarCloseButton { dismiss() }
+                }
+            }
+            .sheet(isPresented: $isEditorPresented) {
+                TherapyScheduleSessionEditSheet(
+                    session: session,
+                    seriesSessions: seriesSessions,
+                    onSave: { request in
+                        onSave(request)
+                        dismiss()
+                    }
+                )
+            }
+            .alert(deleteAlertTitle, isPresented: deleteAlertIsPresented) {
+                Button(localizedAppString("Cancel"), role: .cancel) {
+                    pendingDeletion = nil
+                }
+                Button(localizedAppString("Delete"), role: .destructive) {
+                    if let scope = pendingDeletion {
+                        onDelete(scope)
+                    }
+                    pendingDeletion = nil
+                    dismiss()
+                }
+            } message: {
+                Text(localizedAppString(deleteAlertMessage))
+            }
+        }
+    }
+
+    private func detailRow(title: String, value: String) -> some View {
+        HStack {
+            Text(localizedAppString(title))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppTheme.text)
+            Spacer()
+            Text(value)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
+        }
+        .padding(.vertical, 15)
+    }
+
+    private var wasRepeating: Bool {
+        session.recurrenceID != nil || seriesSessions.count > 1
+    }
+
+    private func deleteButton(title: String, scope: TherapyScheduleSessionEditScope) -> some View {
+        Button(role: .destructive) {
+            pendingDeletion = scope
+        } label: {
+            Label(localizedAppString(title), systemImage: "trash")
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(.red)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var deleteAlertTitle: String {
+        pendingDeletion == .all && wasRepeating
+            ? localizedAppString("Delete all sessions?")
+            : localizedAppString("Delete this session?")
+    }
+
+    private var deleteAlertMessage: String {
+        pendingDeletion == .all && wasRepeating
+            ? "This will permanently remove every occurrence in this repeating therapy session."
+            : "This will permanently remove this therapy session."
+    }
+
+    private var deleteAlertIsPresented: Binding<Bool> {
+        Binding(
+            get: { pendingDeletion != nil },
+            set: { isPresented in
+                if !isPresented {
+                    pendingDeletion = nil
+                }
+            }
+        )
+    }
+}
+
+private enum TherapyScheduleSessionEditScope: Equatable {
+    case one
+    case all
+}
+
+private enum TherapyScheduleMode: String, CaseIterable, Identifiable {
+    case oneTime = "One Time"
+    case repeating = "Repeating"
+
+    var id: String { rawValue }
+}
+
+private struct TherapyScheduleSessionEditRequest {
+    let session: TherapyScheduledSession
+    let scope: TherapyScheduleSessionEditScope
+    let mode: TherapyScheduleMode
+    let startDate: Date
+    let endDate: Date
+    let weekdays: Set<Int>
+    let wasRepeating: Bool
+    let originalSeriesSessionIDs: Set<UUID>
+}
+
+private struct TherapyScheduleSessionEditSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let session: TherapyScheduledSession
+    let seriesSessions: [TherapyScheduledSession]
+    let onSave: (TherapyScheduleSessionEditRequest) -> Void
+
+    @State private var title: String
+    @State private var date: Date
+    @State private var endDate: Date
+    @State private var startTime: Date
+    @State private var endTime: Date
+    @State private var therapyType: String
+    @State private var scheduleMode: TherapyScheduleMode
+    @State private var selectedWeekdays: Set<Int>
+    @State private var notes: String
+
+    private let therapyTypes = ["Physical", "Occupational", "Speech", "Behavioral", "Social", "Other"]
+    private let weekdays = [(1, "Sun"), (2, "Mon"), (3, "Tue"), (4, "Wed"), (5, "Thu"), (6, "Fri"), (7, "Sat")]
+    private var wasRepeating: Bool {
+        session.recurrenceID != nil || seriesSessions.count > 1
+    }
+
+    init(
+        session: TherapyScheduledSession,
+        seriesSessions: [TherapyScheduledSession],
+        onSave: @escaping (TherapyScheduleSessionEditRequest) -> Void
+    ) {
+        self.session = session
+        self.seriesSessions = seriesSessions
+        self.onSave = onSave
+        let recurringSessions = seriesSessions.isEmpty ? [session] : seriesSessions
+        let firstDate = recurringSessions.map(\.date).min() ?? session.date
+        let lastDate = recurringSessions.map(\.date).max() ?? session.date
+        let selectedDays = Set(recurringSessions.map { Calendar.current.component(.weekday, from: $0.date) })
+
+        self._title = State(initialValue: session.title)
+        self._date = State(initialValue: firstDate)
+        self._endDate = State(initialValue: lastDate)
+        self._startTime = State(initialValue: session.startTime)
+        self._endTime = State(initialValue: session.endTime)
+        self._therapyType = State(initialValue: session.therapyType ?? "Other")
+        self._scheduleMode = State(initialValue: (session.recurrenceID != nil || seriesSessions.count > 1) ? .repeating : .oneTime)
+        self._selectedWeekdays = State(initialValue: selectedDays.isEmpty ? [Calendar.current.component(.weekday, from: session.date)] : selectedDays)
+        self._notes = State(initialValue: session.notes)
+    }
+
+    private var isValid: Bool {
+        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (scheduleMode == .oneTime || !selectedWeekdays.isEmpty)
+    }
+
+    private var updatedSession: TherapyScheduledSession {
+        TherapyScheduledSession(
+            id: session.id,
+            title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+            date: date,
+            startTime: startTime,
+            endTime: endTime,
+            therapyType: therapyType,
+            notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
+            recurrenceID: scheduleMode == .repeating ? (session.recurrenceID ?? UUID()) : nil
+        )
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        VStack(spacing: 0) {
+                            TextField(localizedAppString("Session Title"), text: $title)
+                                .font(.headline.weight(.semibold))
+                                .padding(14)
+
+                            Divider()
+
+                            HStack {
+                                Text(localizedAppString("Therapy Type"))
+                                    .font(.headline.weight(.semibold))
+                                    .foregroundStyle(AppTheme.text)
+                                Spacer()
+                                Picker(localizedAppString("Therapy Type"), selection: $therapyType) {
+                                    ForEach(therapyTypes, id: \.self) { type in
+                                        Text(localizedAppString(type)).tag(type)
+                                    }
+                                }
+                                .tint(AppTheme.accent)
+                            }
+                            .padding(14)
+
+                            Divider()
+
+                            Picker(localizedAppString("Schedule"), selection: $scheduleMode) {
+                                ForEach(TherapyScheduleMode.allCases) { mode in
+                                    Text(localizedAppString(mode.rawValue)).tag(mode)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .padding(14)
+
+                            Divider()
+
+                            if scheduleMode == .oneTime {
+                                editDateRow(title: "Date", selection: $date, components: .date)
+                            } else {
+                                editDateRow(title: "Start Date", selection: $date, components: .date)
+                                Divider().padding(.leading, 14)
+                                editDateRow(title: "End Date", selection: $endDate, range: date..., components: .date)
+                                Divider().padding(.leading, 14)
+
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text(localizedAppString("Repeat On"))
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(AppTheme.text)
+
+                                    HStack(spacing: 4) {
+                                        ForEach(weekdays, id: \.0) { weekday in
+                                            Button {
+                                                toggleWeekday(weekday.0)
+                                            } label: {
+                                                Text(localizedAppString(weekday.1))
+                                                    .font(.caption2.weight(.bold))
+                                                    .foregroundStyle(selectedWeekdays.contains(weekday.0) ? .white : AppTheme.accent)
+                                                    .frame(width: 38, height: 38)
+                                                    .background(selectedWeekdays.contains(weekday.0) ? AppTheme.accent : AppTheme.accent.opacity(0.12))
+                                                    .clipShape(Circle())
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                    }
+                                }
+                                .padding(14)
+                            }
+
+                            Divider()
+                            editDateRow(title: "Start Time", selection: $startTime, components: .hourAndMinute)
+                            Divider()
+                            editDateRow(title: "End Time", selection: $endTime, components: .hourAndMinute)
+                        }
+                        .background(AppTheme.panel)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(localizedAppString("Notes"))
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+                            TextField(localizedAppString("Add notes"), text: $notes, axis: .vertical)
+                                .lineLimit(3...6)
+                                .padding(14)
+                                .background(AppTheme.panel)
+                                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        }
+                    }
+                    .padding(20)
+                }
+
+                VStack(spacing: 10) {
+                    if wasRepeating {
+                        saveButton(title: "Save Changes for All", scope: .all)
+                        saveButton(title: "Save Changes for This One", scope: .one)
+                    } else {
+                        saveButton(title: "Save Changes", scope: .one)
+                    }
+                }
+                .padding(20)
+                .background(AppTheme.background)
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle(localizedAppString("Edit Therapy Session"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarCloseButton { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func editDateRow(
+        title: String,
+        selection: Binding<Date>,
+        range: PartialRangeFrom<Date>? = nil,
+        components: DatePickerComponents
+    ) -> some View {
+        HStack {
+            Text(localizedAppString(title))
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(AppTheme.text)
+            Spacer()
+            if let range {
+                DatePicker(localizedAppString(title), selection: selection, in: range, displayedComponents: components)
+                    .labelsHidden()
+                    .datePickerStyle(.compact)
+            } else {
+                DatePicker(localizedAppString(title), selection: selection, displayedComponents: components)
+                    .labelsHidden()
+                    .datePickerStyle(.compact)
+            }
+        }
+        .padding(14)
+    }
+
+    private func saveButton(title: String, scope: TherapyScheduleSessionEditScope) -> some View {
+        Button {
+            onSave(
+                TherapyScheduleSessionEditRequest(
+                    session: updatedSession,
+                    scope: scope,
+                    mode: scheduleMode,
+                    startDate: date,
+                    endDate: endDate,
+                    weekdays: selectedWeekdays,
+                    wasRepeating: wasRepeating,
+                    originalSeriesSessionIDs: Set((seriesSessions.isEmpty ? [session] : seriesSessions).map(\.id))
+                )
+            )
+            dismiss()
+        } label: {
+            Text(localizedAppString(title))
+                .font(.headline.weight(.bold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 52)
+                .background(isValid ? AppTheme.accent : Color.gray.opacity(0.35))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(!isValid)
+    }
+
+    private func toggleWeekday(_ weekday: Int) {
+        if selectedWeekdays.contains(weekday) {
+            selectedWeekdays.remove(weekday)
+        } else {
+            selectedWeekdays.insert(weekday)
+        }
+    }
+}
+
+private struct TherapyScheduleSessionSheet: View {
+    private enum ScheduleMode: String, CaseIterable, Identifiable {
+        case oneTime = "One Time"
+        case repeating = "Repeating"
+
+        var id: String { rawValue }
+    }
+
+    @Environment(\.dismiss) private var dismiss
+    let initialDate: Date
+    let onSave: ([TherapyScheduledSession]) -> Void
+
+    @State private var title = ""
+    @State private var date: Date
+    @State private var endDate: Date
+    @State private var startTime: Date
+    @State private var endTime: Date
+    @State private var therapyType = "Physical"
+    @State private var scheduleMode: ScheduleMode = .oneTime
+    @State private var selectedWeekdays: Set<Int>
+    @State private var notes = ""
+
+    private let therapyTypes = ["Physical", "Occupational", "Speech", "Behavioral", "Social", "Other"]
+    private let weekdays = [(1, "Sun"), (2, "Mon"), (3, "Tue"), (4, "Wed"), (5, "Thu"), (6, "Fri"), (7, "Sat")]
+
+    init(initialDate: Date, onSave: @escaping ([TherapyScheduledSession]) -> Void) {
+        self.initialDate = initialDate
+        self.onSave = onSave
+        self._date = State(initialValue: initialDate)
+        self._endDate = State(initialValue: Calendar.current.date(byAdding: .month, value: 1, to: initialDate) ?? initialDate)
+        self._startTime = State(initialValue: Date())
+        self._endTime = State(initialValue: Calendar.current.date(byAdding: .hour, value: 1, to: Date()) ?? Date())
+        self._selectedWeekdays = State(initialValue: [Calendar.current.component(.weekday, from: initialDate)])
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "calendar")
+                                .font(.title3.weight(.bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 44, height: 44)
+                                .background(AppTheme.accent)
+                                .clipShape(Circle())
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(localizedAppString("Therapy Schedule"))
+                                    .font(.title3.weight(.bold))
+                                    .foregroundStyle(AppTheme.text)
+                                Text(localizedAppString("Add Therapy Session"))
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+
+                        VStack(spacing: 0) {
+                            TextField(localizedAppString("Session Title"), text: $title)
+                                .font(.headline.weight(.semibold))
+                                .padding(14)
+
+                            Divider()
+
+                            HStack {
+                                Text(localizedAppString("Therapy Type"))
+                                    .font(.headline.weight(.semibold))
+                                    .foregroundStyle(AppTheme.text)
+                                Spacer()
+                                Picker(localizedAppString("Therapy Type"), selection: $therapyType) {
+                                    ForEach(therapyTypes, id: \.self) { type in
+                                        Text(localizedAppString(type)).tag(type)
+                                    }
+                                }
+                                .tint(AppTheme.accent)
+                            }
+                            .padding(14)
+
+                            Divider()
+
+                            Picker(localizedAppString("Schedule"), selection: $scheduleMode) {
+                                ForEach(ScheduleMode.allCases) { mode in
+                                    Text(localizedAppString(mode.rawValue)).tag(mode)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .padding(14)
+
+                            Divider()
+
+                            if scheduleMode == .oneTime {
+                                scheduleDateRow(title: "Date", selection: $date, components: .date)
+                            } else {
+                                scheduleDateRow(title: "Start Date", selection: $date, components: .date)
+                                Divider().padding(.leading, 14)
+                                scheduleDateRow(title: "End Date", selection: $endDate, range: date..., components: .date)
+                                Divider().padding(.leading, 14)
+
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text(localizedAppString("Repeat On"))
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(AppTheme.text)
+
+                                    HStack(spacing: 4) {
+                                        ForEach(weekdays, id: \.0) { weekday in
+                                            Button {
+                                                toggleWeekday(weekday.0)
+                                            } label: {
+                                                Text(localizedAppString(weekday.1))
+                                                    .font(.caption2.weight(.bold))
+                                                    .foregroundStyle(selectedWeekdays.contains(weekday.0) ? .white : AppTheme.accent)
+                                                    .frame(width: 38, height: 38)
+                                                    .background(selectedWeekdays.contains(weekday.0) ? AppTheme.accent : AppTheme.accent.opacity(0.12))
+                                                    .clipShape(Circle())
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                    }
+                                }
+                                .padding(14)
+                            }
+
+                            Divider()
+                            scheduleDateRow(title: "Start Time", selection: $startTime, components: .hourAndMinute)
+                            Divider()
+                            scheduleDateRow(title: "End Time", selection: $endTime, components: .hourAndMinute)
+                        }
+                        .background(AppTheme.panel)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(localizedAppString("Notes"))
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+                            TextField(localizedAppString("Add notes"), text: $notes, axis: .vertical)
+                                .lineLimit(3...6)
+                                .padding(14)
+                                .background(AppTheme.panel)
+                                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        }
+                    }
+                    .padding(20)
+                }
+                StickyBottomSaveButton(title: "Save", tint: AppTheme.accent, isDisabled: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (scheduleMode == .repeating && selectedWeekdays.isEmpty)) {
+                    onSave(sessionsToSave)
+                    dismiss()
+                }
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle(localizedAppString("Session"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarCloseButton {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+
+    private func scheduleDateRow(
+        title: String,
+        selection: Binding<Date>,
+        range: PartialRangeFrom<Date>? = nil,
+        components: DatePickerComponents
+    ) -> some View {
+        HStack {
+            Text(localizedAppString(title))
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(AppTheme.text)
+            Spacer()
+            if let range {
+                DatePicker(localizedAppString(title), selection: selection, in: range, displayedComponents: components)
+                    .labelsHidden()
+                    .datePickerStyle(.compact)
+            } else {
+                DatePicker(localizedAppString(title), selection: selection, displayedComponents: components)
+                    .labelsHidden()
+                    .datePickerStyle(.compact)
+            }
+        }
+        .padding(14)
+    }
+
+    private var sessionsToSave: [TherapyScheduledSession] {
+        let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        let calendar = Calendar.current
+        let finalDate = scheduleMode == .repeating ? max(date, endDate) : date
+        var scheduledDates: [Date] = []
+        let recurrenceID = scheduleMode == .repeating ? UUID() : nil
+        var nextDate = calendar.startOfDay(for: date)
+
+        while nextDate <= finalDate {
+            if scheduleMode == .oneTime || selectedWeekdays.contains(calendar.component(.weekday, from: nextDate)) {
+                scheduledDates.append(nextDate)
+            }
+            guard scheduleMode == .repeating else { break }
+            nextDate = calendar.date(byAdding: .day, value: 1, to: nextDate) ?? finalDate.addingTimeInterval(1)
+        }
+
+        return scheduledDates.map {
+            TherapyScheduledSession(
+                title: title,
+                date: $0,
+                startTime: startTime,
+                endTime: endTime,
+                therapyType: therapyType,
+                notes: notes,
+                recurrenceID: recurrenceID
+            )
+        }
+    }
+
+    private func toggleWeekday(_ weekday: Int) {
+        if selectedWeekdays.contains(weekday) {
+            selectedWeekdays.remove(weekday)
+        } else {
+            selectedWeekdays.insert(weekday)
         }
     }
 }
@@ -15420,10 +16880,10 @@ struct TherapyCategory: Identifiable {
         ),
         TherapyCategory(
             id: "feeding",
-            title: "Feeding",
+            title: "Others",
             icon: "fork.knife",
             tint: Color(red: 0.50, green: 0.73, blue: 0.48),
-            examples: "Textures, chewing, new foods, hydration"
+            examples: "Additional therapy goals and supports"
         )
     ]
 
@@ -15440,6 +16900,7 @@ struct TherapyMilestone: Identifiable, Codable {
     let milestone: String
     let supportLevel: String
     let notes: String
+    let attachments: [DiagnosisAttachment]?
 
     init(
         id: UUID = UUID(),
@@ -15448,7 +16909,8 @@ struct TherapyMilestone: Identifiable, Codable {
         date: Date,
         milestone: String,
         supportLevel: String,
-        notes: String
+        notes: String,
+        attachments: [DiagnosisAttachment] = []
     ) {
         self.id = id
         self.categoryID = categoryID
@@ -15457,12 +16919,14 @@ struct TherapyMilestone: Identifiable, Codable {
         self.milestone = milestone
         self.supportLevel = supportLevel
         self.notes = notes
+        self.attachments = attachments
     }
 }
 
 struct TherapyCategoryCard: View {
     let category: TherapyCategory
     let count: Int
+    var showsCount = true
     let action: () -> Void
 
     var body: some View {
@@ -15476,14 +16940,16 @@ struct TherapyCategoryCard: View {
                         .background(category.tint)
                         .clipShape(Circle())
 
-                    Spacer()
+                    if showsCount {
+                        Spacer()
 
-                    Text("\(count)")
-                        .font(.caption.weight(.black))
-                        .foregroundStyle(category.tint)
-                        .frame(width: 30, height: 30)
-                        .background(category.tint.opacity(0.14))
-                        .clipShape(Circle())
+                        Text("\(count)")
+                            .font(.caption.weight(.black))
+                            .foregroundStyle(category.tint)
+                            .frame(width: 30, height: 30)
+                            .background(category.tint.opacity(0.14))
+                            .clipShape(Circle())
+                    }
                 }
 
                 Text(LocalizedStringKey(category.title))
@@ -15513,19 +16979,30 @@ struct TherapyCategoryCard: View {
 
 struct TherapyMilestoneRow: View {
     let milestone: TherapyMilestone
+    var showsAttachmentPreview = false
 
     private var category: TherapyCategory? {
         TherapyCategory.category(id: milestone.categoryID)
     }
 
+    private var previewAttachment: DiagnosisAttachment? {
+        let attachments = milestone.attachments ?? []
+        return attachments.first(where: { $0.kind == .photo })
+            ?? attachments.first(where: { $0.kind == .video })
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: category?.icon ?? "star.fill")
-                .font(.subheadline.weight(.bold))
-                .foregroundStyle(.white)
-                .frame(width: 34, height: 34)
-                .background(category?.tint ?? AppTheme.accent)
-                .clipShape(Circle())
+            if showsAttachmentPreview, let previewAttachment {
+                MilestoneAttachmentThumbnail(attachment: previewAttachment)
+            } else {
+                Image(systemName: category?.icon ?? "star.fill")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 34)
+                    .background(category?.tint ?? AppTheme.accent)
+                    .clipShape(Circle())
+            }
 
             VStack(alignment: .leading, spacing: 5) {
                 HStack(alignment: .firstTextBaseline) {
@@ -15545,9 +17022,11 @@ struct TherapyMilestoneRow: View {
                     .foregroundStyle(AppTheme.text)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Text(LocalizedStringKey(milestone.supportLevel))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                if !milestone.supportLevel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(LocalizedStringKey(milestone.supportLevel))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
 
                 if !milestone.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text(milestone.notes)
@@ -15560,6 +17039,51 @@ struct TherapyMilestoneRow: View {
         .padding(12)
         .background(AppTheme.fieldBackground)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+private struct MilestoneAttachmentThumbnail: View {
+    let attachment: DiagnosisAttachment
+    @State private var videoThumbnail: UIImage?
+
+    var body: some View {
+        ZStack {
+            if attachment.kind == .photo, let image = UIImage(data: attachment.data) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else if let videoThumbnail {
+                Image(uiImage: videoThumbnail)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Color.secondary.opacity(0.12)
+                Image(systemName: "video.fill")
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(AppTheme.accent)
+            }
+
+            if attachment.kind == .video {
+                Image(systemName: "play.fill")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 24, height: 24)
+                    .background(.black.opacity(0.55))
+                    .clipShape(Circle())
+            }
+        }
+        .frame(width: 64, height: 64)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .task(id: attachment.id) {
+            guard attachment.kind == .video,
+                  let url = DiagnosisAttachment.storedVideoURL(for: attachment) else {
+                return
+            }
+
+            let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+            generator.appliesPreferredTrackTransform = true
+            videoThumbnail = try? UIImage(cgImage: generator.copyCGImage(at: .zero, actualTime: nil))
+        }
     }
 }
 
@@ -15624,31 +17148,32 @@ struct TherapyMilestoneHistoryView: View {
                 }
                 .authPanel()
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(localizedAppString("Time Frame"))
-                        .font(.headline.weight(.bold))
-                        .foregroundStyle(AppTheme.text)
+                HStack(spacing: 8) {
+                    DatePicker(
+                        localizedAppString("Start Date"),
+                        selection: $startDate,
+                        displayedComponents: .date
+                    )
+                    .labelsHidden()
+                    .datePickerStyle(.compact)
 
-                    VStack(spacing: 10) {
-                        DatePicker(
-                            localizedAppString("Start Date"),
-                            selection: $startDate,
-                            displayedComponents: .date
-                        )
-                        .font(.subheadline.weight(.semibold))
+                    Text("-")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.secondary)
 
-                        DatePicker(
-                            localizedAppString("End Date"),
-                            selection: $endDate,
-                            displayedComponents: .date
-                        )
-                        .font(.subheadline.weight(.semibold))
-                    }
-                    .padding(12)
-                    .background(AppTheme.fieldBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    DatePicker(
+                        localizedAppString("End Date"),
+                        selection: $endDate,
+                        displayedComponents: .date
+                    )
+                    .labelsHidden()
+                    .datePickerStyle(.compact)
                 }
-                .authPanel()
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(AppTheme.fieldBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 12) {
                     Text(localizedAppString("Milestones"))
@@ -15709,15 +17234,25 @@ struct TherapyFilterChip: View {
 }
 
 struct TherapyMilestoneSheet: View {
+    enum FormMode {
+        case therapySession
+        case milestone
+    }
+
     @Environment(\.dismiss) private var dismiss
 
     let category: TherapyCategory
     let onSave: (TherapyMilestone) -> Void
+    let mode: FormMode
 
     @State private var date = Date()
     @State private var milestone = ""
     @State private var supportLevel = "With full support"
     @State private var notes = ""
+    @State private var attachments: [DiagnosisAttachment] = []
+    @State private var selectedPhotos: [PhotosPickerItem] = []
+    @State private var selectedVideos: [PhotosPickerItem] = []
+    @State private var attachmentStatus = ""
 
     private let supportLevels = [
         "With full support",
@@ -15726,6 +17261,12 @@ struct TherapyMilestoneSheet: View {
         "Mostly independent",
         "Independent"
     ]
+
+    init(category: TherapyCategory, mode: FormMode = .therapySession, onSave: @escaping (TherapyMilestone) -> Void) {
+        self.category = category
+        self.mode = mode
+        self.onSave = onSave
+    }
 
     var body: some View {
         NavigationStack {
@@ -15745,7 +17286,7 @@ struct TherapyMilestoneSheet: View {
                                     .font(.title3.weight(.bold))
                                     .foregroundStyle(AppTheme.text)
 
-                                Text(localizedAppString("Log a new milestone"))
+                                Text(localizedAppString(mode == .milestone ? "Log a new milestone" : "Log a new therapy session reflection"))
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(.secondary)
                             }
@@ -15758,35 +17299,39 @@ struct TherapyMilestoneSheet: View {
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                         ProfileTextField(
-                            title: "Milestone",
+                            title: mode == .milestone ? "Milestone or Achievement" : "Skill Practiced",
                             text: $milestone,
-                            placeholder: "Example: Used two-word request",
+                            placeholder: mode == .milestone ? "Example: Rode a bike independently" : "Example: Used two-word request",
                             axis: .vertical
                         )
 
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(localizedAppString("Support level"))
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(AppTheme.text)
+                        if mode == .therapySession {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(localizedAppString("Support level"))
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(AppTheme.text)
 
-                            Picker(localizedAppString("Support level"), selection: $supportLevel) {
-                                ForEach(supportLevels, id: \.self) { level in
-                                    Text(LocalizedStringKey(level)).tag(level)
+                                Picker(localizedAppString("Support level"), selection: $supportLevel) {
+                                    ForEach(supportLevels, id: \.self) { level in
+                                        Text(LocalizedStringKey(level)).tag(level)
+                                    }
                                 }
+                                .pickerStyle(.menu)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(12)
+                                .background(AppTheme.fieldBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                             }
-                            .pickerStyle(.menu)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(12)
-                            .background(AppTheme.fieldBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        }
 
-                        ProfileTextField(
-                            title: "Notes",
-                            text: $notes,
-                            placeholder: "What helped, where it happened, or what to practice next",
-                            axis: .vertical
-                        )
+                            ProfileTextField(
+                                title: "Notes",
+                                text: $notes,
+                                placeholder: "What helped, where it happened, or what to practice next",
+                                axis: .vertical
+                            )
+                        } else {
+                            milestoneAttachments
+                        }
                     }
                     .padding(20)
                 }
@@ -15800,13 +17345,35 @@ struct TherapyMilestoneSheet: View {
                 }
             }
             .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle(localizedAppString("Milestone"))
+            .navigationTitle(localizedAppString(mode == .milestone ? "Milestone" : "Session"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     ToolbarCloseButton {
                         dismiss()
                     }
+                }
+            }
+        }
+        .onChange(of: selectedPhotos) { _, newValue in
+            guard !newValue.isEmpty else { return }
+            Task {
+                let photoData = await DiagnosisAttachmentHelper.loadPhotoData(from: newValue)
+                await MainActor.run {
+                    let photoCount = attachments.filter { $0.kind == .photo }.count
+                    attachments.append(contentsOf: DiagnosisAttachmentHelper.photoAttachments(from: photoData, startingAt: photoCount))
+                    selectedPhotos = []
+                }
+            }
+        }
+        .onChange(of: selectedVideos) { _, newValue in
+            guard !newValue.isEmpty else { return }
+            Task {
+                let imported = await DiagnosisAttachmentHelper.videoAttachments(from: newValue)
+                await MainActor.run {
+                    attachments.append(contentsOf: imported.0)
+                    attachmentStatus = imported.1
+                    selectedVideos = []
                 }
             }
         }
@@ -15822,16 +17389,57 @@ struct TherapyMilestoneSheet: View {
                 categoryTitle: category.title,
                 date: date,
                 milestone: trimmedMilestone,
-                supportLevel: supportLevel,
-                notes: notes.trimmingCharacters(in: .whitespacesAndNewlines)
+                supportLevel: mode == .therapySession ? supportLevel : "",
+                notes: mode == .therapySession ? notes.trimmingCharacters(in: .whitespacesAndNewlines) : "",
+                attachments: attachments
             )
         )
         dismiss()
+    }
+
+    private var milestoneAttachments: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(localizedAppString("Photos and Videos"))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppTheme.text)
+
+            HStack(spacing: 10) {
+                PhotosPicker(selection: $selectedPhotos, matching: .images) {
+                    DiagnosisAttachmentAction(title: "Upload Photo", icon: "photo.on.rectangle")
+                }
+                .buttonStyle(.plain)
+
+                PhotosPicker(selection: $selectedVideos, matching: .videos) {
+                    DiagnosisAttachmentAction(title: "Upload Video", icon: "video.fill")
+                }
+                .buttonStyle(.plain)
+            }
+
+            Text(localizedAppString("Videos can be no longer than 30 seconds."))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.red)
+            Text(localizedAppString("Videos must be smaller than 100 MB."))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.red)
+
+            if !attachmentStatus.isEmpty {
+                Text(attachmentStatus)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(attachmentStatusColor(attachmentStatus))
+            }
+
+            ForEach(attachments) { attachment in
+                DiagnosisAttachmentRow(attachment: attachment) {
+                    attachments.removeAll { $0.id == attachment.id }
+                }
+            }
+        }
     }
 }
 
 struct NutrientView: View {
     let user: CarePortalUser
+    let isEmbedded: Bool
 
     @AppStorage(AppLanguage.storageKey) private var languageCode = AppLanguage.english.rawValue
     @AppStorage private var mealPhotoData: Data
@@ -15852,8 +17460,9 @@ struct NutrientView: View {
     @State private var activeMealPDF: MealPDFShareItem?
     @State private var nutritionGoals = NutritionGoals()
 
-    init(user: CarePortalUser) {
+    init(user: CarePortalUser, isEmbedded: Bool = false) {
         self.user = user
+        self.isEmbedded = isEmbedded
         self._mealPhotoData = AppStorage(wrappedValue: Data(), "nutrient.\(user.id).mealPhotoData")
         self._mealEstimateData = AppStorage(wrappedValue: Data(), "nutrient.\(user.id).mealEstimateData")
         self._savedMealHistoryData = AppStorage(wrappedValue: Data(), "nutrient.\(user.id).savedMealHistoryData")
@@ -15863,8 +17472,19 @@ struct NutrientView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
+        Group {
+            if isEmbedded {
+                nutrientContent
+            } else {
+                NavigationStack {
+                    nutrientContent
+                }
+            }
+        }
+    }
+
+    private var nutrientContent: some View {
+        ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     HStack(alignment: .top, spacing: 12) {
                         PageHeader(
@@ -15886,6 +17506,35 @@ struct NutrientView: View {
                         .accessibilityLabel(localizedAppString("Meal history"))
                         .padding(.top, 2)
                     }
+
+                    NavigationLink {
+                        NutritionGoalsPage(goals: $nutritionGoals) {
+                            saveNutritionGoals()
+                        }
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "target")
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 36, height: 36)
+                                .background(AppTheme.accent)
+                                .clipShape(Circle())
+
+                            Text(localizedAppString(nutritionGoals.isEmpty ? "Set Nutrition Goals" : "View Nutrition Goals"))
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            Spacer()
+
+                            Image(systemName: "chevron.right")
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.text.opacity(0.65))
+                        }
+                        .padding(16)
+                        .background(AppTheme.panel)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
 
                     Button {
                         isManualMealEntryPresented = true
@@ -15919,28 +17568,6 @@ struct NutrientView: View {
                             estimateCount: dailyUsage.estimateCount,
                             limit: dailyEstimateLimit
                         )
-
-                        NavigationLink {
-                            NutritionGoalsPage(goals: $nutritionGoals) {
-                                saveNutritionGoals()
-                            }
-                        } label: {
-                            HStack(spacing: 12) {
-                                Text(localizedAppString(nutritionGoals.isEmpty ? "Set Nutrition Goals" : "View Nutrition Goals"))
-                                    .font(.headline.weight(.bold))
-                                    .foregroundStyle(AppTheme.accent)
-
-                                Spacer()
-
-                                Image(systemName: "chevron.right")
-                                    .font(.headline.weight(.bold))
-                                    .foregroundStyle(AppTheme.text.opacity(0.75))
-                            }
-                            .padding(16)
-                            .background(AppTheme.panel)
-                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        }
-                        .buttonStyle(.plain)
 
                         Button {
                             openMealPhotoSource()
@@ -16030,7 +17657,8 @@ struct NutrientView: View {
                 .padding(20)
             }
             .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle(localizedAppString("Nutrient"))
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 resetCurrentMealForNextImage()
                 loadStoredNutritionGoals()
@@ -16080,7 +17708,6 @@ struct NutrientView: View {
                     saveManualMeal(imageData: imageData, estimate: estimate)
                 }
             }
-        }
     }
 
     private func resetCurrentMealForNextImage() {
@@ -16429,6 +18056,210 @@ struct NutrientView: View {
         }
 
         return "data:image/jpeg;base64,\(mealPhotoData.base64EncodedString())"
+    }
+}
+
+private struct MilestoneCategoryScrollObserver: UIViewRepresentable {
+    let onScroll: (CGFloat, CGFloat, CGFloat) -> Void
+
+    func makeUIView(context: Context) -> OffsetView {
+        OffsetView(onScroll: onScroll)
+    }
+
+    func updateUIView(_ uiView: OffsetView, context: Context) {
+        uiView.onScroll = onScroll
+        uiView.connectToScrollView()
+    }
+
+    final class OffsetView: UIView {
+        var onScroll: (CGFloat, CGFloat, CGFloat) -> Void
+        private weak var observedScrollView: UIScrollView?
+        private var observation: NSKeyValueObservation?
+
+        init(onScroll: @escaping (CGFloat, CGFloat, CGFloat) -> Void) {
+            self.onScroll = onScroll
+            super.init(frame: .zero)
+            isUserInteractionEnabled = false
+        }
+
+        required init?(coder: NSCoder) {
+            nil
+        }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            DispatchQueue.main.async { [weak self] in
+                self?.connectToScrollView()
+            }
+        }
+
+        func connectToScrollView() {
+            guard observedScrollView == nil else { return }
+
+            var ancestor = superview
+            while let currentView = ancestor {
+                if let scrollView = currentView as? UIScrollView {
+                    observedScrollView = scrollView
+                    observation = scrollView.observe(\.contentOffset, options: [.initial, .new]) { [weak self] scrollView, _ in
+                        self?.onScroll(
+                            scrollView.contentOffset.x,
+                            scrollView.bounds.width,
+                            scrollView.contentSize.width
+                        )
+                    }
+                    return
+                }
+                ancestor = currentView.superview
+            }
+        }
+    }
+}
+
+struct MilestonesView: View {
+    let user: CarePortalUser
+
+    @AppStorage private var milestoneData: Data
+    @State private var activeCategory: TherapyCategory?
+    @State private var categoryScrollOffset: CGFloat = 0
+    @State private var categoryViewportWidth: CGFloat = 0
+    @State private var categoryContentWidth: CGFloat = 0
+
+    init(user: CarePortalUser) {
+        self.user = user
+        self._milestoneData = AppStorage(wrappedValue: Data(), "milestones.\(user.id).sessionData")
+    }
+
+    private var milestones: [TherapyMilestone] {
+        guard !milestoneData.isEmpty else { return [] }
+        return (try? JSONDecoder().decode([TherapyMilestone].self, from: milestoneData)) ?? []
+    }
+
+    private var recentMilestones: [TherapyMilestone] {
+        milestones.sorted { $0.date > $1.date }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    PageHeader(
+                        icon: "trophy.fill",
+                        title: "Milestones",
+                        subtitle: "Log milestones and wins to see your child's progress over time!"
+                    )
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text(localizedAppString("Recent Milestones"))
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            Spacer()
+
+                            NavigationLink {
+                                TherapyMilestoneHistoryView(milestones: milestones)
+                            } label: {
+                                Label(localizedAppString("History"), systemImage: "clock.arrow.circlepath")
+                                    .font(.caption.weight(.black))
+                                    .foregroundStyle(AppTheme.accent)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 8)
+                                    .background(AppTheme.accent.opacity(0.12))
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        if recentMilestones.isEmpty {
+                            Text(localizedAppString("No milestones logged yet."))
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(14)
+                                .background(AppTheme.panel)
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        } else if let latestMilestone = recentMilestones.first {
+                            TherapyMilestoneRow(
+                                milestone: latestMilestone,
+                                showsAttachmentPreview: true
+                            )
+                        }
+                    }
+                    .authPanel()
+
+                    Text(localizedAppString("Log a Milestone!"))
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(AppTheme.text)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(spacing: 12) {
+                            MilestoneCategoryScrollObserver { offset, viewportWidth, contentWidth in
+                                categoryScrollOffset = max(0, offset)
+                                categoryViewportWidth = viewportWidth
+                                categoryContentWidth = contentWidth
+                            }
+                            .frame(width: 0, height: 0)
+
+                            ForEach(TherapyCategory.all) { category in
+                                TherapyCategoryCard(
+                                    category: category,
+                                    count: milestones.filter { $0.categoryID == category.id }.count,
+                                    showsCount: false
+                                ) {
+                                    activeCategory = category
+                                }
+                                .frame(width: 156)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+
+                    milestoneScrollIndicator
+                }
+                .padding(20)
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle(localizedAppString("Milestones"))
+            .sheet(item: $activeCategory) { category in
+                TherapyMilestoneSheet(category: category, mode: .milestone) { milestone in
+                    saveMilestone(milestone)
+                }
+            }
+        }
+    }
+
+    private func saveMilestone(_ milestone: TherapyMilestone) {
+        var updatedMilestones = milestones
+        updatedMilestones.append(milestone)
+        updatedMilestones.sort { $0.date < $1.date }
+
+        if let data = try? JSONEncoder().encode(updatedMilestones) {
+            milestoneData = data
+        }
+    }
+
+    private var milestoneScrollIndicator: some View {
+        GeometryReader { proxy in
+            let trackWidth = proxy.size.width
+            let scrollableWidth = max(0, categoryContentWidth - categoryViewportWidth)
+            let thumbWidth = max(38, min(72, trackWidth * categoryViewportWidth / max(categoryContentWidth, 1)))
+            let travel = max(0, trackWidth - thumbWidth)
+            let progress = scrollableWidth > 0
+                ? min(max(categoryScrollOffset / scrollableWidth, 0), 1)
+                : 0
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.secondary.opacity(0.12))
+
+                Capsule()
+                    .fill(Color.secondary.opacity(0.38))
+                    .frame(width: thumbWidth)
+                    .offset(x: travel * progress)
+            }
+        }
+        .frame(height: 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -17538,9 +19369,10 @@ struct ProfileView: View {
     let user: CarePortalUser
     let logout: () -> Void
 
-    @State private var selectedPhoto: PhotosPickerItem?
     @State private var pendingProfileImageData: Data?
+    @State private var isPhotoSourcePickerPresented = false
     @State private var isCameraPresented = false
+    @State private var isPhotoLibraryPresented = false
     @AppStorage private var profileImageData: Data
 
     init(user: CarePortalUser, logout: @escaping () -> Void) {
@@ -17556,19 +19388,31 @@ struct ProfileView: View {
                     ProfileHeader(
                         user: user,
                         imageData: profileImageData,
-                        selectedPhoto: $selectedPhoto,
-                        showCamera: { isCameraPresented = true }
+                        showPhotoOptions: { isPhotoSourcePickerPresented = true }
                     )
 
-                    VStack(alignment: .leading, spacing: 14) {
-                        Text(localizedAppString("Parent Account"))
-                            .font(.title3.weight(.bold))
+                    NavigationLink {
+                        BasicInfoView(user: user)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 14) {
+                            HStack {
+                                Text(localizedAppString("Account Info"))
+                                    .font(.title3.weight(.bold))
 
-                        InfoRow(title: "Parent Username", value: user.nickname)
-                        InfoRow(title: "Parent Email", value: user.email)
-                        InfoRow(title: "Account Type", value: localizedAppString("Parent"))
+                                Spacer()
+
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.black))
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            InfoRow(title: "Parent Username", value: user.nickname)
+                            InfoRow(title: "Parent Email", value: user.email)
+                            InfoRow(title: "Account Type", value: localizedAppString("Parent"))
+                        }
                     }
                     .authPanel()
+                    .buttonStyle(.plain)
 
                     NavigationLink {
                         SettingsMenuView(user: user)
@@ -17615,14 +19459,31 @@ struct ProfileView: View {
             }
             .background(AppTheme.background.ignoresSafeArea())
             .navigationTitle(localizedAppString("Profile"))
-            .onChange(of: selectedPhoto) { _, newPhoto in
-                guard let newPhoto else { return }
-                Task {
-                    await loadSelectedProfileImage(newPhoto)
+            .confirmationDialog(
+                localizedAppString("Update Profile Photo"),
+                isPresented: $isPhotoSourcePickerPresented,
+                titleVisibility: .visible
+            ) {
+                if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                    Button(localizedAppString("Take Photo")) {
+                        isCameraPresented = true
+                    }
                 }
+
+                Button(localizedAppString("Choose Photo")) {
+                    isPhotoLibraryPresented = true
+                }
+
+                Button(localizedAppString("Cancel"), role: .cancel) {}
             }
             .sheet(isPresented: $isCameraPresented) {
-                CameraPhotoPicker { data in
+                CameraPhotoPicker(sourceType: .camera) { data in
+                    pendingProfileImageData = data
+                }
+                .ignoresSafeArea()
+            }
+            .sheet(isPresented: $isPhotoLibraryPresented) {
+                CameraPhotoPicker(sourceType: .photoLibrary) { data in
                     pendingProfileImageData = data
                 }
                 .ignoresSafeArea()
@@ -17645,18 +19506,6 @@ struct ProfileView: View {
         }
     }
 
-    private func loadSelectedProfileImage(_ selectedPhoto: PhotosPickerItem) async {
-        do {
-            if let data = try await selectedPhoto.loadTransferable(type: Data.self) {
-                pendingProfileImageData = data
-            }
-        } catch {
-            // The picker is user-driven; keeping the current image is the least surprising fallback.
-        }
-
-        // A PhotosPickerItem is a one-time import request, not persistent profile state.
-        self.selectedPhoto = nil
-    }
 }
 
 struct SettingsMenuView: View {
@@ -17683,6 +19532,33 @@ struct SettingsMenuView: View {
                             .clipShape(Circle())
 
                         Text(localizedAppString("Change Password"))
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+
+                        Spacer()
+
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.black))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(14)
+                    .background(AppTheme.fieldBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+
+                NavigationLink {
+                    TermsAndConditionsView()
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "doc.text.fill")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.accent)
+                            .frame(width: 34, height: 34)
+                            .background(AppTheme.accent.opacity(0.12))
+                            .clipShape(Circle())
+
+                        Text(localizedAppString("Terms and Conditions"))
                             .font(.headline.weight(.bold))
                             .foregroundStyle(AppTheme.text)
 
@@ -17744,6 +19620,53 @@ struct SettingsMenuView: View {
 
             Button(localizedAppString("Cancel"), role: .cancel) {}
         }
+    }
+}
+
+struct TermsAndConditionsView: View {
+    private let sections = [
+        ("1. Acceptance of Terms", "TermsAcceptanceBody"),
+        ("2. Service Description", "TermsServiceDescriptionBody"),
+        ("3. User Responsibilities", "TermsUserResponsibilitiesBody"),
+        ("4. Medical Disclaimer", "TermsMedicalDisclaimerBody"),
+        ("5. AI Feature Disclaimer", "TermsAIDisclaimerBody"),
+        ("6. Privacy and Data", "TermsPrivacyDataBody"),
+        ("7. Intellectual Property", "TermsIntellectualPropertyBody"),
+        ("8. Limitation of Liability", "TermsLiabilityBody"),
+        ("9. Changes to Terms", "TermsChangesBody"),
+        ("10. Contact Information", "TermsContactBody")
+    ]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Text(localizedAppString("TermsIntro"))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .padding(.bottom, 2)
+
+                ForEach(sections, id: \.0) { title, body in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(localizedAppString(title))
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+
+                        Text(localizedAppString(body))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(AppTheme.panel)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+            }
+            .padding(20)
+        }
+        .background(AppTheme.background.ignoresSafeArea())
+        .navigationTitle(localizedAppString("Terms and Conditions"))
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -17829,8 +19752,7 @@ struct ChangePasswordView: View {
 struct ProfileHeader: View {
     let user: CarePortalUser
     let imageData: Data
-    @Binding var selectedPhoto: PhotosPickerItem?
-    let showCamera: () -> Void
+    let showPhotoOptions: () -> Void
 
     private var initials: String {
         user.nickname
@@ -17844,13 +19766,13 @@ struct ProfileHeader: View {
     var body: some View {
         VStack(spacing: 12) {
             ZStack(alignment: .bottomTrailing) {
-                PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                Button(action: showPhotoOptions) {
                     profileAvatar
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(localizedAppString("Choose Profile Photo"))
+                .accessibilityLabel(localizedAppString("Update Profile Photo"))
 
-                Button(action: showCamera) {
+                Button(action: showPhotoOptions) {
                     Image(systemName: "camera.fill")
                         .font(.caption.weight(.bold))
                         .foregroundStyle(.white)
@@ -17863,7 +19785,7 @@ struct ProfileHeader: View {
                         }
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(localizedAppString("Take Profile Photo"))
+                .accessibilityLabel(localizedAppString("Update Profile Photo"))
             }
 
             VStack(spacing: 6) {
@@ -17920,6 +19842,7 @@ struct ProfileHeader: View {
 }
 
 struct CameraPhotoPicker: UIViewControllerRepresentable {
+    let sourceType: UIImagePickerController.SourceType
     let onImageCaptured: (Data) -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -17930,7 +19853,7 @@ struct CameraPhotoPicker: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIImagePickerController {
         let picker = UIImagePickerController()
         picker.delegate = context.coordinator
-        picker.sourceType = UIImagePickerController.isSourceTypeAvailable(.camera) ? .camera : .photoLibrary
+        picker.sourceType = UIImagePickerController.isSourceTypeAvailable(sourceType) ? sourceType : .photoLibrary
         picker.cameraCaptureMode = .photo
         picker.allowsEditing = false
         return picker

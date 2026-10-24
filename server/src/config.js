@@ -3,6 +3,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(dirname, "../.env") });
+// Older local checkouts keep shared development settings in the repository root.
+// Server-specific settings take precedence whenever server/.env exists.
+dotenv.config({ path: path.resolve(dirname, "../../.env") });
 const list = (value) =>
   String(value)
     .split(",")
