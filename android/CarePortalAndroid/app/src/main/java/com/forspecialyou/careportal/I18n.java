@@ -90,6 +90,7 @@ final class I18n {
         zh.put("Category", "分类");
         zh.put("Health", "健康");
         zh.put("Therapy", "康复");
+        zh.put("Milestones", "里程碑");
         zh.put("Nutrient", "营养");
         zh.put("Profile", "我的");
         zh.put("%s's Day", "%s的一天");
@@ -263,6 +264,8 @@ final class I18n {
         zh.put("Child profile", "孩子档案");
         zh.put("Therapy Tracking", "康复追踪");
         zh.put("Log milestones and therapy wins to see your child's progress over time.", "记录里程碑和治疗进步，查看孩子的长期改善。");
+        zh.put("Log milestones and wins to see your child's progress over time.", "记录里程碑和成长收获，查看孩子的长期进步。");
+        zh.put("Log a Milestone!", "记录里程碑！");
         zh.put("Therapy Session", "治疗课程");
         zh.put("Physical", "物理治疗");
         zh.put("Occupational", "作业治疗");
@@ -270,6 +273,7 @@ final class I18n {
         zh.put("Behavioral/RDI", "行为/RDI");
         zh.put("Social", "社交");
         zh.put("Feeding", "进食训练");
+        zh.put("Others", "其他");
         zh.put("Appointments, exercises, notes", "预约、练习、备注");
         zh.put("Balance, strength, stairs, movement", "平衡、力量、楼梯、运动");
         zh.put("Fine motor, sensory, dressing, daily skills", "精细动作、感统、穿衣和日常技能");
@@ -277,9 +281,18 @@ final class I18n {
         zh.put("Transitions, regulation, coping, routines", "转换、情绪调节、应对和日常流程");
         zh.put("Play, turn-taking, peer interaction", "游戏、轮流和同伴互动");
         zh.put("Textures, chewing, new foods, hydration", "食物质地、咀嚼、新食物、饮水");
+        zh.put("Additional therapy goals and supports", "其他治疗目标和支持");
         zh.put("Recent Milestones", "最近里程碑");
         zh.put("No milestones logged yet.", "还没有记录里程碑。");
         zh.put("Milestone", "里程碑");
+        zh.put("Milestone or Achievement!", "里程碑或成就！");
+        zh.put("Example: Rode a scooter for the first time!", "例如：第一次骑滑板车！");
+        zh.put("Add Photo or Video", "添加照片或视频");
+        zh.put("Add a photo or video (videos: up to 30 seconds and 100 MB).", "添加照片或视频（视频最长 30 秒，最大 100 MB）。");
+        zh.put("Video selected", "已选择视频");
+        zh.put("Videos must be smaller than 100 MB.", "视频必须小于 100 MB。 ");
+        zh.put("Videos can be no longer than 30 seconds.", "视频不能超过 30 秒。 ");
+        zh.put("Play attached video", "播放附加视频");
         zh.put("Support level", "支持程度");
         zh.put("Add Meal Manually", "手动添加餐食");
         zh.put("Meal", "餐食");

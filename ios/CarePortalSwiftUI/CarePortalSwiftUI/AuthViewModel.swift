@@ -23,6 +23,7 @@ final class AuthViewModel: ObservableObject {
     @Published var isCaptchaRequired = false
     @Published var captchaCode = AuthViewModel.makeCaptchaCode()
     @Published var captchaInput = ""
+    @Published var shouldShowFirstLoginOnboarding = false
 
     private static let savedUserKey = "auth.savedCarePortalUser"
     private let api = AuthAPI()
@@ -67,6 +68,7 @@ final class AuthViewModel: ObservableObject {
             let user = try await api.login(username: loginNickname, password: loginPassword)
             currentUser = user
             saveUser(user)
+            prepareFirstLoginOnboarding(for: user, signedInAs: loginNickname)
             loginPassword = ""
             resetLoginProtection()
             await restoreServerAppData(for: user)
@@ -130,6 +132,7 @@ final class AuthViewModel: ObservableObject {
             signupEmail = ""
             signupPassword = ""
             signupVerifyPassword = ""
+            UserDefaults.standard.set(true, forKey: Self.pendingOnboardingKey(for: nickname))
             screen = .login
         } catch {
             showError(error.localizedDescription)
@@ -145,6 +148,36 @@ final class AuthViewModel: ObservableObject {
         resetLoginProtection()
         screen = .home
         clearMessage()
+    }
+
+    func completeFirstLoginOnboarding(
+        childName: String,
+        age: String,
+        gender: String,
+        diagnoses: String
+    ) {
+        guard let user = currentUser else { return }
+        let cleanName = childName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanDiagnoses = diagnoses.trimmingCharacters(in: .whitespacesAndNewlines)
+        UserDefaults.standard.set(cleanName, forKey: "profile.\(user.id).fullName")
+        UserDefaults.standard.set(cleanDiagnoses, forKey: "profile.\(user.id).phone")
+        UserDefaults.standard.set(age.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "profile.\(user.id).childAge")
+        UserDefaults.standard.set(gender, forKey: "profile.\(user.id).gender")
+        UserDefaults.standard.set(true, forKey: Self.completedOnboardingKey(for: user.id))
+        UserDefaults.standard.removeObject(forKey: Self.pendingOnboardingKey(for: user.nickname))
+        shouldShowFirstLoginOnboarding = false
+
+        let profile = ChildProfileSync(
+            fullName: cleanName,
+            birthDate: UserDefaults.standard.string(forKey: "profile.\(user.id).birthDate") ?? "",
+            supportNeeds: cleanDiagnoses,
+            homeSchoolNotes: UserDefaults.standard.string(forKey: "profile.\(user.id).address") ?? "",
+            emergencyContact: UserDefaults.standard.string(forKey: "profile.\(user.id).emergencyContact") ?? "",
+            careNotes: UserDefaults.standard.string(forKey: "profile.\(user.id).medicalNotes") ?? ""
+        )
+        Task {
+            try? await api.syncAppData(userId: user.id, childProfile: profile, healthLogs: nil)
+        }
     }
 
     func refreshCaptcha() {
@@ -183,6 +216,20 @@ final class AuthViewModel: ObservableObject {
     private func saveUser(_ user: CarePortalUser) {
         guard let data = try? JSONEncoder().encode(user) else { return }
         UserDefaults.standard.set(data, forKey: Self.savedUserKey)
+    }
+
+    private func prepareFirstLoginOnboarding(for user: CarePortalUser, signedInAs username: String) {
+        let isPending = UserDefaults.standard.bool(forKey: Self.pendingOnboardingKey(for: username))
+            || UserDefaults.standard.bool(forKey: Self.pendingOnboardingKey(for: user.nickname))
+        shouldShowFirstLoginOnboarding = isPending && !UserDefaults.standard.bool(forKey: Self.completedOnboardingKey(for: user.id))
+    }
+
+    private static func pendingOnboardingKey(for username: String) -> String {
+        "auth.pendingFirstLoginOnboarding.\(username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())"
+    }
+
+    private static func completedOnboardingKey(for userID: Int) -> String {
+        "auth.completedFirstLoginOnboarding.\(userID)"
     }
 
     private func restoreServerAppData(for user: CarePortalUser) async {

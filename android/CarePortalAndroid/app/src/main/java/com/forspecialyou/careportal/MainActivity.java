@@ -18,6 +18,8 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.MediaStore;
+import android.provider.OpenableColumns;
+import android.media.MediaMetadataRetriever;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
@@ -71,13 +73,15 @@ public final class MainActivity extends Activity {
 
     static final int REQUEST_GENERIC_PHOTO_CAMERA = 104;
 
+    static final int REQUEST_MILESTONE_MEDIA = 105;
+
     static final String[][] DIAGNOSIS_OPTIONS = { { "genetics", "Genetics" }, { "pediatricHealthClinic", "Pediatric Health Clinic (Early Screening)" }, { "developmentalBehavioral", "Developmental-Behavioral Pediatrics" }, { "childPsychiatryPsychology", "Child Psychiatry/Psychology" }, { "neurology", "Neurology" }, { "rehabilitationInterventions", "Rehabilitation / Interventions" }, { "gastroenterology", "Gastroenterology" }, { "oralRelated", "Oral Related (Stomatology)" }, { "dermatology", "Dermatology" }, { "orthopedics", "Orthopedics" }, { "stomatology", "Otolaryngology (ENT)" }, { "neurosurgery", "Neurosurgery" }, { "ophthalmology", "Ophthalmology" }, { "traditionalChineseMedicine", "Traditional Chinese Medicine" }, { "nutrition", "Nutrition" }, { "autismSpecialist", "Autism Specialist" }, { "other", "Other" } };
 
     static final String[][] QUICK_LOGS = { { "seizure", "Seizure Track" }, { "meltdown", "Meltdown" }, { "stimming", "Stimming/Tics" }, { "accident", "Accident" }, { "deescalation", "De-escalation" }, { "allergy", "Allergic Reaction" }, { "pain", "Pain" }, { "skin", "Skin" }, { "cyclicVomiting", "Cyclic Vomiting" }, { "discomfort", "Discomfort" }, { "medsFood", "Medicine" } };
 
     static final String[][] SNAPSHOTS = { { "sleep", "Sleep / Rest" }, { "digestion", "Digestion" }, { "nutrition", "Nutrition" }, { "mood", "Mood" }, { "height", "Height" }, { "weight", "Weight" } };
 
-    static final String[][] THERAPY_CATEGORIES = { { "therapySession", "Therapy Session", "Appointments, exercises, notes" }, { "physical", "Physical", "Balance, strength, stairs, movement" }, { "occupational", "Occupational", "Fine motor, sensory, dressing, daily skills" }, { "speech", "Speech", "Words, AAC, requests, social communication" }, { "behavioral", "Behavioral/RDI", "Transitions, regulation, coping, routines" }, { "social", "Social", "Play, turn-taking, peer interaction" }, { "feeding", "Feeding", "Textures, chewing, new foods, hydration" } };
+    static final String[][] THERAPY_CATEGORIES = { { "physical", "Physical", "Balance, strength, stairs, movement" }, { "occupational", "Occupational", "Fine motor, sensory, dressing, daily skills" }, { "speech", "Speech", "Words, AAC, requests, social communication" }, { "behavioral", "Behavioral/RDI", "Transitions, regulation, coping, routines" }, { "social", "Social", "Play, turn-taking, peer interaction" }, { "other", "Others", "Additional therapy goals and supports" } };
 
     Storage storage;
 
@@ -113,6 +117,8 @@ public final class MainActivity extends Activity {
 
     PhotoCallback pendingPhotoCallback;
 
+    MilestoneMediaCallback pendingMilestoneMediaCallback;
+
     JSONObject currentMealEstimate;
 
     boolean hasSavedCurrentMeal = false;
@@ -122,6 +128,15 @@ public final class MainActivity extends Activity {
     String healthHistoryCategoryId = "";
 
     String healthHistoryCategoryTitle = "";
+
+    boolean isNutritionPage = false;
+
+    boolean isFirstLoginOnboarding = false;
+    int onboardingSlide = 0;
+    String onboardingChildName = "";
+    String onboardingChildAge = "";
+    String onboardingGender = "Prefer not to say";
+    String onboardingDiagnoses = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -162,12 +177,16 @@ public final class MainActivity extends Activity {
             finishPendingPhoto(loadImageDataUrl(data.getData()));
         } else if (requestCode == REQUEST_GENERIC_PHOTO_CAMERA && resultCode == RESULT_OK) {
             finishPendingPhoto(imageDataUrlFromCameraResult(data));
+        } else if (requestCode == REQUEST_MILESTONE_MEDIA && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            finishPendingMilestoneMedia(data.getData(), data.getFlags());
         }
     }
 
     void render() {
         if (currentUser == null) {
             renderAuth();
+        } else if (isFirstLoginOnboarding) {
+            renderFirstLoginOnboarding();
         } else {
             renderApp();
         }
@@ -196,16 +215,140 @@ public final class MainActivity extends Activity {
         FrameLayout content = new FrameLayout(this);
         shell.addView(content, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
         content.addView(tabContent(), Ui.frameMatch());
-        if (!isHealthHistoryPage()) {
+        if (!isHealthHistoryPage() && !isNutritionPage) {
             shell.addView(bottomNav(), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 108)));
         }
         setContentView(shell);
+    }
+
+    void renderFirstLoginOnboarding() {
+        LinearLayout screen = Ui.screen(this);
+        screen.setPadding(Ui.dp(this, 24), Ui.dp(this, 42), Ui.dp(this, 24), Ui.dp(this, 22));
+        LinearLayout progress = Ui.h(this, 0);
+        for (int i = 0; i < 3; i++) {
+            View bar = new View(this);
+            bar.setBackground(Ui.round(i <= onboardingSlide ? AppColors.ACCENT : Ui.withAlpha(AppColors.ACCENT, 38), Ui.dp(this, 4)));
+            LinearLayout.LayoutParams barParams = new LinearLayout.LayoutParams(0, Ui.dp(this, 5), 1);
+            if (i < 2) barParams.rightMargin = Ui.dp(this, 8);
+            progress.addView(bar, barParams);
+        }
+        screen.addView(progress, Ui.matchWrap());
+        Ui.addSpacer(this, screen, 28);
+
+        if (onboardingSlide == 0) {
+            screen.addView(symbolIcon(R.drawable.ios_tab_profile, AppColors.ACCENT, Color.TRANSPARENT, 116, 8), Ui.fixed(this, 116, 116));
+            Ui.addSpacer(this, screen, 18);
+            TextView title = Ui.title(this, "For Special You");
+            title.setGravity(Gravity.CENTER);
+            screen.addView(title, Ui.matchWrap());
+            Ui.addSpacer(this, screen, 16);
+            TextView introduction = Ui.muted(this, "For Special You is created for parents or caretakers of special needs children with developmental delays to easily track their symptoms, daily life, milestones, therapy, and more. We aim to empower our children through navigable systems that log and support their unique needs.");
+            introduction.setTextSize(16);
+            introduction.setGravity(Gravity.CENTER);
+            screen.addView(introduction, Ui.matchWrap());
+        } else if (onboardingSlide == 1) {
+            TextView icon = Ui.text(this, "●", 52, AppColors.ACCENT, android.graphics.Typeface.BOLD);
+            icon.setGravity(Gravity.CENTER);
+            screen.addView(icon, Ui.matchWrap());
+            TextView title = Ui.sectionTitle(this, "Let's get to know your child");
+            title.setGravity(Gravity.CENTER);
+            screen.addView(title, Ui.matchWrap());
+            TextView subtitle = Ui.muted(this, "Tell us a little about them");
+            subtitle.setGravity(Gravity.CENTER);
+            screen.addView(subtitle, Ui.matchWrap());
+            Ui.addSpacer(this, screen, 24);
+            EditText name = Ui.edit(this, "Enter your child's name");
+            name.setText(onboardingChildName);
+            screen.addView(Ui.fieldGroup(this, "What is your child's name?", name), Ui.matchWrap());
+            Ui.addSpacer(this, screen, 16);
+            EditText age = Ui.edit(this, "Enter age");
+            age.setInputType(InputType.TYPE_CLASS_NUMBER);
+            age.setText(onboardingChildAge);
+            screen.addView(Ui.fieldGroup(this, "How old is your child?", age), Ui.matchWrap());
+            Ui.addSpacer(this, screen, 16);
+            Spinner gender = new Spinner(this);
+            String[] genders = { "Prefer not to say", "Female", "Male", "Nonbinary", "Self-describe" };
+            gender.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, genders));
+            for (int i = 0; i < genders.length; i++) if (genders[i].equals(onboardingGender)) gender.setSelection(i);
+            screen.addView(Ui.text(this, "Gender", 14, AppColors.TEXT, android.graphics.Typeface.BOLD), Ui.matchWrap());
+            screen.addView(gender, Ui.matchWrap());
+            Ui.addSpacer(this, screen, 16);
+            EditText diagnoses = Ui.edit(this, "Add diagnoses or conditions (optional)");
+            diagnoses.setText(onboardingDiagnoses);
+            screen.addView(Ui.fieldGroup(this, "Diagnosis or Conditions", diagnoses), Ui.matchWrap());
+            name.setTag(age);
+            age.setTag(gender);
+            gender.setTag(diagnoses);
+            screen.setTag(name);
+        } else {
+            TextView title = Ui.title(this, i18n.t("Terms and Conditions"));
+            title.setGravity(Gravity.CENTER);
+            screen.addView(title, Ui.matchWrap());
+            Ui.addSpacer(this, screen, 18);
+            TextView terms = Ui.muted(this, "For Special You helps caregivers organize information. It does not provide medical advice, diagnosis, or treatment. AI-generated information may be incomplete or inaccurate and should not be used for important health decisions without a qualified professional.");
+            terms.setTextSize(16);
+            terms.setPadding(Ui.dp(this, 16), Ui.dp(this, 16), Ui.dp(this, 16), Ui.dp(this, 16));
+            terms.setBackground(Ui.round(AppColors.PANEL, Ui.dp(this, 14)));
+            screen.addView(terms, Ui.matchWrap());
+            Button readTerms = Ui.secondary(this, "Read the full Terms and Conditions");
+            readTerms.setOnClickListener(v -> showTermsDialog());
+            screen.addView(readTerms, Ui.matchWrap());
+            CheckBox agreement = Ui.check(this, i18n.t("I agree to the Terms and Conditions before using this app."));
+            agreement.setChecked(storage.getInt(storage.key("profile", currentUser.id, "onboardingTermsAccepted"), 0) == 1);
+            screen.addView(agreement, Ui.matchWrap());
+            screen.setTag(agreement);
+        }
+        View spacer = new View(this);
+        screen.addView(spacer, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+        Button next = Ui.primary(this, onboardingSlide == 2 ? "Start Using For Special You" : "Next");
+        next.setOnClickListener(v -> advanceFirstLoginOnboarding(screen));
+        screen.addView(next, Ui.matchWrap());
+        setContentView(screen);
+    }
+
+    void advanceFirstLoginOnboarding(LinearLayout screen) {
+        if (onboardingSlide == 1) {
+            EditText name = (EditText) screen.getTag();
+            EditText age = (EditText) name.getTag();
+            Spinner gender = (Spinner) age.getTag();
+            EditText diagnoses = (EditText) gender.getTag();
+            onboardingChildName = name.getText().toString().trim();
+            onboardingChildAge = age.getText().toString().trim();
+            onboardingGender = String.valueOf(gender.getSelectedItem());
+            onboardingDiagnoses = diagnoses.getText().toString().trim();
+            if (onboardingChildName.isEmpty() || onboardingChildAge.isEmpty()) {
+                showError("Please enter your child's name and age.");
+                renderFirstLoginOnboarding();
+                return;
+            }
+        }
+        if (onboardingSlide < 2) {
+            onboardingSlide++;
+            renderFirstLoginOnboarding();
+            return;
+        }
+        CheckBox agreement = (CheckBox) screen.getTag();
+        if (!agreement.isChecked()) return;
+        storage.putString(storage.key("profile", currentUser.id, "fullName"), onboardingChildName);
+        storage.putString(storage.key("profile", currentUser.id, "phone"), onboardingDiagnoses);
+        storage.putString(storage.key("profile", currentUser.id, "childAge"), onboardingChildAge);
+        storage.putString(storage.key("profile", currentUser.id, "gender"), onboardingGender);
+        storage.putInt(storage.key("profile", currentUser.id, "onboardingTermsAccepted"), 1);
+        storage.putInt("auth.completedFirstLoginOnboarding." + currentUser.id, 1);
+        storage.putInt("auth.pendingFirstLoginOnboarding." + currentUser.nickname.trim().toLowerCase(Locale.US), 0);
+        api.syncAppData(currentUser.id, childProfileJson(), null, null, null);
+        isFirstLoginOnboarding = false;
+        selectedTab = 1;
+        render();
     }
 
     View tabContent() {
         if (selectedTab == 0) {
             return diagnosisView();
         } else if (selectedTab == 1) {
+            if (isNutritionPage) {
+                return nutrientView();
+            }
             if (isHealthHistoryPage()) {
                 return healthHistoryPage();
             }
@@ -213,7 +356,7 @@ public final class MainActivity extends Activity {
         } else if (selectedTab == 2) {
             return therapyView();
         } else if (selectedTab == 3) {
-            return nutrientView();
+            return milestonesView();
         }
         return profileView();
     }
@@ -229,8 +372,8 @@ public final class MainActivity extends Activity {
         nav.setBackground(Ui.round(AppColors.PANEL, Ui.dp(this, 44)));
         nav.setElevation(Ui.dp(this, 10));
         nav.setClipToOutline(false);
-        String[] labels = { i18n.t("Diagnosis"), i18n.t("Health"), i18n.t("Therapy"), i18n.t("Nutrient"), i18n.t("Profile") };
-        int[] icons = { R.drawable.ios_tab_diagnosis, R.drawable.ios_tab_health, R.drawable.ios_therapy_session, R.drawable.ios_icon_leaf, R.drawable.ios_tab_profile };
+        String[] labels = { i18n.t("Diagnosis"), i18n.t("Health"), i18n.t("Therapy"), i18n.t("Milestones"), i18n.t("Profile") };
+        int[] icons = { R.drawable.ios_tab_diagnosis, R.drawable.ios_tab_health, R.drawable.ios_therapy_session, R.drawable.ios_therapy_social, R.drawable.ios_tab_profile };
         int navDark = Color.rgb(5, 8, 7);
         for (int i = 0; i < labels.length; i++) {
             final int index = i;
@@ -250,6 +393,7 @@ public final class MainActivity extends Activity {
             item.setOnClickListener(v -> {
                 selectedTab = index;
                 clearHealthHistoryPage();
+                isNutritionPage = false;
                 clearMessage();
                 render();
             });
@@ -411,6 +555,10 @@ public final class MainActivity extends Activity {
         return therapyScreens.therapyView();
     }
 
+    View milestonesView() {
+        return therapyScreens.milestonesView();
+    }
+
     View therapySessionButton(String[] category) {
         return therapyScreens.therapySessionButton(category);
     }
@@ -441,6 +589,33 @@ public final class MainActivity extends Activity {
 
     View nutrientView() {
         return nutritionScreens.nutrientView();
+    }
+
+    void showNutritionFromHealth() {
+        selectedTab = 1;
+        clearHealthHistoryPage();
+        isNutritionPage = true;
+        clearMessage();
+        render();
+    }
+
+    void closeNutritionPage() {
+        isNutritionPage = false;
+        render();
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (isNutritionPage) {
+            closeNutritionPage();
+            return;
+        }
+        if (isHealthHistoryPage()) {
+            clearHealthHistoryPage();
+            render();
+            return;
+        }
+        super.onBackPressed();
     }
 
     LinearLayout nutrientQuotaPill(int left, int limit) {
@@ -550,6 +725,10 @@ public final class MainActivity extends Activity {
             public void onSuccess(CarePortalUser value) {
                 currentUser = value;
                 storage.saveUser(value);
+                String pendingKey = "auth.pendingFirstLoginOnboarding." + username.trim().toLowerCase(Locale.US);
+                isFirstLoginOnboarding = storage.getInt(pendingKey, 0) == 1
+                    && storage.getInt("auth.completedFirstLoginOnboarding." + value.id, 0) == 0;
+                onboardingSlide = 0;
                 resetLoginProtection();
                 isLoading = false;
                 restoreServerAppData(value);
@@ -612,6 +791,7 @@ public final class MainActivity extends Activity {
                 isError = false;
                 loginNickname = cleanNickname;
                 signupNickname = "";
+                storage.putInt("auth.pendingFirstLoginOnboarding." + cleanNickname.toLowerCase(Locale.US), 1);
                 authScreen = "login";
                 render();
             }
@@ -1417,6 +1597,67 @@ public final class MainActivity extends Activity {
             pendingPhotoCallback.onPhoto(dataUrl == null ? "" : dataUrl);
             pendingPhotoCallback = null;
         }
+    }
+
+    void chooseMilestoneMedia(MilestoneMediaCallback callback) {
+        pendingMilestoneMediaCallback = callback;
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[] { "image/*", "video/*" });
+        startActivityForResult(Intent.createChooser(intent, i18n.t("Add Photo or Video")), REQUEST_MILESTONE_MEDIA);
+    }
+
+    void finishPendingMilestoneMedia(Uri uri, int flags) {
+        if (pendingMilestoneMediaCallback == null) return;
+        String type = getContentResolver().getType(uri);
+        if (type != null && type.startsWith("video/")) {
+            long size = mediaSize(uri);
+            long durationMs = videoDuration(uri);
+            if (size > 100L * 1024L * 1024L) {
+                pendingMilestoneMediaCallback.onError(i18n.t("Videos must be smaller than 100 MB."));
+            } else if (durationMs > 30_000L) {
+                pendingMilestoneMediaCallback.onError(i18n.t("Videos can be no longer than 30 seconds."));
+            } else {
+                try {
+                    getContentResolver().takePersistableUriPermission(uri, flags & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION));
+                } catch (Exception ignored) {
+                }
+                pendingMilestoneMediaCallback.onVideo(uri.toString());
+            }
+        } else {
+            String photoData = loadImageDataUrl(uri);
+            if (photoData.isEmpty()) pendingMilestoneMediaCallback.onError(i18n.t("Unable to load photo."));
+            else pendingMilestoneMediaCallback.onPhoto(photoData);
+        }
+        pendingMilestoneMediaCallback = null;
+    }
+
+    long mediaSize(Uri uri) {
+        try (android.database.Cursor cursor = getContentResolver().query(uri, new String[] { OpenableColumns.SIZE }, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) return cursor.getLong(0);
+        } catch (Exception ignored) {
+        }
+        return 0;
+    }
+
+    long videoDuration(Uri uri) {
+        MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+        try {
+            retriever.setDataSource(this, uri);
+            String raw = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+            return raw == null ? 0 : Long.parseLong(raw);
+        } catch (Exception ignored) {
+            return 0;
+        } finally {
+            try { retriever.release(); } catch (Exception ignored) { }
+        }
+    }
+
+    interface MilestoneMediaCallback {
+        void onPhoto(String dataUrl);
+        void onVideo(String uri);
+        void onError(String message);
     }
 
     String imageDataUrlFromCameraResult(Intent data) {

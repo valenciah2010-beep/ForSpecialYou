@@ -100,7 +100,11 @@ final class HealthDashboard {
                 continue;
             }
             View button = host.snapshotCard(option[0], option[1], false);
-            button.setOnClickListener(v -> host.showHealthLogDialog(option[0], option[1], "snapshot"));
+            if ("nutrition".equals(option[0])) {
+                button.setOnClickListener(v -> host.showNutritionFromHealth());
+            } else {
+                button.setOnClickListener(v -> host.showHealthLogDialog(option[0], option[1], "snapshot"));
+            }
             Ui.addGridChild(host, snapshotGrid, button, 2);
         }
         screen.addView(snapshotGrid, Ui.matchWrap());

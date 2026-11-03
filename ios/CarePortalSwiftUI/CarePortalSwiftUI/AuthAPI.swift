@@ -135,7 +135,8 @@ struct AuthAPI {
             quickLogTitles: quickLogTitles,
             snapshotTitles: snapshotTitles,
             logs: logs,
-            language: language
+            language: language,
+            aiConsent: true
         )
         let response: HealthInsightsResponse = try await post("/api/health-insights", body: body)
         return response.insights
@@ -251,6 +252,7 @@ private struct HealthInsightsRequest: Encodable {
     let snapshotTitles: [String]
     let logs: [HealthLogEntry]
     let language: String
+    let aiConsent: Bool
 }
 
 private struct AppSessionRequest: Encodable {

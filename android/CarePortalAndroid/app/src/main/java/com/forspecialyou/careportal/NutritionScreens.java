@@ -32,6 +32,10 @@ final class NutritionScreens {
         LinearLayout screen = Ui.screen(host);
         LinearLayout nutrientHeader = Ui.v(host, 0);
         LinearLayout titleRow = Ui.h(host, 0);
+        TextView back = host.iconCircle("‹", AppColors.TEXT, AppColors.PANEL, 42);
+        back.setOnClickListener(v -> host.closeNutritionPage());
+        titleRow.addView(back, Ui.fixed(host, 42, 42));
+        Ui.addSpacerHorizontal(host, titleRow, 10);
         ImageView nutrientIcon = host.symbolIcon(R.drawable.ios_icon_leaf, AppColors.ACCENT, Color.TRANSPARENT, 44, 0);
         titleRow.addView(nutrientIcon, Ui.fixed(host, 44, 44));
         TextView nutrientTitle = Ui.title(host, host.i18n.t("Nutrient"));

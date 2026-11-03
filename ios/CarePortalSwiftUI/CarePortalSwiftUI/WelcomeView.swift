@@ -414,11 +414,6 @@ struct DiagnosisConditionCard: View {
                 .foregroundStyle(AppTheme.text)
                 .lineLimit(3)
 
-            if !condition.photos.isEmpty {
-                Text(String(format: localizedAppString("%d photo(s)"), condition.photos.count))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AppTheme.accent)
-            }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -692,11 +687,6 @@ struct DiagnosisDoctorVisitCard: View {
             .font(.caption.weight(.semibold))
             .foregroundStyle(.secondary)
 
-            if !visit.attachments.isEmpty {
-                Text(String(format: localizedAppString("%d attachment(s)"), visit.attachments.count))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AppTheme.accent)
-            }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -731,11 +721,6 @@ struct DiagnosisGeneralNoteCard: View {
                 .foregroundStyle(AppTheme.text)
                 .lineLimit(3)
 
-            if !note.attachments.isEmpty {
-                Text(String(format: localizedAppString("%d attachment(s)"), note.attachments.count))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AppTheme.accent)
-            }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -3154,7 +3139,8 @@ struct BasicHealthView: View {
                 DailyNotificationsSheet(
                     notifications: dailyNotifications,
                     onClear: clearDailyNotification,
-                    onMarkTaken: markNotificationMedicationTaken
+                    onMarkTaken: markNotificationMedicationTaken,
+                    onDone: markDailyNotificationsRead
                 )
                 .presentationDetents([.medium, .large])
             }
@@ -3455,8 +3441,6 @@ struct BasicHealthView: View {
                     title: "AI",
                     message: "Preparing today's AI insight from the logs you have entered."
                 )
-            } else if areHealthInsightsUnavailable {
-                InsightUnavailableIndicator()
             } else if healthInsights.isEmpty {
                 if hasRequestedHealthInsightToday {
                     InsightCard(
@@ -3539,6 +3523,20 @@ struct BasicHealthView: View {
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [notification.notificationIdentifier])
         saveClearedDailyNotificationID(notification.clearKey)
         dailyNotifications.removeAll { $0.id == notification.id }
+        hasDailyNotifications = !dailyNotifications.isEmpty
+    }
+
+    private func markDailyNotificationsRead(_ notifications: [DailyNotificationItem]) {
+        let notificationIDs = Set(notifications.map(\.id))
+        UNUserNotificationCenter.current().removeDeliveredNotifications(
+            withIdentifiers: notifications.map(\.notificationIdentifier)
+        )
+
+        notifications.forEach { notification in
+            saveClearedDailyNotificationID(notification.clearKey)
+        }
+
+        dailyNotifications.removeAll { notificationIDs.contains($0.id) }
         hasDailyNotifications = !dailyNotifications.isEmpty
     }
 
@@ -3761,6 +3759,16 @@ struct BasicHealthView: View {
     @MainActor
     private func refreshHealthInsightsIfNeeded() async {
         if let cachedInsights = todaysHealthInsightCache {
+            // Failed requests from older app versions were cached as unavailable.
+            // Discard them so the user can retry instead of losing today's request.
+            if cachedInsights.isUnavailable {
+                healthInsightCacheData = Data()
+                healthInsights = []
+                areHealthInsightsUnavailable = false
+                lastHealthInsightRequestKey = nil
+                return
+            }
+
             let dailyInsights = oneDailyHealthInsight(from: cachedInsights.insights)
             healthInsights = dailyInsights
             areHealthInsightsUnavailable = cachedInsights.isUnavailable
@@ -3814,15 +3822,8 @@ struct BasicHealthView: View {
             )
         } catch {
             healthInsights = []
-            areHealthInsightsUnavailable = true
-            lastHealthInsightRequestKey = requestKey
-            saveHealthInsightCache(
-                HealthInsightDailyCache(
-                    dateKey: healthInsightDateKey,
-                    insights: [],
-                    isUnavailable: true
-                )
-            )
+            areHealthInsightsUnavailable = false
+            lastHealthInsightRequestKey = nil
             print("Health insights failed: \(error.localizedDescription)")
         }
 
@@ -4133,6 +4134,7 @@ struct DailyNotificationsSheet: View {
     let notifications: [DailyNotificationItem]
     let onClear: (DailyNotificationItem) -> Void
     let onMarkTaken: (DailyNotificationItem) -> Void
+    let onDone: ([DailyNotificationItem]) -> Void
 
     var body: some View {
         NavigationStack {
@@ -4189,6 +4191,7 @@ struct DailyNotificationsSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(localizedAppString("Done")) {
+                        onDone(notifications)
                         dismiss()
                     }
                 }
@@ -4224,6 +4227,16 @@ struct DailyNotificationRow: View {
         .padding(14)
         .background(AppTheme.panel)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(alignment: .bottomTrailing) {
+            Circle()
+                .fill(Color.red)
+                .frame(width: 10, height: 10)
+                .overlay {
+                    Circle()
+                        .stroke(AppTheme.panel, lineWidth: 2)
+                }
+                .padding(8)
+        }
     }
 }
 
@@ -13866,7 +13879,7 @@ struct QuickLogTrendPreviewCard: View {
     let entries: [HealthLogEntry]
 
     private var recentEntries: [HealthLogEntry] {
-        Array(entries.suffix(8))
+        Array(entries.suffix(3))
     }
 
     private var averageSeverity: Double {
@@ -13876,7 +13889,7 @@ struct QuickLogTrendPreviewCard: View {
     }
 
     private var showsAverage: Bool {
-        entries.contains(where: \.hasSeverityRating)
+        option.id != "mood" && entries.contains(where: \.hasSeverityRating)
     }
 
     var body: some View {
@@ -14194,17 +14207,7 @@ struct SnapshotHistoryPreviewCard: View {
     let entries: [HealthLogEntry]
 
     private var recentEntries: [HealthLogEntry] {
-        Array(entries.suffix(8))
-    }
-
-    private var averageSeverity: Double {
-        guard !entries.isEmpty else { return 0 }
-        let total = entries.reduce(0) { $0 + $1.severity }
-        return Double(total) / Double(entries.count)
-    }
-
-    private var showsAverage: Bool {
-        option.id == "mood"
+        Array(entries.suffix(3))
     }
 
     var body: some View {
@@ -14215,20 +14218,11 @@ struct SnapshotHistoryPreviewCard: View {
                 sleepTrackerCard
             }
             .buttonStyle(.plain)
-        } else if showsAverage {
+        } else if isMeasurement {
             NavigationLink {
                 SnapshotHistoryDetailView(option: option, entries: entries)
             } label: {
-                VStack(alignment: .leading, spacing: 14) {
-                    cardHeader
-
-                    chartPreview
-                        .frame(height: 110)
-                        .padding(10)
-                        .background(AppTheme.fieldBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                }
-                .snapshotHistoryCardStyle()
+                measurementTrendCard
             }
             .buttonStyle(.plain)
         } else {
@@ -14340,50 +14334,96 @@ struct SnapshotHistoryPreviewCard: View {
         .snapshotHistoryCardStyle()
     }
 
-    @ViewBuilder
-    private var chartPreview: some View {
-        if recentEntries.isEmpty {
-            VStack(spacing: 8) {
-                Image(systemName: "chart.bar")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(option.tint)
+    private var isMeasurement: Bool {
+        option.id == "height" || option.id == "weight"
+    }
 
-                Text(localizedAppString("No data yet"))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+    private var measurementPoints: [MeasurementHistoryPoint] {
+        recentEntries.compactMap { entry in
+            let pieces = entry.value.split(whereSeparator: { $0.isWhitespace })
+            guard let rawValue = pieces.first,
+                  let value = Double(rawValue.replacingOccurrences(of: ",", with: ".")) else {
+                return nil
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            Chart(recentEntries) { entry in
-                LineMark(
-                    x: .value("Time", entry.timestamp),
-                    y: .value("Severity", entry.severity)
-                )
-                .foregroundStyle(option.tint)
-                .interpolationMethod(.catmullRom)
 
-                PointMark(
-                    x: .value("Time", entry.timestamp),
-                    y: .value("Severity", entry.severity)
-                )
-                .foregroundStyle(option.tint)
-            }
-            .chartYScale(domain: 0...5)
-            .chartYAxis {
-                AxisMarks(values: [1, 3, 5])
-            }
-            .chartXAxis(.hidden)
+            return MeasurementHistoryPoint(
+                id: entry.id,
+                timestamp: entry.timestamp,
+                value: value,
+                unit: pieces.dropFirst().first.map(String.init) ?? ""
+            )
         }
     }
 
-    private var averageSeverityText: String {
-        averageSeverity == 0 ? "0" : String(format: "%.1f", averageSeverity)
+    private var measurementTrendCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            cardHeader
+
+            if measurementPoints.isEmpty {
+                Text(localizedAppString("No saved logs yet"))
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .background(AppTheme.fieldBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            } else {
+                Chart(measurementPoints) { point in
+                    LineMark(
+                        x: .value("Date", point.timestamp),
+                        y: .value("Measurement", point.value)
+                    )
+                    .foregroundStyle(option.tint)
+                    .interpolationMethod(.linear)
+
+                    PointMark(
+                        x: .value("Date", point.timestamp),
+                        y: .value("Measurement", point.value)
+                    )
+                    .foregroundStyle(option.tint)
+                    .symbolSize(58)
+                    .annotation(position: .top) {
+                        Text(point.displayValue)
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+                    }
+                }
+                .chartXAxis {
+                    AxisMarks(values: .automatic(desiredCount: 3)) { _ in
+                        AxisGridLine().foregroundStyle(.clear)
+                        AxisTick().foregroundStyle(.clear)
+                        AxisValueLabel(format: .dateTime.month(.abbreviated).day())
+                            .font(.caption2.weight(.semibold))
+                    }
+                }
+                .chartYAxis {
+                    AxisMarks(position: .trailing)
+                }
+                .frame(height: 150)
+                .padding(10)
+                .background(AppTheme.fieldBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+        }
+        .snapshotHistoryCardStyle()
     }
 
     private var historySummary: String {
-        showsAverage
-            ? String(format: localizedAppString("%d entries · Avg %@/5"), entries.count, averageSeverityText)
-            : String(format: localizedAppString("%d entries"), entries.count)
+        String(format: localizedAppString("%d entries"), entries.count)
+    }
+}
+
+private struct MeasurementHistoryPoint: Identifiable {
+    let id: UUID
+    let timestamp: Date
+    let value: Double
+    let unit: String
+
+    var displayValue: String {
+        let formatted = value.rounded() == value
+            ? String(Int(value))
+            : String(format: "%.1f", value)
+        return unit.isEmpty ? formatted : "\(formatted) \(unit)"
     }
 }
 
@@ -15850,6 +15890,9 @@ struct TherapyScheduleView: View {
     @State private var weekStart: Date
     @State private var isSessionEditorPresented = false
     @State private var selectedSession: TherapyScheduledSession?
+    @State private var selectedTherapyTypes: Set<String> = []
+
+    private let therapyFilterTypes = ["Physical", "Occupational", "Speech", "Behavioral/RDI", "Social", "Other"]
 
     init(user: CarePortalUser) {
         self.user = user
@@ -15941,6 +15984,41 @@ struct TherapyScheduleView: View {
         .background(AppTheme.background.ignoresSafeArea())
         .navigationTitle(weekRangeTitle)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Section(localizedAppString("Therapy Types")) {
+                        ForEach(therapyFilterTypes, id: \.self) { therapyType in
+                            Button {
+                                toggleTherapyFilter(therapyType)
+                            } label: {
+                                Label(
+                                    localizedAppString(therapyType),
+                                    systemImage: selectedTherapyTypes.contains(therapyType)
+                                        ? "checkmark.circle.fill"
+                                        : "circle"
+                                )
+                            }
+                        }
+                    }
+
+                    if !selectedTherapyTypes.isEmpty {
+                        Divider()
+
+                        Button(localizedAppString("Show All Therapy Types")) {
+                            selectedTherapyTypes.removeAll()
+                        }
+                    }
+                } label: {
+                    Image(systemName: selectedTherapyTypes.isEmpty
+                        ? "line.3.horizontal.decrease.circle"
+                        : "line.3.horizontal.decrease.circle.fill")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(AppTheme.accent)
+                }
+                .accessibilityLabel(localizedAppString("Filter therapy types"))
+            }
+        }
         .overlay(alignment: .bottomTrailing) {
             Button {
                 isSessionEditorPresented = true
@@ -15982,7 +16060,33 @@ struct TherapyScheduleView: View {
     private func sessionsForDay(_ day: Date) -> [TherapyScheduledSession] {
         sessions
             .filter { Calendar.current.isDate($0.date, inSameDayAs: day) }
+            .filter { selectedTherapyTypes.isEmpty || selectedTherapyTypes.contains(filterType(for: $0)) }
             .sorted { $0.startTime < $1.startTime }
+    }
+
+    private func filterType(for session: TherapyScheduledSession) -> String {
+        switch session.therapyType?.lowercased() {
+        case "physical":
+            return "Physical"
+        case "occupational":
+            return "Occupational"
+        case "speech":
+            return "Speech"
+        case "behavioral", "behavioral/rdi":
+            return "Behavioral/RDI"
+        case "social":
+            return "Social"
+        default:
+            return "Other"
+        }
+    }
+
+    private func toggleTherapyFilter(_ therapyType: String) {
+        if selectedTherapyTypes.contains(therapyType) {
+            selectedTherapyTypes.remove(therapyType)
+        } else {
+            selectedTherapyTypes.insert(therapyType)
+        }
     }
 
     private func moveWeek(by amount: Int) {
@@ -17438,6 +17542,8 @@ struct TherapyMilestoneSheet: View {
 }
 
 struct NutrientView: View {
+    @Environment(\.dismiss) private var dismiss
+
     let user: CarePortalUser
     let isEmbedded: Bool
 
@@ -17486,27 +17592,6 @@ struct NutrientView: View {
     private var nutrientContent: some View {
         ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    HStack(alignment: .top, spacing: 12) {
-                        PageHeader(
-                            icon: "leaf",
-                            title: "Nutrient",
-                            subtitle: "Estimate meals, hydration, safe foods, and feeding patterns."
-                        )
-
-                        NavigationLink {
-                            MealHistoryView(savedMeals: savedMealHistory)
-                        } label: {
-                            Image(systemName: "clock.arrow.circlepath")
-                                .font(.headline.weight(.bold))
-                                .foregroundStyle(AppTheme.accent)
-                                .frame(width: 44, height: 44)
-                                .background(AppTheme.accent.opacity(0.12))
-                                .clipShape(Circle())
-                        }
-                        .accessibilityLabel(localizedAppString("Meal history"))
-                        .padding(.top, 2)
-                    }
-
                     NavigationLink {
                         NutritionGoalsPage(goals: $nutritionGoals) {
                             saveNutritionGoals()
@@ -17657,8 +17742,51 @@ struct NutrientView: View {
                 .padding(20)
             }
             .background(AppTheme.background.ignoresSafeArea())
-            .navigationTitle("")
-            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.hidden, for: .navigationBar)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                HStack(spacing: 12) {
+                    if isEmbedded {
+                        Button {
+                            dismiss()
+                        } label: {
+                            Image(systemName: "chevron.left")
+                                .font(.title3.weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+                                .frame(width: 44, height: 44)
+                                .background(AppTheme.panel)
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(localizedAppString("Back"))
+                    }
+
+                    HStack(spacing: 7) {
+                        Image(systemName: "leaf")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.accent)
+
+                        Text(localizedAppString("Nutrient"))
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+                    }
+
+                    Spacer()
+
+                    NavigationLink {
+                        MealHistoryView(savedMeals: savedMealHistory)
+                    } label: {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.title2.weight(.bold))
+                            .foregroundStyle(AppTheme.accent)
+                            .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(localizedAppString("Meal history"))
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 8)
+                .background(AppTheme.background)
+            }
             .onAppear {
                 resetCurrentMealForNextImage()
                 loadStoredNutritionGoals()
@@ -17830,7 +17958,6 @@ struct NutrientView: View {
         estimateError = ""
         saveMessage = ""
         hasSavedCurrentMeal = false
-        incrementDailyUsage(estimate: 1)
 
         Task {
             do {
@@ -17843,6 +17970,7 @@ struct NutrientView: View {
                         mealEstimateData = data
                     }
                     applyMealEstimateToNutritionGoals(estimate)
+                    incrementDailyUsage(estimate: 1)
                     isEstimating = false
                 }
             } catch {
@@ -18192,14 +18320,7 @@ struct MilestonesView: View {
                         .foregroundStyle(AppTheme.text)
 
                     ScrollView(.horizontal, showsIndicators: false) {
-                        LazyHStack(spacing: 12) {
-                            MilestoneCategoryScrollObserver { offset, viewportWidth, contentWidth in
-                                categoryScrollOffset = max(0, offset)
-                                categoryViewportWidth = viewportWidth
-                                categoryContentWidth = contentWidth
-                            }
-                            .frame(width: 0, height: 0)
-
+                        HStack(spacing: 12) {
                             ForEach(TherapyCategory.all) { category in
                                 TherapyCategoryCard(
                                     category: category,
@@ -18212,7 +18333,16 @@ struct MilestonesView: View {
                             }
                         }
                         .padding(.vertical, 2)
+                        .background {
+                            MilestoneCategoryScrollObserver { offset, viewportWidth, contentWidth in
+                                categoryScrollOffset = max(0, offset)
+                                categoryViewportWidth = viewportWidth
+                                categoryContentWidth = contentWidth
+                            }
+                            .frame(width: 0, height: 0)
+                        }
                     }
+                    .frame(height: 160)
 
                     milestoneScrollIndicator
                 }
@@ -19373,6 +19503,8 @@ struct ProfileView: View {
     @State private var isPhotoSourcePickerPresented = false
     @State private var isCameraPresented = false
     @State private var isPhotoLibraryPresented = false
+    @State private var selectedProfilePhoto: PhotosPickerItem?
+    @State private var isShowingPasswordProtectionNotice = false
     @AppStorage private var profileImageData: Data
 
     init(user: CarePortalUser, logout: @escaping () -> Void) {
@@ -19409,6 +19541,7 @@ struct ProfileView: View {
                             InfoRow(title: "Parent Username", value: user.nickname)
                             InfoRow(title: "Parent Email", value: user.email)
                             InfoRow(title: "Account Type", value: localizedAppString("Parent"))
+                            PasswordProtectionRow { isShowingPasswordProtectionNotice = true }
                         }
                     }
                     .authPanel()
@@ -19478,15 +19611,20 @@ struct ProfileView: View {
             }
             .sheet(isPresented: $isCameraPresented) {
                 CameraPhotoPicker(sourceType: .camera) { data in
-                    pendingProfileImageData = data
+                    presentProfileImageEditor(with: data, afterDismissing: true)
                 }
                 .ignoresSafeArea()
             }
-            .sheet(isPresented: $isPhotoLibraryPresented) {
-                CameraPhotoPicker(sourceType: .photoLibrary) { data in
-                    pendingProfileImageData = data
+            .photosPicker(
+                isPresented: $isPhotoLibraryPresented,
+                selection: $selectedProfilePhoto,
+                matching: .images
+            )
+            .onChange(of: selectedProfilePhoto) { _, selectedPhoto in
+                guard let selectedPhoto else { return }
+                Task {
+                    await loadSelectedProfilePhoto(selectedPhoto)
                 }
-                .ignoresSafeArea()
             }
             .sheet(isPresented: Binding(
                 get: { pendingProfileImageData != nil },
@@ -19503,7 +19641,54 @@ struct ProfileView: View {
                     }
                 }
             }
+            .alert("Password protected", isPresented: $isShowingPasswordProtectionNotice) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("For your security, passwords cannot be displayed. Use Change Password in Settings to set a new password.")
+            }
         }
+    }
+
+    @MainActor
+    private func loadSelectedProfilePhoto(_ photo: PhotosPickerItem) async {
+        guard let data = try? await photo.loadTransferable(type: Data.self),
+              !data.isEmpty else {
+            selectedProfilePhoto = nil
+            return
+        }
+
+        presentProfileImageEditor(with: data)
+        selectedProfilePhoto = nil
+    }
+
+    @MainActor
+    private func presentProfileImageEditor(with data: Data, afterDismissing: Bool = false) {
+        let present = {
+            pendingProfileImageData = preparedProfileImageData(from: data)
+        }
+
+        if afterDismissing {
+            isCameraPresented = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: present)
+        } else {
+            present()
+        }
+    }
+
+    private func preparedProfileImageData(from data: Data) -> Data {
+        guard let image = UIImage(data: data) else { return data }
+
+        let maximumDimension: CGFloat = 1_200
+        let longestSide = max(image.size.width, image.size.height)
+        guard longestSide > maximumDimension else { return data }
+
+        let scale = maximumDimension / longestSide
+        let outputSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: outputSize)
+        let resized = renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: outputSize))
+        }
+        return resized.jpegData(compressionQuality: 0.88) ?? data
     }
 
 }
@@ -20161,6 +20346,7 @@ struct BasicInfoView: View {
     @State private var draftAddress = ""
     @State private var draftEmergencyContact = ""
     @State private var draftMedicalNotes = ""
+    @State private var isShowingPasswordProtectionNotice = false
 
     init(user: CarePortalUser) {
         self.user = user
@@ -20182,6 +20368,7 @@ struct BasicInfoView: View {
                     InfoRow(title: "Parent Username", value: user.nickname)
                     InfoRow(title: "Parent Email", value: user.email)
                     InfoRow(title: "Account Type", value: localizedAppString("Parent"))
+                    PasswordProtectionRow { isShowingPasswordProtectionNotice = true }
                 }
                 .authPanel()
 
@@ -20222,6 +20409,11 @@ struct BasicInfoView: View {
                 }
                 .accessibilityLabel(isEditing ? "Save child information" : "Change child information")
             }
+        }
+        .alert("Password protected", isPresented: $isShowingPasswordProtectionNotice) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("For your security, passwords cannot be displayed. Use Change Password in Settings to set a new password.")
         }
     }
 
@@ -20273,6 +20465,30 @@ struct BasicInfoView: View {
                 print("Child profile sync failed for user \(user.id): \(error.localizedDescription)")
             }
         }
+    }
+}
+
+private struct PasswordProtectionRow: View {
+    let showProtectionNotice: () -> Void
+
+    var body: some View {
+        HStack {
+            Text(localizedAppString("Password"))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text("••••••••")
+                .fontWeight(.semibold)
+                .foregroundStyle(AppTheme.text)
+            Button(action: showProtectionNotice) {
+                Image(systemName: "eye")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.accent)
+                    .frame(width: 34, height: 28)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Password is protected")
+        }
+        .font(.subheadline)
     }
 }
 
